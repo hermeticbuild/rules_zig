@@ -26,6 +26,7 @@ filegroup(
     srcs = [
         ":BUILD.bazel",
         ":toolchains_repo.bzl",
+        ":zig_host_toolchain.bzl",
         ":zig_repository.bzl",
     ],
     visibility = ["//zig/private:__pkg__"],

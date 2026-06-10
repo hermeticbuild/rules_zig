@@ -35,6 +35,10 @@ register_toolchains("@rules_zig//zig/target:all")
 
 register_toolchains("@zig_toolchains//:all")
 
+zig_host_toolchain = use_repo_rule("//zig/private/repo:zig_host_toolchain.bzl", "zig_host_toolchain")
+
+zig_host_toolchain(name = "zig_host_toolchain")
+
 zls = use_extension("//zig/zls:extensions.bzl", "zls")
 zls.index(file = "//zig/zls/private:versions.json")
 use_repo(zls, "zls_toolchains")
