@@ -20,6 +20,13 @@ bzl_library(
     ],
 )
 
+bzl_library(
+    name = "zig_host_toolchain",
+    srcs = ["zig_host_toolchain.bzl"],
+    visibility = ["//zig:__subpackages__"],
+    deps = ["@zig_toolchains//private:toolchains"],
+)
+
 # Execute `bazel run //util:update_filegroups` to update this target.
 filegroup(
     name = "all_files",

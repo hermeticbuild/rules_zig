@@ -5,7 +5,10 @@ exports_files(["bazel_builtin.zig.tpl"])
 bzl_library(
     name = "zig_cache",
     srcs = ["zig_cache.bzl"],
-    visibility = ["//zig:__subpackages__"],
+    visibility = [
+        "//zig:__subpackages__",
+        "@zig_host_toolchain//:__pkg__",
+    ],
     deps = ["@bazel_skylib//lib:paths"],
 )
 

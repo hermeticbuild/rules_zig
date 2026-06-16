@@ -233,7 +233,15 @@ toolchain(
     # Base BUILD file for this repository
     repository_ctx.file("BUILD.bazel", build_content)
 
-    repository_ctx.file("private/BUILD.bazel", "")
+    repository_ctx.file("private/BUILD.bazel", """\
+load("@bazel_skylib//:bzl_library.bzl", "bzl_library")
+
+bzl_library(
+    name = "toolchains",
+    srcs = ["toolchains.bzl"],
+    visibility = ["//visibility:public"],
+)
+""")
     toolchains_content += """\
 ]
 """
