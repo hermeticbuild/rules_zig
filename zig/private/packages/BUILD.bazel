@@ -1,5 +1,9 @@
 load("//zig:defs.bzl", "zig_test")
 
+# The configurer is compiled per package by the `zig_package` repository rule;
+# no target in this repository consumes it.
+exports_files(["configurer.zig"])
+
 zig_test(
     name = "resolver_test",
     size = "small",
@@ -25,6 +29,7 @@ filegroup(
     name = "all_files",
     srcs = [
         ":BUILD.bazel",
+        ":configurer.zig",
         ":module_graph.zig",
         ":resolver.zig",
     ],

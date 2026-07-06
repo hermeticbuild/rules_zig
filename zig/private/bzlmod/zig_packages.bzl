@@ -69,24 +69,48 @@ def _zig_packages_impl(module_ctx):
             if graph["packages"][key]["url"] == None:
                 fail("Zig dependency '{}' is a path dependency, which is not supported; declared by".format(name), tag)
 
+    # `graph["packages"]` is topologically ordered, so each dependency's
+    # reachable set is already known by the time we reach a package: accumulate
+    # in one pass. A package is configured against its full closure, since its
+    # `build.zig` runs those of its dependencies.
+    reachable = {}
     hub_graph = {}
     for key, package in graph["packages"].items():
         if package["url"] == None:
             continue
         name, version = package_name_version(key)
+
+        reached = {}
+        edges = []
+        for dep_name, dep_key in package["deps"].items():
+            if graph["packages"][dep_key]["url"] == None:
+                fail("Zig package '{}' has a path dependency '{}', which is not supported inside fetched packages.".format(
+                    key,
+                    dep_name,
+                ))
+            edges.append([dep_name, dep_key])
+            reached[dep_key] = True
+            for dep in reachable[dep_key]:
+                reached[dep] = True
+        reachable[key] = reached
+
         hub_graph[key] = {
             "name": name,
             "version": version,
-            "deps": {
-                dep_name: dep_key
-                for dep_name, dep_key in package["deps"].items()
-                if graph["packages"][dep_key]["url"] != None
-            },
+            "deps": {dep_name: dep_key for dep_name, dep_key in package["deps"].items()},
         }
         zig_package(
             name = key,
             url = package["url"],
             zig_hash = key,
+            deps = json.encode({
+                "root_deps": edges,
+                "packages": {
+                    dep: {"deps": [[n, k] for n, k in graph["packages"][dep]["deps"].items()]}
+                    for dep in reached
+                },
+            }),
+            dep_build_files = {dep: "@{}//:build.zig".format(dep) for dep in reached},
         )
 
     manifests = [

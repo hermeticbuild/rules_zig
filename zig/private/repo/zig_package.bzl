@@ -12,8 +12,10 @@ Fetch a Zig package with the Zig SDK.
 
 The Zig SDK downloads, verifies, and prunes the package according to its
 `build.zig.zon`, and supports `git+` URLs. Fetching fails if the resulting
-package hash does not match the expected `zig_hash`. The package's files are
-public, individually and grouped as the `files` filegroup.
+package hash does not match the expected `zig_hash`. The package's `build.zig`
+is then configured to extract its public module graph
+(`module_manifest.json`). The package's files are public, individually and
+grouped as the `files` filegroup.
 
 With `zig_hash` the fetch is reproducible. Without it, the repository reports
 the fetched hash so a fetch cycle surfaces the value to pin.
@@ -22,6 +24,13 @@ the fetched hash so a fetch cycle surfaces the value to pin.
 ATTRS = {
     "url": attr.string(mandatory = True, doc = "The package URL, e.g. `https://...` or `git+https://...`."),
     "zig_hash": attr.string(doc = "The expected Zig package hash. May be omitted to obtain the hash to pin from a fetch cycle."),
+    "deps": attr.string(
+        default = "{\"root_deps\": [], \"packages\": {}}",
+        doc = "JSON `{root_deps, packages}` describing the `@dependencies` closure used to configure the package.",
+    ),
+    "dep_build_files": attr.string_keyed_label_dict(
+        doc = "Map from each dependency package hash to its `build.zig`, used to wire `@dependencies`.",
+    ),
 }
 
 _BUILD = """\
@@ -29,12 +38,20 @@ package(default_visibility = ["//visibility:public"])
 
 filegroup(
     name = "files",
-    srcs = glob(["**"], exclude = ["BUILD.bazel"]),
+    srcs = glob(["**"], exclude = [
+        "BUILD.bazel",
+        "module_manifest.json",
+    ]),
 )
 """
 
+_EXPORT_MANIFEST = """\
+
+exports_files(["module_manifest.json"])
+"""
+
 # Directories the rule creates in the repository root for its own use.
-_SCRATCH_DIRS = ["_fetch"]
+_SCRATCH_DIRS = ["_fetch", "_configure"]
 
 def _fetch(repository_ctx, zig, cache):
     """Fetch the package into the repository root.
@@ -72,6 +89,98 @@ def _fetch(repository_ctx, zig, cache):
     repository_ctx.delete(build_root)
     return tree.basename
 
+_EMPTY_DEPS = """\
+pub const packages = struct {};
+pub const root_deps: []const struct { []const u8, []const u8 } = &.{};
+"""
+
+def _zig_string(value):
+    return "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+
+def _edge_lines(edges, indent):
+    return [
+        "{}.{{ {}, {} }},".format(indent, _zig_string(name), _zig_string(key))
+        for name, key in edges
+    ]
+
+def _dependencies_source(repository_ctx, deps):
+    """Render the `@dependencies` module that `b.dependency` consumes."""
+    packages = deps["packages"]
+    if not packages:
+        return _EMPTY_DEPS
+
+    lines = ["pub const packages = struct {"]
+    for key in sorted(packages):
+        package = packages[key]
+        build_zig = repository_ctx.path(repository_ctx.attr.dep_build_files[key])
+        lines.append("    pub const @\"{}\" = struct {{".format(key))
+        lines.append("        pub const build_root = {};".format(_zig_string(str(build_zig.dirname))))
+        lines.append("        pub const build_zig = @import(\"{}\");".format(key))
+        lines.append("        pub const deps: []const struct { []const u8, []const u8 } = &.{")
+        lines.extend(_edge_lines(package["deps"], "            "))
+        lines.append("        };")
+        lines.append("    };")
+    lines.append("};")
+    lines.append("")
+    lines.append("pub const root_deps: []const struct { []const u8, []const u8 } = &.{")
+    lines.extend(_edge_lines(deps["root_deps"], "    "))
+    lines.append("};")
+    return "\n".join(lines) + "\n"
+
+def _configure(repository_ctx, zig, build_zig, cache):
+    """Compile the configurer against the package's `build.zig` and run it.
+
+    Returns:
+      the package's module-graph JSON.
+    """
+    configurer = repository_ctx.path(Label("//zig/private/packages:configurer.zig"))
+
+    # `configurer.zig` is watched by the `path` above, but the modules it
+    # `@import`s are not: Bazel cannot see Zig's transitive imports, so a change
+    # to the configurer's logic there would reuse a cached manifest. Watch them
+    # so editing the configurer re-runs configuration.
+    repository_ctx.watch(Label("//zig/private/packages:module_graph.zig"))
+
+    deps = json.decode(repository_ctx.attr.deps)
+
+    repository_ctx.file("_configure/deps.zig", _dependencies_source(repository_ctx, deps))
+
+    keys = sorted(deps["packages"])
+
+    args = [zig, "build-exe", "--dep", "pkg", "--dep", "deps", "-Mroot=" + str(configurer), "-Mpkg=" + str(build_zig)]
+    for key in keys:
+        args.extend(["--dep", key])
+    args.append("-Mdeps=" + str(repository_ctx.path("_configure/deps.zig")))
+    for key in keys:
+        dep_build_zig = repository_ctx.path(repository_ctx.attr.dep_build_files[key])
+
+        # The configurer is compiled against each dependency's `build.zig`, so
+        # a change to one must re-run configuration.
+        repository_ctx.watch(dep_build_zig)
+        args.append("-M{}={}".format(key, dep_build_zig))
+    args.extend([
+        "--cache-dir",
+        cache,
+        "--global-cache-dir",
+        cache,
+        "-femit-bin=" + str(repository_ctx.path("_configure/configurer")),
+    ])
+
+    compiled = repository_ctx.execute(args)
+    if compiled.return_code != 0:
+        fail("Failed to compile the Zig configurer for '{}':\n{}".format(repository_ctx.attr.url, compiled.stderr))
+
+    configured = repository_ctx.execute([
+        str(repository_ctx.path("_configure/configurer")),
+        "--zig",
+        str(zig),
+        "--build-root",
+        str(repository_ctx.path(".")),
+    ])
+    if configured.return_code != 0:
+        fail("Failed to configure the Zig package '{}':\n{}".format(repository_ctx.attr.url, configured.stderr))
+    return configured.stdout
+
 def _zig_package_impl(repository_ctx):
     zig = zig_path(repository_ctx)
     cache = zig_cache(repository_ctx)
@@ -84,7 +193,14 @@ def _zig_package_impl(repository_ctx):
             fetched_hash,
         ))
 
-    repository_ctx.file("BUILD.bazel", _BUILD)
+    build = _BUILD
+    if repository_ctx.path("build.zig").exists:
+        manifest = _configure(repository_ctx, zig, repository_ctx.path("build.zig"), cache)
+        repository_ctx.delete("_configure")
+        repository_ctx.file("module_manifest.json", manifest)
+        build += _EXPORT_MANIFEST
+
+    repository_ctx.file("BUILD.bazel", build)
 
     if not repository_ctx.attr.zig_hash:
         return repository_ctx.repo_metadata(attrs_for_reproducibility = {"zig_hash": fetched_hash})
