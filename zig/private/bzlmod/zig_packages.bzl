@@ -1,7 +1,7 @@
 """Implementation of the `zig_packages` module extension."""
 
 load("@zig_host_toolchain//:toolchain.bzl", "zig_cache", "zig_path")
-load("//zig/private/repo:zig_package.bzl", "zig_package")
+load("//zig/private/repo:zig_package.bzl", "ZIG_FETCH_TIMEOUT", "zig_package")
 
 from_file = tag_class(
     doc = "Resolve the Zig package dependencies declared in a `build.zig.zon` manifest.",
@@ -14,19 +14,21 @@ from_file = tag_class(
     },
 )
 
-def _parse_manifests(module_ctx, zig, resolver, cache, manifests):
+def _resolve_graph(module_ctx, zig, resolver, cache, pkg_dir, manifests):
     result = module_ctx.execute(
-        [zig, "run", "--cache-dir", cache, "--global-cache-dir", cache, resolver, "--"] +
+        [zig, "run", "--cache-dir", cache, "--global-cache-dir", cache, resolver, "--", zig, cache, str(pkg_dir)] +
         [str(manifest) for manifest in manifests],
+        timeout = ZIG_FETCH_TIMEOUT,
     )
     if result.return_code != 0:
-        fail("Failed to parse the Zig package manifests:\n{}".format(result.stderr))
+        fail("Failed to resolve the Zig dependency graph:\n{}".format(result.stderr))
     return json.decode(result.stdout)
 
 def _zig_packages_impl(module_ctx):
     zig = zig_path(module_ctx)
     resolver = module_ctx.path(Label("//zig/private/packages:resolver.zig"))
     cache = zig_cache(module_ctx)
+    pkg_dir = module_ctx.path("pkg")
 
     manifests = []
     tags = []
@@ -42,30 +44,28 @@ def _zig_packages_impl(module_ctx):
             if mod.is_root:
                 root_tags[len(tags) - 1] = module_ctx.is_dev_dependency(tag)
 
-    parsed = _parse_manifests(module_ctx, zig, resolver, cache, manifests)
+    graph = _resolve_graph(module_ctx, zig, resolver, cache, pkg_dir, manifests)
 
     packages = {}
     package_tags = {}
     direct = {}
     dev = {}
-    for index, manifest in enumerate(parsed):
+    for index, root in enumerate(graph["roots"]):
         tag = tags[index]
-        for name, dep in manifest["deps"].items():
-            if dep["url"] == None:
+        for name, key in root["deps"].items():
+            package = graph["packages"][key]
+            if package["url"] == None:
                 fail("Zig dependency '{}' is a path dependency, which is not supported; declared by".format(name), tag)
-            if dep["hash"] == None:
-                fail("Zig dependency '{}' is missing a hash; declared by".format(name), tag)
 
-            package = (dep["url"], dep["hash"])
             existing = packages.get(name)
-            if existing != None and existing != package:
+            if existing != None and existing != key:
                 fail(
-                    "Conflicting declarations for the Zig dependency '{}': {} and {}; declared by".format(name, existing, package),
+                    "Conflicting declarations for the Zig dependency '{}': {} and {}; declared by".format(name, existing, key),
                     package_tags[name],
                     "and",
                     tag,
                 )
-            packages[name] = package
+            packages[name] = key
             package_tags[name] = tag
 
             if index in root_tags:
@@ -74,11 +74,11 @@ def _zig_packages_impl(module_ctx):
                 else:
                     direct[name] = True
 
-    for name, (url, zig_hash) in packages.items():
+    for name, key in packages.items():
         zig_package(
             name = name,
-            url = url,
-            zig_hash = zig_hash,
+            url = graph["packages"][key]["url"],
+            zig_hash = key,
         )
 
     return module_ctx.extension_metadata(
