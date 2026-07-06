@@ -10,11 +10,22 @@ zig_test(
     }),
 )
 
+zig_test(
+    name = "module_graph_test",
+    size = "small",
+    main = "module_graph.zig",
+    target_compatible_with = select({
+        "@zig_toolchains//:0.17.0": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+)
+
 # Execute `bazel run //util:update_filegroups` to update this target.
 filegroup(
     name = "all_files",
     srcs = [
         ":BUILD.bazel",
+        ":module_graph.zig",
         ":resolver.zig",
     ],
     visibility = ["//zig/private:__pkg__"],
