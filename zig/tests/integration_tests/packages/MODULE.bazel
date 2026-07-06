@@ -1,0 +1,20 @@
+module(name = "packages")
+
+bazel_dep(name = "rules_zig", version = "0.0.0")
+local_path_override(
+    module_name = "rules_zig",
+    path = "../../../..",
+)
+
+zig = use_extension("@rules_zig//zig:extensions.bzl", "zig")
+zig.toolchain(zig_version = "0.17.0")
+use_repo(zig, "zig_toolchains")
+
+bazel_dep(name = "toolchains_buildbuddy", version = "0.0.4", dev_dependency = True)
+
+buildbuddy = use_extension(
+    "@toolchains_buildbuddy//:extensions.bzl",
+    "buildbuddy",
+    dev_dependency = True,
+)
+use_repo(buildbuddy, "buildbuddy_toolchain")

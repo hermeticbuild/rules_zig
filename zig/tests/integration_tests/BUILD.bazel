@@ -149,6 +149,30 @@ bazel_integration_tests(
     workspace_path = "mirrors",
 )
 
+packages_files = integration_test_utils.glob_workspace_files("packages") + [
+    "//:all_files",
+    "//:bazelrc",
+    ".bazelrc.meta",
+]
+
+zig_test(
+    name = "packages_tests_runner",
+    main = "packages_tests_runner.zig",
+    tags = ["manual"],
+    deps = [":integration_testing"],
+)
+
+bazel_integration_test(
+    name = "packages_test",
+    size = "medium",
+    timeout = "moderate",
+    bazel_version = bazel_binaries.versions.current,
+    tags = ["requires-network"] + integration_test_utils.DEFAULT_INTEGRATION_TEST_TAGS,
+    test_runner = ":packages_tests_runner",
+    workspace_files = packages_files,
+    workspace_path = "packages",
+)
+
 test_suite(
     name = "integration_tests",
     tags = integration_test_utils.DEFAULT_INTEGRATION_TEST_TAGS,
@@ -162,6 +186,7 @@ test_suite(
         "bzlmod_test",
         bazel_binaries.versions.all,
     ) + [
+        ":packages_test",
         ":zig_version_tests",
     ],
 )
