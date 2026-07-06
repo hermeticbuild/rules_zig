@@ -1,3 +1,4 @@
+load("@bazel_skylib//rules:diff_test.bzl", "diff_test")
 load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_library")
 load("@zig_deps//:defs.bzl", "zig_package_deps", "zig_package_file")
 
@@ -65,4 +66,12 @@ zig_binary(
         ":libv2",
         ":top",
     ],
+)
+
+# The extracted module graph of the multi-module fixture: two registered
+# modules plus an anonymous one under a synthesized stable name.
+diff_test(
+    name = "multi_manifest_test",
+    file1 = "multi_manifest.expected.json",
+    file2 = zig_package_file("multi", "module_manifest.json"),
 )

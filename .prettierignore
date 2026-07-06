@@ -1,1 +1,4 @@
 docs/*.md
+
+# Golden files must match tool output byte-for-byte, not prettier's style.
+**/*.expected.json

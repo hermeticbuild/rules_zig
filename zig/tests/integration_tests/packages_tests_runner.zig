@@ -25,6 +25,7 @@ const packages = [_]Package{
     .{ .name = "libv1" },
     .{ .name = "libfork" },
     .{ .name = "libv2" },
+    .{ .name = "multi" },
 };
 
 const Consumer = struct {
@@ -34,7 +35,7 @@ const Consumer = struct {
 
 // Manifests that resolve dependencies via `zig_packages.from_file`.
 const consumers = [_]Consumer{
-    .{ .manifest = "build.zig.zon", .deps = &.{ "leaf", "bottom", "top", "libv1", "libfork", "libv2" } },
+    .{ .manifest = "build.zig.zon", .deps = &.{ "leaf", "bottom", "top", "libv1", "libfork", "libv2", "multi" } },
 };
 
 test "Zig packages are imported from file:// tarballs" {
@@ -79,6 +80,14 @@ test "Zig packages are imported from file:// tarballs" {
     });
     defer result.deinit();
     try std.testing.expect(result.success);
+
+    // The extracted module graph is exposed per package; assert it against the
+    // golden manifests.
+    const manifest_result = try ctx.exec_bazel(.{
+        .argv = &[_][]const u8{ "test", "//:multi_manifest_test" },
+    });
+    defer manifest_result.deinit();
+    try std.testing.expect(manifest_result.success);
 }
 
 fn depReplacements(
