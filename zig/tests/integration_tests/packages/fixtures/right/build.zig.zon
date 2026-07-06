@@ -1,0 +1,9 @@
+.{
+    .name = .right,
+    .version = "0.0.0",
+    .fingerprint = 0xb4ca7514bed08aba,
+    .dependencies = .{
+        .bottom = .{ .url = "__BOTTOM_URL__", .hash = "__BOTTOM_HASH__" },
+    },
+    .paths = .{ "build.zig", "build.zig.zon", "src" },
+}

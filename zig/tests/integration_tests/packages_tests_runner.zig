@@ -19,6 +19,9 @@ const packages = [_]Package{
     .{ .name = "leaf" },
     .{ .name = "base" },
     .{ .name = "bottom", .patches = &.{.{ .deps = &.{"base"} }} },
+    .{ .name = "left", .patches = &.{.{ .deps = &.{"bottom"} }} },
+    .{ .name = "right", .patches = &.{.{ .deps = &.{"bottom"} }} },
+    .{ .name = "top", .patches = &.{.{ .deps = &.{ "left", "right" } }} },
 };
 
 const Consumer = struct {
@@ -28,7 +31,7 @@ const Consumer = struct {
 
 // Manifests that resolve dependencies via `zig_packages.from_file`.
 const consumers = [_]Consumer{
-    .{ .manifest = "build.zig.zon", .deps = &.{ "leaf", "bottom" } },
+    .{ .manifest = "build.zig.zon", .deps = &.{ "leaf", "bottom", "top" } },
 };
 
 test "Zig packages are imported from file:// tarballs" {
@@ -65,8 +68,9 @@ test "Zig packages are imported from file:// tarballs" {
     }
 
     // The importer fetches every package in the graph, including `base`, which
-    // is only reachable transitively through `bottom`. Running the binary
-    // executes its assertions on the imported values.
+    // is only reachable transitively through `bottom`, and deduplicates
+    // `bottom`, which the diamond under `top` reaches twice. Running the
+    // binary executes its assertions on the imported values.
     const result = try ctx.exec_bazel(.{
         .argv = &[_][]const u8{ "run", "//:binary" },
     });

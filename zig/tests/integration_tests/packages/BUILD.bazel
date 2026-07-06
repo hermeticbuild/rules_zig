@@ -22,6 +22,9 @@ load("@zig_deps//:defs.bzl", "zig_package_deps", "zig_package_file")
         "leaf",
         "base",
         "bottom",
+        "left",
+        "right",
+        "top",
     ]
 ]
 
@@ -31,5 +34,6 @@ zig_binary(
     deps = [
         ":bottom",
         ":leaf",
+        ":top",
     ],
 )
