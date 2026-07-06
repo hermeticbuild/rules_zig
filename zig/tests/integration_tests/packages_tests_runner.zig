@@ -27,7 +27,7 @@ test "Zig packages are imported from file:// tarballs" {
 
         const hash = try allocator.dupe(u8, std.mem.trim(u8, pack.stdout, " \t\r\n"));
         const url = try std.fmt.allocPrint(allocator, "file://{s}", .{tarball});
-        try ctx.patchWorkspaceFile("MODULE.bazel", &.{
+        try ctx.patchWorkspaceFile("build.zig.zon", &.{
             .{ try placeholder(allocator, name, "URL"), url },
             .{ try placeholder(allocator, name, "HASH"), hash },
         });
