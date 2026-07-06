@@ -21,4 +21,4 @@ use_repo(buildbuddy, "buildbuddy_toolchain")
 
 zig_packages = use_extension("@rules_zig//zig:packages.bzl", "zig_packages")
 zig_packages.from_file(build_zig_zon = "//:build.zig.zon")
-use_repo(zig_packages, "leaf")
+use_repo(zig_packages, "zig_deps")

@@ -16,6 +16,7 @@ bzl_library(
     srcs = ["zig_packages.bzl"],
     visibility = ["//zig:__subpackages__"],
     deps = [
+        "//zig/private/repo:zig_deps_hub",
         "//zig/private/repo:zig_package",
         "@zig_host_toolchain//:toolchain",
     ],

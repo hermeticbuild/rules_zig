@@ -34,12 +34,27 @@ bzl_library(
     deps = ["@zig_host_toolchain//:toolchain"],
 )
 
+bzl_library(
+    name = "zig_deps_hub",
+    srcs = ["zig_deps_hub.bzl"],
+    visibility = ["//zig:__subpackages__"],
+    deps = [":zig_deps_index"],
+)
+
+bzl_library(
+    name = "zig_deps_index",
+    srcs = ["zig_deps_index.bzl"],
+    visibility = ["//zig:__subpackages__"],
+)
+
 # Execute `bazel run //util:update_filegroups` to update this target.
 filegroup(
     name = "all_files",
     srcs = [
         ":BUILD.bazel",
         ":toolchains_repo.bzl",
+        ":zig_deps_hub.bzl",
+        ":zig_deps_index.bzl",
         ":zig_host_toolchain.bzl",
         ":zig_package.bzl",
         ":zig_repository.bzl",

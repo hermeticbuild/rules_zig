@@ -1,7 +1,24 @@
 """Implementation of the `zig_packages` module extension."""
 
 load("@zig_host_toolchain//:toolchain.bzl", "zig_cache", "zig_path")
+load("//zig/private/repo:zig_deps_hub.bzl", "zig_deps_hub")
 load("//zig/private/repo:zig_package.bzl", "ZIG_FETCH_TIMEOUT", "zig_package")
+
+# Length of the base64url digest that ends a Zig package hash key.
+_HASH_DIGEST_LEN = 44
+
+def package_name_version(key):
+    """Split a URL package's hash key into its name and version.
+
+    Args:
+      key: a URL package's Zig hash key, `<name>-<version>-<digest>`. Both
+        `version` and `digest` may contain `-` (e.g. `0.5.0-dev`).
+
+    Returns:
+      (name, version).
+    """
+    name, _, rest = key.partition("-")
+    return name, rest[:-(_HASH_DIGEST_LEN + 1)]
 
 from_file = tag_class(
     doc = "Resolve the Zig package dependencies declared in a `build.zig.zon` manifest.",
@@ -46,44 +63,61 @@ def _zig_packages_impl(module_ctx):
 
     graph = _resolve_graph(module_ctx, zig, resolver, cache, pkg_dir, manifests)
 
-    packages = {}
-    package_tags = {}
-    direct = {}
-    dev = {}
     for index, root in enumerate(graph["roots"]):
         tag = tags[index]
         for name, key in root["deps"].items():
-            package = graph["packages"][key]
-            if package["url"] == None:
+            if graph["packages"][key]["url"] == None:
                 fail("Zig dependency '{}' is a path dependency, which is not supported; declared by".format(name), tag)
 
-            existing = packages.get(name)
-            if existing != None and existing != key:
-                fail(
-                    "Conflicting declarations for the Zig dependency '{}': {} and {}; declared by".format(name, existing, key),
-                    package_tags[name],
-                    "and",
-                    tag,
-                )
-            packages[name] = key
-            package_tags[name] = tag
-
-            if index in root_tags:
-                if root_tags[index]:
-                    dev[name] = True
-                else:
-                    direct[name] = True
-
-    for name, key in packages.items():
+    hub_graph = {}
+    for key, package in graph["packages"].items():
+        if package["url"] == None:
+            continue
+        name, version = package_name_version(key)
+        hub_graph[key] = {
+            "name": name,
+            "version": version,
+            "deps": {
+                dep_name: dep_key
+                for dep_name, dep_key in package["deps"].items()
+                if graph["packages"][dep_key]["url"] != None
+            },
+        }
         zig_package(
-            name = name,
-            url = graph["packages"][key]["url"],
+            name = key,
+            url = package["url"],
             zig_hash = key,
         )
 
+    manifests = [
+        {
+            "repo": tags[index].build_zig_zon.repo_name,
+            "package": tags[index].build_zig_zon.package,
+            "deps": {name: {"key": key} for name, key in root["deps"].items()},
+        }
+        for index, root in enumerate(graph["roots"])
+    ]
+
+    zig_deps_hub(
+        name = "zig_deps",
+        package_files = {key: "@{}//:files".format(key) for key in hub_graph},
+        graph = json.encode(hub_graph),
+        manifests = json.encode(manifests),
+    )
+
+    root_nondev = False
+    root_dev = False
+    for is_dev in root_tags.values():
+        if is_dev:
+            root_dev = True
+        else:
+            root_nondev = True
+
+    direct = ["zig_deps"] if root_nondev else []
+    dev = ["zig_deps"] if root_dev and not root_nondev else []
     return module_ctx.extension_metadata(
-        root_module_direct_deps = sorted([name for name in direct]),
-        root_module_direct_dev_deps = sorted([name for name in dev if name not in direct]),
+        root_module_direct_deps = direct,
+        root_module_direct_dev_deps = dev,
     )
 
 zig_packages = module_extension(
@@ -94,9 +128,26 @@ Import Zig package dependencies.
 **Experimental:** this extension, its tags, and the repositories it generates
 may change without notice.
 
-Resolves the dependencies declared in the `build.zig.zon` manifests provided
-via `from_file` tags and declares a repository per URL dependency, named
-after the dependency.
+Resolves the dependency graph across the `build.zig.zon` manifests provided
+via `from_file` tags and generates two kinds of repositories:
+
+- A *spoke* per URL package in the graph, named by the package's Zig hash so
+  that several versions of a package coexist. Spokes are internal; their names
+  are not part of the API.
+- The `@zig_deps` *hub*, the only repository consumers use. Its `defs.bzl`
+  provides functions that address the spokes: `zig_package_files` and
+  `zig_package_file` name a package's files, `zig_package_deps` lists its
+  dependencies. Each takes a package `name` and an optional `version`. Without
+  `version`, `name` is a dependency declared by the `from_file` manifest of
+  the calling Bazel package or its nearest ancestor. With `version`, `name` is
+  a package name, and the lookup fails if several packages share that name and
+  version.
+
+```starlark
+zig_packages = use_extension("@rules_zig//zig:packages.bzl", "zig_packages")
+zig_packages.from_file(build_zig_zon = "//:build.zig.zon")
+use_repo(zig_packages, "zig_deps")
+```
 """,
     tag_classes = {
         "from_file": from_file,

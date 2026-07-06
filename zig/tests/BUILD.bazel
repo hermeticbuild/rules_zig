@@ -18,6 +18,7 @@ load(":translate_c_action_test.bzl", "translate_c_action_test_suite")
 load(":use_cc_common_link_test.bzl", "use_cc_common_link_test_suite")
 load(":util.bzl", "forward_exec_settings")
 load(":versions_test.bzl", "versions_test_suite")
+load(":zig_packages_test.bzl", "zig_packages_test_suite")
 load(":zigopt_test.bzl", "zigopt_test_suite")
 
 forward_exec_settings(name = "exec_settings")
@@ -57,6 +58,8 @@ toolchain_header_test_suite(name = "toolchain_header_test")
 translate_c_action_test_suite(name = "translate_c_action_test")
 
 versions_test_suite(name = "versions_test")
+
+zig_packages_test_suite(name = "zig_packages_test")
 
 zigopt_test_suite(name = "zigopt_test")
 

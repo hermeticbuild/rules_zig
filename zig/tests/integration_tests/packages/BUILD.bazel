@@ -1,11 +1,12 @@
 load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_library")
+load("@zig_deps//:defs.bzl", "zig_package_file")
 
-# A manual import of the fetched package: the `@leaf` repository exposes the
-# package's verified and extracted files, target definitions live here.
+# A manual import of the fetched package: the hub's accessors address the
+# package's files by name, target definitions live here.
 zig_library(
     name = "leaf",
     import_name = "leaf",
-    main = "@leaf//:src/leaf.zig",
+    main = zig_package_file("leaf", "src/leaf.zig"),
 )
 
 zig_binary(
