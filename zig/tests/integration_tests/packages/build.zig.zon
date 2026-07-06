@@ -15,6 +15,18 @@
             .url = "__TOP_URL__",
             .hash = "__TOP_HASH__",
         },
+        .lib = .{
+            .url = "__LIBV1_URL__",
+            .hash = "__LIBV1_HASH__",
+        },
+        .libfork = .{
+            .url = "__LIBFORK_URL__",
+            .hash = "__LIBFORK_HASH__",
+        },
+        .lib2 = .{
+            .url = "__LIBV2_URL__",
+            .hash = "__LIBV2_HASH__",
+        },
     },
     .paths = .{
         "build.zig.zon",

@@ -22,6 +22,9 @@ const packages = [_]Package{
     .{ .name = "left", .patches = &.{.{ .deps = &.{"bottom"} }} },
     .{ .name = "right", .patches = &.{.{ .deps = &.{"bottom"} }} },
     .{ .name = "top", .patches = &.{.{ .deps = &.{ "left", "right" } }} },
+    .{ .name = "libv1" },
+    .{ .name = "libfork" },
+    .{ .name = "libv2" },
 };
 
 const Consumer = struct {
@@ -31,7 +34,7 @@ const Consumer = struct {
 
 // Manifests that resolve dependencies via `zig_packages.from_file`.
 const consumers = [_]Consumer{
-    .{ .manifest = "build.zig.zon", .deps = &.{ "leaf", "bottom", "top" } },
+    .{ .manifest = "build.zig.zon", .deps = &.{ "leaf", "bottom", "top", "libv1", "libfork", "libv2" } },
 };
 
 test "Zig packages are imported from file:// tarballs" {
