@@ -194,6 +194,7 @@ filegroup(
         ":zig_toolchain_header.bzl",
         "//zig/private/bzlmod:all_files",
         "//zig/private/common:all_files",
+        "//zig/private/packages:all_files",
         "//zig/private/providers:all_files",
         "//zig/private/repo:all_files",
     ],

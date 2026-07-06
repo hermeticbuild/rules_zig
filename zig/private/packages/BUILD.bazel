@@ -1,0 +1,21 @@
+load("//zig:defs.bzl", "zig_test")
+
+zig_test(
+    name = "resolver_test",
+    size = "small",
+    main = "resolver.zig",
+    target_compatible_with = select({
+        "@zig_toolchains//:0.17.0": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+)
+
+# Execute `bazel run //util:update_filegroups` to update this target.
+filegroup(
+    name = "all_files",
+    srcs = [
+        ":BUILD.bazel",
+        ":resolver.zig",
+    ],
+    visibility = ["//zig/private:__pkg__"],
+)
