@@ -7,6 +7,10 @@
             .url = "__LEAF_URL__",
             .hash = "__LEAF_HASH__",
         },
+        .bottom = .{
+            .url = "__BOTTOM_URL__",
+            .hash = "__BOTTOM_HASH__",
+        },
     },
     .paths = .{
         "build.zig.zon",

@@ -1,16 +1,35 @@
 load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_library")
-load("@zig_deps//:defs.bzl", "zig_package_file")
+load("@zig_deps//:defs.bzl", "zig_package_deps", "zig_package_file")
 
-# A manual import of the fetched package: the hub's accessors address the
-# package's files by name, target definitions live here.
-zig_library(
-    name = "leaf",
-    import_name = "leaf",
-    main = zig_package_file("leaf", "src/leaf.zig"),
-)
+# Manual imports of the fetched packages: one `zig_library` per package in the
+# resolved graph, with `deps` derived from the exposed dependency edges (a
+# dependency's target here is named after the name it is imported under).
+[
+    zig_library(
+        name = pkg,
+        import_name = pkg,
+        main = zig_package_file(
+            pkg,
+            "src/" + pkg + ".zig",
+            version = "0.0.0",
+        ),
+        deps = [":" + dep for dep in zig_package_deps(
+            pkg,
+            version = "0.0.0",
+        )],
+    )
+    for pkg in [
+        "leaf",
+        "base",
+        "bottom",
+    ]
+]
 
 zig_binary(
     name = "binary",
     main = "main.zig",
-    deps = [":leaf"],
+    deps = [
+        ":bottom",
+        ":leaf",
+    ],
 )
