@@ -1,17 +1,14 @@
 load("@bazel_skylib//rules:diff_test.bzl", "diff_test")
 load("@rules_zig//zig:defs.bzl", "zig_binary")
-load("@zig_deps//:defs.bzl", "zig_package_file", "zig_package_target")
+load("@zig_deps//:defs.bzl", "zig_dep", "zig_package_file")
 
-# The binary imports each package's generated `zig_library` directly. `top`
-# pulls its diamond (`left`/`right`/`bottom`/`base`) transitively. Of the
-# copies of `lib`, v1 and its same-version fork are selected by dependency
-# name, the fork remapped to `libfork`, and v2 by version, remapped to `lib2`.
-libfork = zig_package_target("libfork")
+# The binary resolves its imports through the enclosing manifest's declared
+# dependencies. `top` pulls its diamond (`left`/`right`/`bottom`/`base`)
+# transitively. The copies of `lib`, declared as `lib`, `libfork` and `lib2`,
+# resolve per the manifest, the latter two remapped to their declared names.
+libfork = zig_dep("libfork")
 
-lib2 = zig_package_target(
-    "lib",
-    version = "2.0.0",
-)
+lib2 = zig_dep("lib2")
 
 zig_binary(
     name = "binary",
@@ -21,10 +18,10 @@ zig_binary(
     },
     main = "main.zig",
     deps = [
-        zig_package_target("bottom"),
-        zig_package_target("leaf"),
-        zig_package_target("lib"),
-        zig_package_target("top"),
+        zig_dep("bottom"),
+        zig_dep("leaf"),
+        zig_dep("lib"),
+        zig_dep("top"),
         libfork,
         lib2,
     ],
