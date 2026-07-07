@@ -6,7 +6,7 @@ DOC = """\
 The `@zig_deps` hub repository of the `zig_packages` module extension.
 
 Exposes the resolved Zig package dependency graph: `defs.bzl` provides
-accessors that address a package's files and its dependencies.
+accessors that address a package's files and generated targets.
 """
 
 ATTRS = {
@@ -16,11 +16,7 @@ ATTRS = {
     ),
     "graph": attr.string(
         mandatory = True,
-        doc = """\
-JSON map from each package's Zig hash key to its `{name, version, deps}`,
-where `deps` maps a dependency name to the dependency's hash key (URL
-dependencies only).
-""",
+        doc = "JSON map from each package's Zig hash key to its `{name, version}`.",
     ),
     "manifests": attr.string(
         default = "[]",
@@ -82,15 +78,6 @@ def zig_package_target(name, module = None, version = None):
     """
     package = _package(name, version)
     return Label(package["files"]).same_package_label(module or package["name"])
-
-def zig_package_deps(name, version = None):
-    """A Zig package's dependencies, see `zig_package_files`.
-
-    Returns:
-      dict from the name the package imports the dependency under to the
-      dependency's Zig hash key.
-    """
-    return dict(_package(name, version)["deps"])
 '''
 
 def _zig_deps_hub_impl(repository_ctx):

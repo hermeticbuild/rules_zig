@@ -94,11 +94,7 @@ def _zig_packages_impl(module_ctx):
                 reached[dep] = True
         reachable[key] = reached
 
-        hub_graph[key] = {
-            "name": name,
-            "version": version,
-            "deps": {dep_name: dep_key for dep_name, dep_key in package["deps"].items()},
-        }
+        hub_graph[key] = {"name": name, "version": version}
         zig_package(
             name = key,
             url = package["url"],
@@ -161,12 +157,11 @@ via `from_file` tags and generates two kinds of repositories:
 - The `@zig_deps` *hub*, the only repository consumers use. Its `defs.bzl`
   provides functions that address the spokes: `zig_package_target` names the
   `zig_library` generated for a module of a package, `zig_package_files` and
-  `zig_package_file` name its files, and `zig_package_deps` lists its
-  dependencies. Each takes a package `name` and an optional `version`. Without
-  `version`, `name` is a dependency declared by the `from_file` manifest of
-  the calling Bazel package or its nearest ancestor. With `version`, `name` is
-  a package name, and the lookup fails if several packages share that name and
-  version.
+  `zig_package_file` name its files. Each takes a package `name` and an
+  optional `version`. Without `version`, `name` is a dependency declared by
+  the `from_file` manifest of the calling Bazel package or its nearest
+  ancestor. With `version`, `name` is a package name, and the lookup fails if
+  several packages share that name and version.
 
 ```starlark
 zig_packages = use_extension("@rules_zig//zig:packages.bzl", "zig_packages")
