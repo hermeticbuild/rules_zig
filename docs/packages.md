@@ -23,8 +23,9 @@ via `from_file` tags and generates two kinds of repositories:
   that several versions of a package coexist. Spokes are internal; their names
   are not part of the API.
 - The `@zig_deps` *hub*, the only repository consumers use. Its `defs.bzl`
-  provides functions that address the spokes: `zig_package_files` and
-  `zig_package_file` name a package's files, `zig_package_deps` lists its
+  provides functions that address the spokes: `zig_package_target` names the
+  `zig_library` generated for a module of a package, `zig_package_files` and
+  `zig_package_file` name its files, and `zig_package_deps` lists its
   dependencies. Each takes a package `name` and an optional `version`. Without
   `version`, `name` is a dependency declared by the `from_file` manifest of
   the calling Bazel package or its nearest ancestor. With `version`, `name` is

@@ -14,8 +14,9 @@ The Zig SDK downloads, verifies, and prunes the package according to its
 `build.zig.zon`, and supports `git+` URLs. Fetching fails if the resulting
 package hash does not match the expected `zig_hash`. The package's `build.zig`
 is then configured to extract its public module graph
-(`module_manifest.json`). The package's files are public, individually and
-grouped as the `files` filegroup.
+(`module_manifest.json`), and a `zig_library` is generated for each module the
+package owns. The package's files are public, individually and grouped as the
+`files` filegroup.
 
 With `zig_hash` the fetch is reproducible. Without it, the repository reports
 the fetched hash so a fetch cycle surfaces the value to pin.
@@ -49,6 +50,55 @@ _EXPORT_MANIFEST = """\
 
 exports_files(["module_manifest.json"])
 """
+
+_LIBRARY_LOAD = """\
+load("@rules_zig//zig:defs.bzl", "zig_library")
+
+"""
+
+_ZIG_LIBRARY = """
+zig_library(
+    name = "{name}",
+    main = "{main}",
+    import_name = "{name}",
+    srcs = glob(["**/*.zig"], exclude = ["{main}"]),
+    deps = {deps},
+    import_names = {import_names},
+)
+"""
+
+def _module_dep_label(repository_ctx, imported):
+    # A same-package import resolves to a sibling target here; a cross-package
+    # import resolves to the module's target in the dependency's own spoke.
+    if imported["package"] == "":
+        return ":" + imported["module"]
+    return str(repository_ctx.attr.dep_build_files[imported["package"]].same_package_label(imported["module"]))
+
+def _render_libraries(repository_ctx, modules):
+    """Render a `zig_library` for each module this package owns.
+
+    A dependency is imported under its own name by default; an import under a
+    different name is remapped through `import_names`. Modules owned by a
+    dependency are generated in that dependency's own spoke and skipped here.
+    """
+    chunks = []
+    for module in modules:
+        if module["package"] != "":
+            continue
+        deps = []
+        import_names = {}
+        for imported in module["imports"]:
+            label = _module_dep_label(repository_ctx, imported)
+            deps.append(label)
+            if imported["name"] != imported["module"]:
+                import_names[label] = imported["name"]
+        chunks.append(_ZIG_LIBRARY.format(
+            name = module["name"],
+            main = module["root_source"],
+            deps = json.encode(deps),
+            import_names = json.encode(import_names),
+        ))
+    return "".join(chunks)
 
 # Directories the rule creates in the repository root for its own use.
 _SCRATCH_DIRS = ["_fetch", "_configure"]
@@ -198,7 +248,8 @@ def _zig_package_impl(repository_ctx):
         manifest = _configure(repository_ctx, zig, repository_ctx.path("build.zig"), cache)
         repository_ctx.delete("_configure")
         repository_ctx.file("module_manifest.json", manifest)
-        build += _EXPORT_MANIFEST
+        libraries = _render_libraries(repository_ctx, json.decode(manifest)["modules"])
+        build = _LIBRARY_LOAD + build + libraries + _EXPORT_MANIFEST
 
     repository_ctx.file("BUILD.bazel", build)
 

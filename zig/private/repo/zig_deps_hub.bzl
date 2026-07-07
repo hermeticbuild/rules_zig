@@ -74,6 +74,15 @@ def zig_package_file(name, path, version = None):
     """The label of the file at `path` inside a Zig package, see `zig_package_files`."""
     return zig_package_files(name, version).same_package_label(path)
 
+def zig_package_target(name, module = None, version = None):
+    """The label of a generated `zig_library` of a Zig package, see `zig_package_files`.
+
+    Defaults to the module of the same name as the package; pass `module` to
+    select another module the package exposes.
+    """
+    package = _package(name, version)
+    return Label(package["files"]).same_package_label(module or package["name"])
+
 def zig_package_deps(name, version = None):
     """A Zig package's dependencies, see `zig_package_files`.
 
