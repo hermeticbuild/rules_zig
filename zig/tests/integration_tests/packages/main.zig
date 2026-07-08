@@ -13,6 +13,7 @@ const usec = @import("usec");
 const cdep = @import("cdep");
 const cppdep = @import("cppdep");
 const syslibdep = @import("syslibdep");
+const optdep = @import("optdep");
 
 pub fn main() void {
     std.debug.assert(leaf.value == 7);
@@ -41,4 +42,6 @@ pub fn main() void {
     std.debug.assert(cppdep.value() == 3);
     // 21*2, computed by the `mymath` cc_library the annotation provides.
     std.debug.assert(syslibdep.compute(21) == 42);
+    // 5+100, from `optmath` linked only because its integration is enabled.
+    std.debug.assert(optdep.compute(5) == 105);
 }

@@ -31,3 +31,11 @@ cc_library(
     srcs = ["mymath.c"],
     visibility = ["//visibility:public"],
 )
+
+# Provides the `optmath` system library the `optdep` package links when the
+# `optmath` system integration is enabled.
+cc_library(
+    name = "optmath_impl",
+    srcs = ["optmath.c"],
+    visibility = ["//visibility:public"],
+)

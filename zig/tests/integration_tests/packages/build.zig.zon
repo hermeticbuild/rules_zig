@@ -59,6 +59,10 @@
             .url = "__SYSLIBDEP_URL__",
             .hash = "__SYSLIBDEP_HASH__",
         },
+        .optdep = .{
+            .url = "__OPTDEP_URL__",
+            .hash = "__OPTDEP_HASH__",
+        },
     },
     .paths = .{
         "build.zig.zon",
