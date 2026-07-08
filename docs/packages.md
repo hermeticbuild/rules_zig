@@ -9,6 +9,7 @@ Extension for importing Zig package dependencies.
 <pre>
 zig_packages = use_extension("@rules_zig//zig:packages.bzl", "zig_packages")
 zig_packages.from_file(<a href="#zig_packages.from_file-build_zig_zon">build_zig_zon</a>)
+zig_packages.system_library(<a href="#zig_packages.system_library-name">name</a>, <a href="#zig_packages.system_library-lib">lib</a>)
 </pre>
 
 Import Zig package dependencies.
@@ -69,5 +70,21 @@ Resolve the Zig package dependencies declared in a `build.zig.zon` manifest.
 | Name  | Description | Type | Mandatory | Default |
 | :------------- | :------------- | :------------- | :------------- | :------------- |
 | <a id="zig_packages.from_file-build_zig_zon"></a>build_zig_zon |  A `build.zig.zon` manifest to resolve Zig dependencies for.   | <a href="https://bazel.build/concepts/labels">Label</a> | required |  |
+
+<a id="zig_packages.system_library"></a>
+
+### system_library
+
+Map a system library a Zig package links (`linkSystemLibrary`) to a `cc_library` or similar that provides it.
+
+The root module's mapping of a library takes precedence; otherwise other
+modules' mappings apply, and must agree.
+
+**Attributes**
+
+| Name  | Description | Type | Mandatory | Default |
+| :------------- | :------------- | :------------- | :------------- | :------------- |
+| <a id="zig_packages.system_library-name"></a>name |  The name of the system library as passed to `linkSystemLibrary` in a package's `build.zig`.   | <a href="https://bazel.build/concepts/labels#target-names">Name</a> | required |  |
+| <a id="zig_packages.system_library-lib"></a>lib |  A `cc_library` or similar (any target providing `CcInfo`) that provides the named system library.   | <a href="https://bazel.build/concepts/labels">Label</a> | required |  |
 
 

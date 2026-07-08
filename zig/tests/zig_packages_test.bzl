@@ -2,7 +2,7 @@
 
 load("@bazel_skylib//lib:partial.bzl", "partial")
 load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
-load("//zig/private/bzlmod:zig_packages.bzl", "package_name_version")
+load("//zig/private/bzlmod:zig_packages.bzl", "package_name_version", "select_by_precedence")
 load("//zig/private/repo:zig_deps_index.bzl", "index_packages", "resolve_version")
 
 def _package_name_version_test_impl(ctx):
@@ -24,6 +24,58 @@ def _package_name_version_test_impl(ctx):
     return unittest.end(env)
 
 _package_name_version_test = unittest.make(_package_name_version_test_impl)
+
+def _entry(module, key, value):
+    return struct(module = module, is_root = module == "root", key = key, value = value, tag = None)
+
+def _select_by_precedence_test_impl(ctx):
+    env = unittest.begin(ctx)
+
+    root = _entry("root", "any", "//root")
+    dep_specific = _entry("dep", "specific", "//dep")
+    other_specific = _entry("other", "specific", "//other")
+
+    # The root module's entry wins even under a less specific key, overriding
+    # every dependency module's.
+    asserts.equals(
+        env,
+        (None, root, [dep_specific]),
+        select_by_precedence({"specific": [dep_specific], "any": [root]}, ["specific", "any"]),
+    )
+
+    # Without a root entry, the most specific dependency entry applies.
+    asserts.equals(
+        env,
+        (None, dep_specific, []),
+        select_by_precedence({"specific": [dep_specific], "any": [_entry("dep", "any", "//any")]}, ["specific", "any"]),
+    )
+
+    # Equal dependency entries under one key collapse.
+    asserts.equals(
+        env,
+        (None, dep_specific, []),
+        select_by_precedence({"specific": [dep_specific, _entry("other", "specific", "//dep")]}, ["specific"]),
+    )
+
+    # Disagreeing dependency entries under one key conflict.
+    asserts.equals(
+        env,
+        ((dep_specific, other_specific), None, []),
+        select_by_precedence({"specific": [dep_specific, other_specific]}, ["specific"]),
+    )
+
+    # The root module settles what would otherwise conflict.
+    asserts.equals(
+        env,
+        (None, root, [dep_specific, other_specific]),
+        select_by_precedence({"specific": [dep_specific, other_specific], "any": [root]}, ["specific", "any"]),
+    )
+
+    asserts.equals(env, (None, None, []), select_by_precedence({"other": [root]}, ["specific"]))
+
+    return unittest.end(env)
+
+_select_by_precedence_test = unittest.make(_select_by_precedence_test_impl)
 
 # Two copies of `lib` 1.0.0 (e.g. two revisions of one release) and `lib` 2.0.0.
 _LIB_A = "lib-1.0.0-AAAA"
@@ -86,6 +138,7 @@ def zig_packages_test_suite(name):
     unittest.suite(
         name,
         partial.make(_package_name_version_test),
+        partial.make(_select_by_precedence_test),
         partial.make(_index_packages_test),
         partial.make(_resolve_version_test),
     )

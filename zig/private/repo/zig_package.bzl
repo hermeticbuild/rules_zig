@@ -35,6 +35,9 @@ to configure the package; each dependency edge is `[name, key, lazy]`.
     "dep_build_files": attr.string_keyed_label_dict(
         doc = "Map from each dependency package hash to its `build.zig`, used to wire `@dependencies`.",
     ),
+    "system_libraries": attr.string_keyed_label_dict(
+        doc = "Map from a system-library name (as passed to `linkSystemLibrary`) to a `cc_library` or similar providing it.",
+    ),
 }
 
 _BUILD = """\
@@ -223,6 +226,19 @@ def _render_libraries(repository_ctx, modules):
             deps.append("@rules_zig//zig/lib:libc")
         if module.get("link_libcpp"):
             deps.append("@rules_zig//zig/lib:libc++")
+
+        for name in module.get("system_libs", []):
+            lib = repository_ctx.attr.system_libraries.get(name)
+            if lib == None:
+                fail(("The Zig package '{}' module '{}' requires the system library '{}', which is not " +
+                      "provided. Map it to a cc_library with a " +
+                      "`zig_packages.system_library(name = \"{}\", lib = ...)` annotation.").format(
+                    repository_ctx.attr.url,
+                    module["name"],
+                    name,
+                    name,
+                ))
+            deps.append(str(lib))
 
         chunks, cc_dep = _render_c_library(repository_ctx.attr.url, module)
         cc_chunks.extend(chunks)

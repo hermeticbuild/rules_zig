@@ -6,7 +6,7 @@
 //!
 //!     {"modules": [{"name": ..., "package": <hash>, "root_source": ...,
 //!         "link_libc": true, "link_libcpp": true,  // each present only when set
-//!         "csrcs": [...], "include_dirs": [...], "unsupported": [...],  // each present only when non-empty
+//!         "csrcs": [...], "include_dirs": [...], "system_libs": [...], "unsupported": [...],  // each present only when non-empty
 //!         "imports": [{"name": ..., "module": ..., "package": <hash>}]}]}
 //!
 //! A module's `package` is the Zig hash of the package that owns it, or the
@@ -24,10 +24,12 @@
 //! The `csrcs` field lists the module's vendored C sources, each with its
 //! per-file `flags` and an optional `language`. The `include_dirs` field lists
 //! the module's own include directories, each tagged by `kind` (`path`,
-//! `path_system`, or `path_after`). The `unsupported` field lists
-//! human-readable descriptions of C or link constructs the importer cannot
-//! represent (assembly, prebuilt objects, generated config headers, linked
-//! compile steps, ...).
+//! `path_system`, or `path_after`). The `system_libs` field lists the names of
+//! non-libc system libraries the module links (`linkSystemLibrary`); the
+//! importer requires each to be mapped to a `cc_library`. The `unsupported`
+//! field lists human-readable descriptions of C or link constructs the importer
+//! cannot represent (assembly, prebuilt objects, generated config headers,
+//! linked compile steps, ...).
 
 const std = @import("std");
 const Build = std.Build;
@@ -161,6 +163,7 @@ fn appendIncludeDir(
 fn emitC(arena: Allocator, json: *std.json.Stringify, module: *Build.Module, root_source_error: ?ResolvePathError) !void {
     var csrcs: std.ArrayList(CSource) = .empty;
     var include_dirs: std.ArrayList(IncludeDir) = .empty;
+    var system_libs: std.ArrayList([]const u8) = .empty;
     var unsupported: std.StringArrayHashMapUnmanaged(void) = .empty;
     if (root_source_error) |err| try reportPath(arena, &unsupported, module.root_source_file.?, err);
 
@@ -190,8 +193,7 @@ fn emitC(arena: Allocator, json: *std.json.Stringify, module: *Build.Module, roo
                 try unsupported.put(arena, "C source files with a generated or out-of-package root", {});
             }
         },
-        // System libraries are handled separately; they are not vendored C.
-        .system_lib => {},
+        .system_lib => |lib| try system_libs.append(arena, lib.name),
         .static_path => try unsupported.put(arena, "a precompiled object or static library (`addObjectFile`)", {}),
         .assembly_file => try unsupported.put(arena, "an assembly source file", {}),
         .win32_resource_file => try unsupported.put(arena, "a Win32 resource file", {}),
@@ -237,6 +239,13 @@ fn emitC(arena: Allocator, json: *std.json.Stringify, module: *Build.Module, roo
             try json.write(inc.path);
             try json.endObject();
         }
+        try json.endArray();
+    }
+
+    if (system_libs.items.len > 0) {
+        try json.objectField("system_libs");
+        try json.beginArray();
+        for (system_libs.items) |name| try json.write(name);
         try json.endArray();
     }
 
@@ -656,4 +665,29 @@ test "collapses repeated identical unsupported-construct messages" {
     const unsupported = entry.get("unsupported").?.array.items;
     try std.testing.expectEqual(1, unsupported.len);
     try std.testing.expect(std.mem.indexOf(u8, unsupported[0].string, "assembly") != null);
+}
+
+test "emits the system libraries a module links" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const build_root = try std.fmt.allocPrint(arena, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+
+    const b = try createBuilder(arena, std.testing.io, .{ .array_hash_map = .empty, .allocator = arena }, "unused-zig", build_root, &.{});
+
+    // `linkSystemLibrary` requires the module to carry a resolved target.
+    const mod = b.addModule("mod", .{ .root_source_file = b.path("src/mod.zig"), .target = b.graph.host });
+    mod.linkSystemLibrary("mymath", .{});
+
+    var out: std.Io.Writer.Allocating = .init(arena);
+    try emit(arena, &out.writer, b);
+
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, out.written(), .{});
+    const module = parsed.object.get("modules").?.array.items[0].object;
+    const system_libs = module.get("system_libs").?.array.items;
+    try std.testing.expectEqual(1, system_libs.len);
+    try std.testing.expectEqualStrings("mymath", system_libs[0].string);
 }

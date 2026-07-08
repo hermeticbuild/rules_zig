@@ -24,6 +24,81 @@ def _dep_edges(package):
     """A resolved package's dependency edges as `[name, key, lazy]` lists."""
     return [[name, key, name in package["lazy"]] for name, key in package["deps"].items()]
 
+def select_by_precedence(entries, keys):
+    """Select the module-extension tag entry that applies, the root module deciding.
+
+    The root module's entry under the first of `keys` it declares applies and
+    overrides every dependency module's entry. Otherwise the dependency
+    modules' entries under the first such key apply; they must agree, and
+    equal ones collapse.
+
+    Args:
+      entries: map from a key to its entries in module order, each
+        `struct(module, is_root, key, value, tag)`, where `value` compares with
+        `==` and the root module's entries under one key agree.
+      keys: the candidate keys, most specific first.
+
+    Returns:
+      `(conflict, selected, overridden)`: `conflict` is a pair of disagreeing
+      dependency-module entries, or None; `selected` is the entry that applies,
+      or None if there is none under `keys`; `overridden` lists the
+      dependency-module entries the root module's overrides.
+    """
+    candidates = [entry for key in keys for entry in entries.get(key, [])]
+    for entry in candidates:
+        if entry.is_root:
+            return (None, entry, [other for other in candidates if not other.is_root])
+    if not candidates:
+        return (None, None, [])
+    selected = candidates[0]
+    for entry in candidates[1:]:
+        if entry.key == selected.key and entry.value != selected.value:
+            return ((selected, entry), None, [])
+    return (None, selected, [])
+
+def _tag_entry(mod, key, value, tag):
+    return struct(module = mod.name, is_root = mod.is_root, key = key, value = value, tag = tag)
+
+def _apply_precedence(entries, keys, tag_class_name, subject, warnings):
+    """`select_by_precedence`, failing on a conflict.
+
+    Args:
+      entries: as for `select_by_precedence`.
+      keys: as for `select_by_precedence`.
+      tag_class_name: the tag class of the entries, for messages.
+      subject: function from a key to a description of what it configures.
+      warnings: map from warning message to tag, extended in place.
+
+    Returns:
+      the entry that applies, or None.
+    """
+    conflict, selected, overridden = select_by_precedence(entries, keys)
+    if conflict != None:
+        first, second = conflict
+        fail("Conflicting `{}` tags for {} from non-root modules '{}' and '{}'; declare a `{}` tag for it in the root module.".format(
+            tag_class_name,
+            subject(second.key),
+            first.module,
+            second.module,
+            tag_class_name,
+        ), second.tag)
+    for entry in overridden:
+        warnings["Ignoring the `{}` tag for {} from non-root module '{}'; the root module's takes precedence.".format(
+            tag_class_name,
+            subject(entry.key),
+            entry.module,
+        )] = entry.tag
+    if selected != None and not selected.is_root:
+        warnings["Using the `{}` tag for {} from non-root module '{}'.".format(
+            tag_class_name,
+            subject(selected.key),
+            selected.module,
+        )] = selected.tag
+    return selected
+
+def _system_library_subject(name):
+    return "system library '{}'".format(name)
+
 from_file = tag_class(
     doc = "Resolve the Zig package dependencies declared in a `build.zig.zon` manifest.",
     attrs = {
@@ -31,6 +106,25 @@ from_file = tag_class(
             doc = "A `build.zig.zon` manifest to resolve Zig dependencies for.",
             mandatory = True,
             allow_single_file = True,
+        ),
+    },
+)
+
+system_library = tag_class(
+    doc = """\
+Map a system library a Zig package links (`linkSystemLibrary`) to a `cc_library` or similar that provides it.
+
+The root module's mapping of a library takes precedence; otherwise other
+modules' mappings apply, and must agree.
+""",
+    attrs = {
+        "name": attr.string(
+            doc = "The name of the system library as passed to `linkSystemLibrary` in a package's `build.zig`.",
+            mandatory = True,
+        ),
+        "lib": attr.label(
+            doc = "A `cc_library` or similar (any target providing `CcInfo`) that provides the named system library.",
+            mandatory = True,
         ),
     },
 )
@@ -64,6 +158,20 @@ def _zig_packages_impl(module_ctx):
             tags.append(tag)
             if mod.is_root:
                 root_tags[len(tags) - 1] = module_ctx.is_dev_dependency(tag)
+
+    warnings = {}
+
+    system_library_entries = {}
+    for mod in module_ctx.modules:
+        for tag in mod.tags.system_library:
+            entries = system_library_entries.setdefault(tag.name, [])
+            for other in entries:
+                if other.module == mod.name and other.value != tag.lib:
+                    fail("Conflicting `system_library` annotations for '{}': {} and {}.".format(tag.name, other.value, tag.lib), tag)
+            entries.append(_tag_entry(mod, tag.name, tag.lib, tag))
+    system_libraries = {}
+    for name in system_library_entries:
+        system_libraries[name] = _apply_precedence(system_library_entries, [name], "system_library", _system_library_subject, warnings).value
 
     graph = _resolve_graph(module_ctx, zig, resolver, cache, pkg_dir, manifests)
 
@@ -109,6 +217,7 @@ def _zig_packages_impl(module_ctx):
                 },
             }),
             dep_build_files = {dep: "@{}//:build.zig".format(dep) for dep in reached},
+            system_libraries = system_libraries,
         )
 
     manifests = [
@@ -126,6 +235,10 @@ def _zig_packages_impl(module_ctx):
         graph = json.encode(hub_graph),
         manifests = json.encode(manifests),
     )
+
+    for message, tag in warnings.items():
+        # buildifier: disable=print
+        print(message, tag)
 
     root_nondev = False
     root_dev = False
@@ -191,5 +304,6 @@ zig_binary(
 """,
     tag_classes = {
         "from_file": from_file,
+        "system_library": system_library,
     },
 )
