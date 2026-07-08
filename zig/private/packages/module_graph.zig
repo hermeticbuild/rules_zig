@@ -9,27 +9,8 @@
 //!         "csrcs": [...], "include_dirs": [...], "system_libs": [...], "unsupported": [...],  // each present only when non-empty
 //!         "imports": [{"name": ..., "module": ..., "package": <hash>}]}]}
 //!
-//! A module's `package` is the Zig hash of the package that owns it, or the
-//! empty string for the root package being configured. An import's `package`
-//! identifies the owner of the imported module likewise. An import's `name` is
-//! the name the importer uses (`@import(name)`), while its `module` is the
-//! imported module's own registered name; the two differ when a module is
-//! imported under an alias.
-//!
-//! The `link_libc`/`link_libcpp` fields are emitted (as `true`) only when the
-//! module links the C / C++ standard library, e.g. via `b.addModule(..., .{
-//! .link_libc = true })` or `module.linkSystemLibrary("c", .{})`; they are
-//! omitted otherwise.
-//!
-//! The `csrcs` field lists the module's vendored C sources, each with its
-//! per-file `flags` and an optional `language`. The `include_dirs` field lists
-//! the module's own include directories, each tagged by `kind` (`path`,
-//! `path_system`, or `path_after`). The `system_libs` field lists the names of
-//! non-libc system libraries the module links (`linkSystemLibrary`); the
-//! importer requires each to be mapped to a `cc_library`. The `unsupported`
-//! field lists human-readable descriptions of C or link constructs the importer
-//! cannot represent (assembly, prebuilt objects, generated config headers,
-//! linked compile steps, ...).
+//! Each JSON object renders the like-named fields of a record type below, which
+//! documents them.
 
 const std = @import("std");
 const Build = std.Build;
@@ -110,15 +91,65 @@ fn reportPath(arena: Allocator, unsupported: *std.StringArrayHashMapUnmanaged(vo
     }
 }
 
-const CSource = struct {
+pub const CSource = struct {
     path: []const u8,
+    /// Per-file C flags.
     flags: []const []const u8,
+    /// The source language (a `CSourceLanguage` tag), or null to infer it from
+    /// the file extension.
     language: ?[]const u8,
 };
 
-const IncludeDir = struct {
+pub const IncludeDir = struct {
+    /// `path`, `path_system`, or `path_after`.
     kind: []const u8,
     path: []const u8,
+};
+
+pub const Import = struct {
+    /// The name the importer uses (`@import(name)`); differs from `module` when
+    /// the module is imported under an alias.
+    name: []const u8,
+    /// The imported module's own registered name.
+    module: []const u8,
+    /// The package owning the imported module, as for `Module.package`.
+    package: []const u8,
+};
+
+/// A package module's extracted, configuration-independent shape.
+pub const Module = struct {
+    /// The module's name in its owning package (see `nameModules`).
+    name: []const u8,
+    /// The Zig hash of the owning package, or the empty string for the package
+    /// being configured.
+    package: []const u8,
+    /// The root source file within the owning package, if any.
+    root_source: ?[]const u8,
+    /// Whether the module links the C standard library, by its own setting
+    /// (`.link_libc = true`, `linkSystemLibrary("c", .{})`).
+    link_libc: bool,
+    /// As `link_libc`, for the C++ standard library.
+    link_libcpp: bool,
+    imports: []const Import,
+    /// The module's vendored C sources.
+    csrcs: []const CSource,
+    /// The module's own include directories.
+    include_dirs: []const IncludeDir,
+    /// The non-libc system libraries the module links (`linkSystemLibrary`),
+    /// each of which the importer requires to be mapped to a `cc_library`.
+    system_libs: []const []const u8,
+    /// Human-readable descriptions of C or link constructs the importer cannot
+    /// represent (assembly, prebuilt objects, generated config headers, linked
+    /// compile steps, ...).
+    unsupported: []const []const u8,
+};
+
+/// The C fields of a `Module`.
+const CInfo = struct {
+    csrcs: []const CSource,
+    include_dirs: []const IncludeDir,
+    system_libs: []const []const u8,
+    unsupported: []const []const u8,
 };
 
 fn joinPath(arena: Allocator, base: []const u8, sub: []const u8) ![]const u8 {
@@ -156,11 +187,9 @@ fn appendIncludeDir(
     }
 }
 
-/// Emit a module's vendored C sources, include directories, and any C or link
-/// constructs the importer cannot represent. `csrcs`, `include_dirs`, and
-/// `unsupported` are written only when non-empty. `root_source_error` is how
-/// `lazyPathString` rejected the module's root source, if it did.
-fn emitC(arena: Allocator, json: *std.json.Stringify, module: *Build.Module, root_source_error: ?ResolvePathError) !void {
+/// Collect `module`'s C information; `root_source_error` is how `lazyPathString`
+/// rejected its root source, if it did.
+fn collectC(arena: Allocator, module: *Build.Module, root_source_error: ?ResolvePathError) !CInfo {
     var csrcs: std.ArrayList(CSource) = .empty;
     var include_dirs: std.ArrayList(IncludeDir) = .empty;
     var system_libs: std.ArrayList([]const u8) = .empty;
@@ -210,51 +239,92 @@ fn emitC(arena: Allocator, json: *std.json.Stringify, module: *Build.Module, roo
         .other_step => try unsupported.put(arena, "an include path from a linked compile step", {}),
     };
 
-    if (csrcs.items.len > 0) {
+    return .{
+        .csrcs = csrcs.items,
+        .include_dirs = include_dirs.items,
+        .system_libs = system_libs.items,
+        .unsupported = unsupported.keys(),
+    };
+}
+
+/// Extract the public module graph seeded by the modules registered via
+/// `b.addModule`, as configuration-independent `Module` records.
+pub fn collectModules(arena: Allocator, builder: *Build) ![]const Module {
+    var set: ModuleSet = .empty;
+    for (builder.modules.values()) |module| try collect(arena, &set, module);
+    var names = try nameModules(arena, &set);
+
+    var result: std.ArrayList(Module) = .empty;
+    for (set.keys()) |module| {
+        var root_source_error: ?ResolvePathError = null;
+        const root_source = lazyPathString(arena, module.root_source_file) catch |err| switch (err) {
+            error.AbsolutePath => |e| rejected: {
+                root_source_error = e;
+                break :rejected null;
+            },
+            error.OutOfMemory => |e| return e,
+        };
+        var imports: std.ArrayList(Import) = .empty;
+        for (module.import_table.keys(), module.import_table.values()) |import_name, imported| {
+            try imports.append(arena, .{
+                .name = import_name,
+                .module = names.get(imported).?,
+                .package = imported.owner.pkg_hash,
+            });
+        }
+        const c = try collectC(arena, module, root_source_error);
+        try result.append(arena, .{
+            .name = names.get(module).?,
+            .package = module.owner.pkg_hash,
+            .root_source = root_source,
+            .link_libc = module.link_libc == true,
+            .link_libcpp = module.link_libcpp == true,
+            .imports = imports.items,
+            .csrcs = c.csrcs,
+            .include_dirs = c.include_dirs,
+            .system_libs = c.system_libs,
+            .unsupported = c.unsupported,
+        });
+    }
+    return result.items;
+}
+
+/// Omits fields with a default value (`link_libc` false, empty C lists).
+pub fn writeModule(json: *std.json.Stringify, module: Module) !void {
+    try json.beginObject();
+    try json.objectField("name");
+    try json.write(module.name);
+    try json.objectField("package");
+    try json.write(module.package);
+    try json.objectField("root_source");
+    try json.write(module.root_source);
+    if (module.link_libc) {
+        try json.objectField("link_libc");
+        try json.write(true);
+    }
+    if (module.link_libcpp) {
+        try json.objectField("link_libcpp");
+        try json.write(true);
+    }
+    if (module.csrcs.len > 0) {
         try json.objectField("csrcs");
-        try json.beginArray();
-        for (csrcs.items) |c| {
-            try json.beginObject();
-            try json.objectField("path");
-            try json.write(c.path);
-            try json.objectField("flags");
-            try json.beginArray();
-            for (c.flags) |flag| try json.write(flag);
-            try json.endArray();
-            try json.objectField("language");
-            try json.write(c.language);
-            try json.endObject();
-        }
-        try json.endArray();
+        try json.write(module.csrcs);
     }
-
-    if (include_dirs.items.len > 0) {
+    if (module.include_dirs.len > 0) {
         try json.objectField("include_dirs");
-        try json.beginArray();
-        for (include_dirs.items) |inc| {
-            try json.beginObject();
-            try json.objectField("kind");
-            try json.write(inc.kind);
-            try json.objectField("path");
-            try json.write(inc.path);
-            try json.endObject();
-        }
-        try json.endArray();
+        try json.write(module.include_dirs);
     }
-
-    if (system_libs.items.len > 0) {
+    if (module.system_libs.len > 0) {
         try json.objectField("system_libs");
-        try json.beginArray();
-        for (system_libs.items) |name| try json.write(name);
-        try json.endArray();
+        try json.write(module.system_libs);
     }
-
-    if (unsupported.count() > 0) {
+    if (module.unsupported.len > 0) {
         try json.objectField("unsupported");
-        try json.beginArray();
-        for (unsupported.keys()) |u| try json.write(u);
-        try json.endArray();
+        try json.write(module.unsupported);
     }
+    try json.objectField("imports");
+    try json.write(module.imports);
+    try json.endObject();
 }
 
 /// Emit `{"modules": [...]}` for the module graph seeded by the modules
@@ -271,52 +341,9 @@ pub fn emit(arena: Allocator, writer: *std.Io.Writer, builder: *Build) !void {
 /// Emit the module graph as a JSON array of module objects into `json`. The
 /// caller writes the enclosing object field.
 pub fn emitModules(arena: Allocator, json: *std.json.Stringify, builder: *Build) !void {
-    var modules: ModuleSet = .empty;
-    for (builder.modules.values()) |module| try collect(arena, &modules, module);
-
-    var names = try nameModules(arena, &modules);
-
+    const modules = try collectModules(arena, builder);
     try json.beginArray();
-    for (modules.keys()) |module| {
-        var root_source_error: ?ResolvePathError = null;
-        const root_source = lazyPathString(arena, module.root_source_file) catch |err| switch (err) {
-            error.AbsolutePath => |e| rejected: {
-                root_source_error = e;
-                break :rejected null;
-            },
-            error.OutOfMemory => |e| return e,
-        };
-        try json.beginObject();
-        try json.objectField("name");
-        try json.write(names.get(module).?);
-        try json.objectField("package");
-        try json.write(module.owner.pkg_hash);
-        try json.objectField("root_source");
-        try json.write(root_source);
-        if (module.link_libc == true) {
-            try json.objectField("link_libc");
-            try json.write(true);
-        }
-        if (module.link_libcpp == true) {
-            try json.objectField("link_libcpp");
-            try json.write(true);
-        }
-        try emitC(arena, json, module, root_source_error);
-        try json.objectField("imports");
-        try json.beginArray();
-        for (module.import_table.keys(), module.import_table.values()) |import_name, imported| {
-            try json.beginObject();
-            try json.objectField("name");
-            try json.write(import_name);
-            try json.objectField("module");
-            try json.write(names.get(imported).?);
-            try json.objectField("package");
-            try json.write(imported.owner.pkg_hash);
-            try json.endObject();
-        }
-        try json.endArray();
-        try json.endObject();
-    }
+    for (modules) |module| try writeModule(json, module);
     try json.endArray();
 }
 
