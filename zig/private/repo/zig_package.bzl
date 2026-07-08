@@ -95,6 +95,10 @@ def _render_libraries(repository_ctx, modules):
             deps.append(label)
             if imported["name"] != imported["module"]:
                 import_names[label] = imported["name"]
+        if module.get("link_libc"):
+            deps.append("@rules_zig//zig/lib:libc")
+        if module.get("link_libcpp"):
+            deps.append("@rules_zig//zig/lib:libc++")
         chunks.append(_ZIG_LIBRARY.format(
             name = module["name"],
             main = module["root_source"],

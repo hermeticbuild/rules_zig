@@ -5,6 +5,7 @@
 //! The emitted JSON has the shape:
 //!
 //!     {"modules": [{"name": ..., "package": <hash>, "root_source": ...,
+//!         "link_libc": true, "link_libcpp": true,  // each present only when set
 //!         "imports": [{"name": ..., "module": ..., "package": <hash>}]}]}
 //!
 //! A module's `package` is the Zig hash of the package that owns it, or the
@@ -13,6 +14,11 @@
 //! the name the importer uses (`@import(name)`), while its `module` is the
 //! imported module's own registered name; the two differ when a module is
 //! imported under an alias.
+//!
+//! The `link_libc`/`link_libcpp` fields are emitted (as `true`) only when the
+//! module links the C / C++ standard library, e.g. via `b.addModule(..., .{
+//! .link_libc = true })` or `module.linkSystemLibrary("c", .{})`; they are
+//! omitted otherwise.
 
 const std = @import("std");
 const Build = std.Build;
@@ -84,6 +90,14 @@ pub fn emit(arena: Allocator, writer: *std.Io.Writer, builder: *Build) !void {
         try json.write(module.owner.pkg_hash);
         try json.objectField("root_source");
         try json.write(lazyPathString(module.root_source_file));
+        if (module.link_libc == true) {
+            try json.objectField("link_libc");
+            try json.write(true);
+        }
+        if (module.link_libcpp == true) {
+            try json.objectField("link_libcpp");
+            try json.write(true);
+        }
         try json.objectField("imports");
         try json.beginArray();
         for (module.import_table.keys(), module.import_table.values()) |import_name, imported| {
@@ -212,4 +226,38 @@ test "synthesizes stable names for anonymous modules" {
     const imports = modules[0].object.get("imports").?.array.items;
     try std.testing.expectEqualStrings("lib", modules[0].object.get("name").?.string);
     try std.testing.expectEqualStrings(anon_name, imports[0].object.get("module").?.string);
+}
+
+test "emits link_libc and link_libcpp only for modules that link them" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const build_root = try std.fmt.allocPrint(arena, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+
+    const b = try createBuilder(arena, std.testing.io, .{ .array_hash_map = .empty, .allocator = arena }, "unused-zig", build_root, &.{});
+
+    _ = b.addModule("plain", .{ .root_source_file = b.path("src/plain.zig") });
+    _ = b.addModule("withc", .{ .root_source_file = b.path("src/withc.zig"), .link_libc = true });
+    _ = b.addModule("withcpp", .{ .root_source_file = b.path("src/withcpp.zig"), .link_libcpp = true });
+
+    var out: std.Io.Writer.Allocating = .init(arena);
+    try emit(arena, &out.writer, b);
+
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, out.written(), .{});
+    const modules = parsed.object.get("modules").?.array.items;
+
+    try std.testing.expectEqualStrings("plain", modules[0].object.get("name").?.string);
+    try std.testing.expectEqual(null, modules[0].object.get("link_libc"));
+    try std.testing.expectEqual(null, modules[0].object.get("link_libcpp"));
+
+    try std.testing.expectEqualStrings("withc", modules[1].object.get("name").?.string);
+    try std.testing.expectEqual(true, modules[1].object.get("link_libc").?.bool);
+    try std.testing.expectEqual(null, modules[1].object.get("link_libcpp"));
+
+    try std.testing.expectEqualStrings("withcpp", modules[2].object.get("name").?.string);
+    try std.testing.expectEqual(null, modules[2].object.get("link_libc"));
+    try std.testing.expectEqual(true, modules[2].object.get("link_libcpp").?.bool);
 }
