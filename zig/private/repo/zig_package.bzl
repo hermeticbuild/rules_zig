@@ -424,20 +424,16 @@ def _configure(repository_ctx, zig, build_zig, cache):
     for _ in range(len(lazy) + 1):
         configured = _run_configurer(repository_ctx, zig, build_zig, cache, deps, _available(deps, requested))
         result = json.decode(configured.stdout, default = None)
-        if result != None and "needed_lazy_dependencies" not in result:
+        if result == None:
+            fail("Failed to configure the Zig package '{}': its output is not JSON:\n{}".format(repository_ctx.attr.url, configured.stderr))
+        if "needed_lazy_dependencies" not in result:
             return configured.stdout
-
-        # `b.dependency` on an unavailable lazy dependency ends the configuration
-        # early, emitting Zig's binary build configuration, which is not parsed
-        # here, so make every lazy dependency available.
-        needed = lazy.keys() if result == None else result["needed_lazy_dependencies"]
-        new = [key for key in needed if key not in requested]
+        new = [key for key in result["needed_lazy_dependencies"] if key not in requested]
         if not new:
             break
         requested.update({key: None for key in new})
-    fail("Failed to configure the Zig package '{}': with every requested lazy dependency available, {}:\n{}".format(
+    fail("Failed to configure the Zig package '{}': with every requested lazy dependency available, it still requests lazy dependencies:\n{}".format(
         repository_ctx.attr.url,
-        "its output is not JSON" if result == None else "it still requests lazy dependencies",
         configured.stderr,
     ))
 
@@ -459,10 +455,10 @@ def _zig_package_impl(repository_ctx):
         repository_ctx.delete("_configure")
         repository_ctx.file("module_manifest.json", manifest)
 
-        # The configurer emits one cell per build configuration; render the
-        # fallback cell's targets (the only cell until a matrix is declared).
-        cells = json.decode(manifest)["cells"]
-        libraries, has_cc = _render_libraries(repository_ctx, cells[0]["modules"])
+        # The configurer merges the build configurations; each module carries
+        # its fallback-cell fields, which are the only values until a matrix is
+        # declared.
+        libraries, has_cc = _render_libraries(repository_ctx, json.decode(manifest)["modules"])
         loads = _LIBRARY_LOAD + (_CC_LOAD if has_cc else "")
         build = loads + build + libraries + _EXPORT_MANIFEST
 

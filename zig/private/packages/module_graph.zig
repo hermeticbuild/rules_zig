@@ -13,6 +13,7 @@
 //! documents them.
 
 const std = @import("std");
+const mem = std.mem;
 const Build = std.Build;
 const LazyPath = Build.LazyPath;
 const Allocator = std.mem.Allocator;
@@ -289,9 +290,9 @@ pub fn collectModules(arena: Allocator, builder: *Build) ![]const Module {
     return result.items;
 }
 
-/// Omits fields with a default value (`link_libc` false, empty C lists).
-pub fn writeModule(json: *std.json.Stringify, module: Module) !void {
-    try json.beginObject();
+/// Write a module's fields into an already-open JSON object. Fields with a
+/// default value (`link_libc` false, empty C lists) are omitted.
+fn writeModuleFields(json: *std.json.Stringify, module: Module) !void {
     try json.objectField("name");
     try json.write(module.name);
     try json.objectField("package");
@@ -324,6 +325,11 @@ pub fn writeModule(json: *std.json.Stringify, module: Module) !void {
     }
     try json.objectField("imports");
     try json.write(module.imports);
+}
+
+pub fn writeModule(json: *std.json.Stringify, module: Module) !void {
+    try json.beginObject();
+    try writeModuleFields(json, module);
     try json.endObject();
 }
 
@@ -351,21 +357,147 @@ pub fn emitModules(arena: Allocator, json: *std.json.Stringify, builder: *Build)
 pub const Cell = struct {
     /// Empty for the unnamed default configuration.
     name: []const u8,
-    builder: *Build,
+    modules: []const Module,
 };
 
-/// Emit `{"cells": [{"name": ..., "modules": [...]}]}`, one entry per cell.
-pub fn emitCells(arena: Allocator, writer: *std.Io.Writer, cells: []const Cell) !void {
+/// A configuration-dependent module field, merged across cells into a
+/// `select()` when its value varies.
+const Field = enum { root_source, link_libc, link_libcpp, imports, csrcs, include_dirs, system_libs, unsupported };
+
+fn eqlOptStr(a: ?[]const u8, b: ?[]const u8) bool {
+    if (a == null or b == null) return (a == null) == (b == null);
+    return mem.eql(u8, a.?, b.?);
+}
+
+fn eqlStrList(a: []const []const u8, b: []const []const u8) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |x, y| if (!mem.eql(u8, x, y)) return false;
+    return true;
+}
+
+fn eqlImports(a: []const Import, b: []const Import) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |x, y| {
+        if (!mem.eql(u8, x.name, y.name) or !mem.eql(u8, x.module, y.module) or !mem.eql(u8, x.package, y.package)) return false;
+    }
+    return true;
+}
+
+fn eqlCSources(a: []const CSource, b: []const CSource) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |x, y| {
+        if (!mem.eql(u8, x.path, y.path) or !eqlStrList(x.flags, y.flags) or !eqlOptStr(x.language, y.language)) return false;
+    }
+    return true;
+}
+
+fn eqlIncludeDirs(a: []const IncludeDir, b: []const IncludeDir) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |x, y| if (!mem.eql(u8, x.kind, y.kind) or !mem.eql(u8, x.path, y.path)) return false;
+    return true;
+}
+
+fn fieldEqual(field: Field, a: Module, b: Module) bool {
+    return switch (field) {
+        .root_source => eqlOptStr(a.root_source, b.root_source),
+        .link_libc => a.link_libc == b.link_libc,
+        .link_libcpp => a.link_libcpp == b.link_libcpp,
+        .imports => eqlImports(a.imports, b.imports),
+        .csrcs => eqlCSources(a.csrcs, b.csrcs),
+        .include_dirs => eqlIncludeDirs(a.include_dirs, b.include_dirs),
+        .system_libs => eqlStrList(a.system_libs, b.system_libs),
+        .unsupported => eqlStrList(a.unsupported, b.unsupported),
+    };
+}
+
+fn writeField(json: *std.json.Stringify, field: Field, module: Module) !void {
+    switch (field) {
+        .root_source => try json.write(module.root_source),
+        .link_libc => try json.write(module.link_libc),
+        .link_libcpp => try json.write(module.link_libcpp),
+        .imports => try json.write(module.imports),
+        .csrcs => try json.write(module.csrcs),
+        .include_dirs => try json.write(module.include_dirs),
+        .system_libs => try json.write(module.system_libs),
+        .unsupported => try json.write(module.unsupported),
+    }
+}
+
+pub const MergeError = error{ CellModuleMismatch, EmptyMatrix };
+
+/// The configuration matrix merged into per-module field-variance information.
+pub const Merged = struct {
+    /// In order; `cells[0]` is the fallback.
+    cells: []const Cell,
+    /// `varying[i]` holds the fields of module `i` that differ across `cells`.
+    varying: []const std.EnumSet(Field),
+};
+
+/// Merge the cells' module graphs, which must expose the same modules in the
+/// same order, into per-module field variance.
+pub fn merge(arena: Allocator, cells: []const Cell) (Allocator.Error ||
+    MergeError)!Merged {
+    if (cells.len == 0) return error.EmptyMatrix;
+    const fallback = cells[0].modules;
+    for (cells) |cell| {
+        if (cell.modules.len != fallback.len) return error.CellModuleMismatch;
+        for (cell.modules, fallback) |m, fb| {
+            if (!mem.eql(u8, m.name, fb.name) or !mem.eql(u8, m.package, fb.package)) return error.CellModuleMismatch;
+        }
+    }
+
+    const varying = try arena.alloc(std.EnumSet(Field), fallback.len);
+    for (fallback, 0..) |fb, mi| {
+        var set: std.EnumSet(Field) = .{};
+        for (std.enums.values(Field)) |field| {
+            for (cells[1..]) |cell| {
+                if (!fieldEqual(field, fb, cell.modules[mi])) {
+                    set.insert(field);
+                    break;
+                }
+            }
+        }
+        varying[mi] = set;
+    }
+    return .{ .cells = cells, .varying = varying };
+}
+
+/// Render a merged matrix as `{"cells": [names], "modules": [...]}`. Every
+/// module carries the fallback cell's (`cells[0]`) fields; a field that varies
+/// adds a `"select": {"<field>": {"<cell>": <value>}}` overlay with that field's
+/// value in every cell.
+pub fn writeMerged(writer: *std.Io.Writer, merged: Merged) !void {
     var json: std.json.Stringify = .{ .writer = writer };
+    const cells = merged.cells;
+    const fallback = cells[0].modules;
+
     try json.beginObject();
     try json.objectField("cells");
     try json.beginArray();
-    for (cells) |cell| {
+    for (cells) |cell| try json.write(cell.name);
+    try json.endArray();
+    try json.objectField("modules");
+    try json.beginArray();
+    for (fallback, 0..) |fb, mi| {
         try json.beginObject();
-        try json.objectField("name");
-        try json.write(cell.name);
-        try json.objectField("modules");
-        try emitModules(arena, &json, cell.builder);
+        try writeModuleFields(&json, fb);
+
+        const varying = merged.varying[mi];
+        if (varying.count() > 0) {
+            try json.objectField("select");
+            try json.beginObject();
+            for (std.enums.values(Field)) |field| {
+                if (!varying.contains(field)) continue;
+                try json.objectField(@tagName(field));
+                try json.beginObject();
+                for (cells) |cell| {
+                    try json.objectField(cell.name);
+                    try writeField(&json, field, cell.modules[mi]);
+                }
+                try json.endObject();
+            }
+            try json.endObject();
+        }
         try json.endObject();
     }
     try json.endArray();
@@ -750,4 +882,100 @@ test "emits the system libraries a module links" {
     const system_libs = module.get("system_libs").?.array.items;
     try std.testing.expectEqual(1, system_libs.len);
     try std.testing.expectEqualStrings("mymath", system_libs[0].string);
+}
+
+fn testModule(name: []const u8, root: []const u8, link_libc: bool, imports: []const Import) Module {
+    return .{
+        .name = name,
+        .package = "",
+        .root_source = root,
+        .link_libc = link_libc,
+        .link_libcpp = false,
+        .imports = imports,
+        .csrcs = &.{},
+        .include_dirs = &.{},
+        .system_libs = &.{},
+        .unsupported = &.{},
+    };
+}
+
+test "merge marks only the fields that vary across cells" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const imports: []const Import = &.{.{ .name = "a", .module = "a", .package = "h" }};
+    // `root_source` and `imports` match; `link_libc` differs between cells.
+    const dbg = testModule("foo", "src/foo.zig", false, imports);
+    const rel = testModule("foo", "src/foo.zig", true, imports);
+    const cells: []const Cell = &.{
+        .{ .name = "dbg", .modules = &.{dbg} },
+        .{ .name = "rel", .modules = &.{rel} },
+    };
+
+    const merged = try merge(arena, cells);
+    const varying = merged.varying[0];
+    try std.testing.expectEqual(@as(usize, 1), varying.count());
+    try std.testing.expect(varying.contains(.link_libc));
+    try std.testing.expect(!varying.contains(.root_source));
+    try std.testing.expect(!varying.contains(.imports));
+}
+
+test "a single cell has no varying fields" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const only = testModule("foo", "src/foo.zig", false, &.{});
+    const cells: []const Cell = &.{.{ .name = "", .modules = &.{only} }};
+
+    const merged = try merge(arena, cells);
+    try std.testing.expectEqual(@as(usize, 0), merged.varying[0].count());
+}
+
+test "merge rejects cells whose module sets differ" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const foo = testModule("foo", "src/foo.zig", false, &.{});
+    const bar = testModule("bar", "src/bar.zig", false, &.{});
+    const cells: []const Cell = &.{
+        .{ .name = "dbg", .modules = &.{foo} },
+        .{ .name = "rel", .modules = &.{bar} },
+    };
+
+    try std.testing.expectError(error.CellModuleMismatch, merge(arena, cells));
+}
+
+test "writeMerged renders a select overlay for the varying fields" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const imports: []const Import = &.{.{ .name = "a", .module = "a", .package = "h" }};
+    const dbg = testModule("foo", "src/foo.zig", false, imports);
+    const rel = testModule("foo", "src/foo.zig", true, imports);
+    const cells: []const Cell = &.{
+        .{ .name = "dbg", .modules = &.{dbg} },
+        .{ .name = "rel", .modules = &.{rel} },
+    };
+
+    const merged = try merge(arena, cells);
+    var out: std.Io.Writer.Allocating = .init(arena);
+    try writeMerged(&out.writer, merged);
+
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, out.written(), .{});
+    try std.testing.expectEqualStrings("dbg", parsed.object.get("cells").?.array.items[0].string);
+
+    const module = parsed.object.get("modules").?.array.items[0].object;
+    try std.testing.expectEqualStrings("foo", module.get("name").?.string);
+    try std.testing.expectEqualStrings("src/foo.zig", module.get("root_source").?.string);
+
+    const select = module.get("select").?.object;
+    // Only `link_libc` varies; the constant fields stay out of the overlay.
+    try std.testing.expectEqual(@as(usize, 1), select.count());
+    const libc = select.get("link_libc").?.object;
+    try std.testing.expectEqual(false, libc.get("dbg").?.bool);
+    try std.testing.expectEqual(true, libc.get("rel").?.bool);
 }
