@@ -12,6 +12,7 @@ const child = @import("child");
 const usec = @import("usec");
 const cdep = @import("cdep");
 const cppdep = @import("cppdep");
+const syslibdep = @import("syslibdep");
 
 pub fn main() void {
     std.debug.assert(leaf.value == 7);
@@ -38,4 +39,6 @@ pub fn main() void {
     // `new int(2)` then `+ 1`, computed by the vendored C++ source the module
     // links via libc++.
     std.debug.assert(cppdep.value() == 3);
+    // 21*2, computed by the `mymath` cc_library the annotation provides.
+    std.debug.assert(syslibdep.compute(21) == 42);
 }

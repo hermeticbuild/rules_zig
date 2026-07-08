@@ -55,6 +55,10 @@
             .url = "__CPPDEP_URL__",
             .hash = "__CPPDEP_HASH__",
         },
+        .syslibdep = .{
+            .url = "__SYSLIBDEP_URL__",
+            .hash = "__SYSLIBDEP_HASH__",
+        },
     },
     .paths = .{
         "build.zig.zon",

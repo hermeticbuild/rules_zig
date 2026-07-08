@@ -1,4 +1,5 @@
 load("@bazel_skylib//rules:diff_test.bzl", "diff_test")
+load("@rules_cc//cc:defs.bzl", "cc_library")
 load("@rules_zig//zig:defs.bzl", "zig_binary")
 load("@zig_deps//:defs.bzl", "zig_deps", "zig_import_names", "zig_package_file")
 
@@ -21,4 +22,12 @@ diff_test(
     name = "multi_manifest_test",
     file1 = "multi_manifest.expected.json",
     file2 = zig_package_file("multi", "module_manifest.json"),
+)
+
+# Provides the `mymath` system library the `syslibdep` package links; the
+# package's targets are generated in its own repository, so it must be public.
+cc_library(
+    name = "mymath_impl",
+    srcs = ["mymath.c"],
+    visibility = ["//visibility:public"],
 )

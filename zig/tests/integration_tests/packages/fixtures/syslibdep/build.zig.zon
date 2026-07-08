@@ -1,0 +1,10 @@
+.{
+    .name = .syslibdep,
+    .version = "0.0.0",
+    .fingerprint = 0x3cd2c304bd1152dd,
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
