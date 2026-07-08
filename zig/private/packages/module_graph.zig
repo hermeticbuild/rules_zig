@@ -257,16 +257,25 @@ fn emitC(arena: Allocator, json: *std.json.Stringify, module: *Build.Module, roo
     }
 }
 
-/// Emit the module graph seeded by the modules registered via `b.addModule`.
+/// Emit `{"modules": [...]}` for the module graph seeded by the modules
+/// registered via `b.addModule`.
 pub fn emit(arena: Allocator, writer: *std.Io.Writer, builder: *Build) !void {
+    var json: std.json.Stringify = .{ .writer = writer };
+    try json.beginObject();
+    try json.objectField("modules");
+    try emitModules(arena, &json, builder);
+    try json.endObject();
+    try writer.writeByte('\n');
+}
+
+/// Emit the module graph as a JSON array of module objects into `json`. The
+/// caller writes the enclosing object field.
+pub fn emitModules(arena: Allocator, json: *std.json.Stringify, builder: *Build) !void {
     var modules: ModuleSet = .empty;
     for (builder.modules.values()) |module| try collect(arena, &modules, module);
 
     var names = try nameModules(arena, &modules);
 
-    var json: std.json.Stringify = .{ .writer = writer };
-    try json.beginObject();
-    try json.objectField("modules");
     try json.beginArray();
     for (modules.keys()) |module| {
         var root_source_error: ?ResolvePathError = null;
@@ -292,7 +301,7 @@ pub fn emit(arena: Allocator, writer: *std.Io.Writer, builder: *Build) !void {
             try json.objectField("link_libcpp");
             try json.write(true);
         }
-        try emitC(arena, &json, module, root_source_error);
+        try emitC(arena, json, module, root_source_error);
         try json.objectField("imports");
         try json.beginArray();
         for (module.import_table.keys(), module.import_table.values()) |import_name, imported| {
@@ -306,6 +315,30 @@ pub fn emit(arena: Allocator, writer: *std.Io.Writer, builder: *Build) !void {
             try json.endObject();
         }
         try json.endArray();
+        try json.endObject();
+    }
+    try json.endArray();
+}
+
+/// A package configured under one named build configuration.
+pub const Cell = struct {
+    /// Empty for the unnamed default configuration.
+    name: []const u8,
+    builder: *Build,
+};
+
+/// Emit `{"cells": [{"name": ..., "modules": [...]}]}`, one entry per cell.
+pub fn emitCells(arena: Allocator, writer: *std.Io.Writer, cells: []const Cell) !void {
+    var json: std.json.Stringify = .{ .writer = writer };
+    try json.beginObject();
+    try json.objectField("cells");
+    try json.beginArray();
+    for (cells) |cell| {
+        try json.beginObject();
+        try json.objectField("name");
+        try json.write(cell.name);
+        try json.objectField("modules");
+        try emitModules(arena, &json, cell.builder);
         try json.endObject();
     }
     try json.endArray();

@@ -458,7 +458,11 @@ def _zig_package_impl(repository_ctx):
         manifest = _configure(repository_ctx, zig, repository_ctx.path("build.zig"), cache)
         repository_ctx.delete("_configure")
         repository_ctx.file("module_manifest.json", manifest)
-        libraries, has_cc = _render_libraries(repository_ctx, json.decode(manifest)["modules"])
+
+        # The configurer emits one cell per build configuration; render the
+        # fallback cell's targets (the only cell until a matrix is declared).
+        cells = json.decode(manifest)["cells"]
+        libraries, has_cc = _render_libraries(repository_ctx, cells[0]["modules"])
         loads = _LIBRARY_LOAD + (_CC_LOAD if has_cc else "")
         build = loads + build + libraries + _EXPORT_MANIFEST
 
