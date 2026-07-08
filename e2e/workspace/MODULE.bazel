@@ -19,6 +19,14 @@ zig.toolchain(zig_version = "0.17.0")
 zig.toolchain(zig_version = "0.16.0")
 use_repo(zig, "zig_toolchains")
 
+zig_packages = use_extension(
+    "@rules_zig//zig:packages.bzl",
+    "zig_packages",
+    dev_dependency = True,
+)
+zig_packages.from_file(build_zig_zon = "//zig-package-import/app:build.zig.zon")
+use_repo(zig_packages, "zig_deps")
+
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
 http_archive(
