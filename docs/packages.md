@@ -25,12 +25,13 @@ via `from_file` tags and generates two kinds of repositories:
 - The `@zig_deps` *hub*, the only repository consumers use. Its `defs.bzl`
   provides functions that address the spokes. `zig_dep` resolves a dependency
   declared by the `from_file` manifest of the calling Bazel package or its
-  nearest ancestor. `zig_package_target` names the `zig_library` generated for
-  a module of a package, `zig_package_files` and `zig_package_file` name its
-  files. Each takes a package `name` and an optional `version`. Without
-  `version`, `name` is a dependency declared by the manifest, as for
-  `zig_dep`. With `version`, `name` is a package name, and the lookup fails if
-  several packages share that name and version.
+  nearest ancestor, `zig_deps` resolves all of them, and `zig_import_names`
+  imports each under its declared name. `zig_package_target` names the
+  `zig_library` generated for a module of a package, `zig_package_files` and
+  `zig_package_file` name its files. Each takes a package `name` and an
+  optional `version`. Without `version`, `name` is a dependency declared by
+  the manifest, as for `zig_dep`. With `version`, `name` is a package name,
+  and the lookup fails if several packages share that name and version.
 
 In `MODULE.bazel`:
 
@@ -44,12 +45,13 @@ In `BUILD.bazel`, next to `build.zig.zon`:
 
 ```starlark
 load("@rules_zig//zig:defs.bzl", "zig_binary")
-load("@zig_deps//:defs.bzl", "zig_dep")
+load("@zig_deps//:defs.bzl", "zig_deps", "zig_import_names")
 
 zig_binary(
     name = "main",
     main = "main.zig",
-    deps = [zig_dep("clap")],
+    import_names = zig_import_names(),
+    deps = zig_deps(),
 )
 ```
 

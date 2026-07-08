@@ -7,7 +7,8 @@ The `@zig_deps` hub repository of the `zig_packages` module extension.
 
 Exposes the resolved Zig package dependency graph: `defs.bzl` provides
 accessors that address a package's files and generated targets, and resolve a
-consumer manifest's declared dependencies with `zig_dep`.
+consumer manifest's declared dependencies with `zig_dep`/`zig_deps` (with
+`zig_import_names` for the import-name overrides).
 """
 
 ATTRS = {
@@ -87,6 +88,24 @@ def zig_dep(name, module = None):
     `module` to select another module the dependency exposes.
     """
     return zig_package_target(name, module = module)
+
+def zig_deps():
+    """The labels of every dependency declared by the enclosing manifest."""
+    return [zig_dep(name) for name in _enclosing_deps()]
+
+def zig_import_names():
+    """The `import_names` remapping each dependency to its declared name.
+
+    Pair with `zig_deps()`. A dependency declared under a name that differs
+    from its package's module is imported under the declared name, which
+    resolves clashes between packages that expose an identically named module.
+    """
+    deps = _enclosing_deps()
+    remap = {}
+    for name in deps:
+        if name != _PACKAGES[deps[name]["key"]]["name"]:
+            remap[zig_dep(name)] = name
+    return remap
 '''
 
 def _zig_deps_hub_impl(repository_ctx):
