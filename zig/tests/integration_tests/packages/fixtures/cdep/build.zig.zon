@@ -1,0 +1,11 @@
+.{
+    .name = .cdep,
+    .version = "0.0.0",
+    .fingerprint = 0x0f860ad394dc4b83,
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "include",
+    },
+}

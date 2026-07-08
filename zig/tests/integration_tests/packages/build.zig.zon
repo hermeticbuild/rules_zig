@@ -47,6 +47,10 @@
             .url = "__USEC_URL__",
             .hash = "__USEC_HASH__",
         },
+        .cdep = .{
+            .url = "__CDEP_URL__",
+            .hash = "__CDEP_HASH__",
+        },
     },
     .paths = .{
         "build.zig.zon",

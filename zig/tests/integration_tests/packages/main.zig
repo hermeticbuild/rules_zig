@@ -10,6 +10,7 @@ const symlinked = @import("symlinked");
 const lazyhost = @import("lazyhost");
 const child = @import("child");
 const usec = @import("usec");
+const cdep = @import("cdep");
 
 pub fn main() void {
     std.debug.assert(leaf.value == 7);
@@ -31,4 +32,6 @@ pub fn main() void {
     std.debug.assert(child.value == 109);
     // Calls libc's `getpid`; links only if the `usec` module pulls in libc.
     std.debug.assert(usec.pid() > 0);
+    // 3*14 + 7*2, proving each C source got its own `-DSCALE` copts.
+    std.debug.assert(cdep.value() == 56);
 }

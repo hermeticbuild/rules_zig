@@ -35,6 +35,7 @@ const packages = [_]Package{
     .{ .name = "lazyunused" },
     .{ .name = "lazyhost", .patches = &.{.{ .deps = &.{ "lazyleaf", "lazyunused" } }} },
     .{ .name = "usec" },
+    .{ .name = "cdep" },
 };
 
 const Consumer = struct {
@@ -44,7 +45,7 @@ const Consumer = struct {
 
 // Manifests that resolve dependencies via `zig_packages.from_file`.
 const consumers = [_]Consumer{
-    .{ .manifest = "build.zig.zon", .deps = &.{ "leaf", "bottom", "top", "libv1", "libfork", "libv2", "multi", "pruned", "symlinked", "lazyhost", "usec" } },
+    .{ .manifest = "build.zig.zon", .deps = &.{ "leaf", "bottom", "top", "libv1", "libfork", "libv2", "multi", "pruned", "symlinked", "lazyhost", "usec", "cdep" } },
     .{ .manifest = "child/build.zig.zon", .deps = &.{ "leaf", "libv2" } },
 };
 
