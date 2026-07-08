@@ -1,30 +1,16 @@
 load("@bazel_skylib//rules:diff_test.bzl", "diff_test")
 load("@rules_zig//zig:defs.bzl", "zig_binary")
-load("@zig_deps//:defs.bzl", "zig_dep", "zig_package_file")
+load("@zig_deps//:defs.bzl", "zig_deps", "zig_import_names", "zig_package_file")
 
-# The binary resolves its imports through the enclosing manifest's declared
-# dependencies. `top` pulls its diamond (`left`/`right`/`bottom`/`base`)
-# transitively. The copies of `lib`, declared as `lib`, `libfork` and `lib2`,
-# resolve per the manifest, the latter two remapped to their declared names.
-libfork = zig_dep("libfork")
-
-lib2 = zig_dep("lib2")
-
+# The binary wires every dependency the manifest declares. `top` pulls its
+# diamond (`left`/`right`/`bottom`/`base`) transitively; the copies of `lib`
+# (declared `lib`, `libfork` and `lib2`) all expose a module named `lib`, so
+# `zig_import_names` remaps the latter two to their declared names.
 zig_binary(
     name = "binary",
-    import_names = {
-        libfork: "libfork",
-        lib2: "lib2",
-    },
+    import_names = zig_import_names(),
     main = "main.zig",
-    deps = [
-        zig_dep("bottom"),
-        zig_dep("leaf"),
-        zig_dep("lib"),
-        zig_dep("top"),
-        libfork,
-        lib2,
-    ],
+    deps = zig_deps(),
 )
 
 # The extracted module graph of the multi-module fixture: two registered
