@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const leaf = @import("leaf");
 const bottom = @import("bottom");
 const top = @import("top");
@@ -15,6 +16,7 @@ const cdep = @import("cdep");
 const cppdep = @import("cppdep");
 const syslibdep = @import("syslibdep");
 const optdep = @import("optdep");
+const cfgdep = @import("cfgdep");
 
 pub fn main() void {
     std.debug.assert(leaf.value == 7);
@@ -48,4 +50,8 @@ pub fn main() void {
     std.debug.assert(syslibdep.compute(21) == 42);
     // 5+100, from `optmath` linked only because its integration is enabled.
     std.debug.assert(optdep.compute(5) == 105);
+    // The `configure` matrix links `dbgonly` (returns 1) in the fallback `dbg`
+    // cell and `relonly` (returns 2) in the `rel` cell; the build's optimize
+    // mode selects the cell, matching the mode `cfgdep` itself compiles under.
+    std.debug.assert(cfgdep.value() == @as(c_int, if (builtin.mode == .debug) 1 else 2));
 }

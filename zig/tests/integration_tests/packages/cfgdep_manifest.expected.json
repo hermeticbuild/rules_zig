@@ -1,0 +1,1 @@
+{"cells":["dbg","rel"],"modules":[{"name":"cfgdep","package":"","root_source":"src/cfgdep.zig","system_libs":["dbgonly"],"imports":[],"select":{"system_libs":{"dbg":["dbgonly"],"rel":["relonly"]}}}]}

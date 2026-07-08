@@ -67,6 +67,10 @@
             .url = "__OPTDEP_URL__",
             .hash = "__OPTDEP_HASH__",
         },
+        .cfgdep = .{
+            .url = "__CFGDEP_URL__",
+            .hash = "__CFGDEP_HASH__",
+        },
     },
     .paths = .{
         "build.zig.zon",

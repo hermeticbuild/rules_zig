@@ -39,3 +39,26 @@ cc_library(
     srcs = ["optmath.c"],
     visibility = ["//visibility:public"],
 )
+
+# Provide the system libraries the `cfgdep` package links under each cell of
+# its `configure` matrix: `dbgonly` under the fallback `dbg` cell, `relonly`
+# under the `rel` cell.
+cc_library(
+    name = "dbgonly_impl",
+    srcs = ["dbgonly.c"],
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
+    name = "relonly_impl",
+    srcs = ["relonly.c"],
+    visibility = ["//visibility:public"],
+)
+
+# The configuration matrix pushes `cfgdep`'s per-cell system library into a
+# `select` overlay on its extracted module graph.
+diff_test(
+    name = "cfgdep_manifest_test",
+    file1 = "cfgdep_manifest.expected.json",
+    file2 = zig_package_file("cfgdep", "module_manifest.json"),
+)

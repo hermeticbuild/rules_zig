@@ -1,0 +1,11 @@
+.{
+    .name = .cfgdep,
+    .version = "0.0.0",
+    .fingerprint = 0x88701c22be06c646,
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "gen",
+        "src",
+    },
+}

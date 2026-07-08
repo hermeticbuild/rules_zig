@@ -39,4 +39,28 @@ zig_packages.system_library(
     name = "optmath",
     lib = "//:optmath_impl",
 )
+zig_packages.system_library(
+    name = "dbgonly",
+    lib = "//:dbgonly_impl",
+)
+zig_packages.system_library(
+    name = "relonly",
+    lib = "//:relonly_impl",
+)
+zig_packages.config(
+    name = "dbg",
+    optimize = "debug",
+)
+zig_packages.config(
+    name = "rel",
+    optimize = "release_fast",
+)
+zig_packages.configure(
+    configs = [
+        "dbg",
+        "rel",
+    ],
+    fallback = "dbg",
+    package = "cfgdep",
+)
 use_repo(zig_packages, "zig_deps")

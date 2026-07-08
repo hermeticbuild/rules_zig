@@ -40,6 +40,7 @@ const packages = [_]Package{
     .{ .name = "cppdep" },
     .{ .name = "syslibdep" },
     .{ .name = "optdep" },
+    .{ .name = "cfgdep" },
 };
 
 const Consumer = struct {
@@ -49,7 +50,7 @@ const Consumer = struct {
 
 // Manifests that resolve dependencies via `zig_packages.from_file`.
 const consumers = [_]Consumer{
-    .{ .manifest = "build.zig.zon", .deps = &.{ "leaf", "bottom", "top", "libv1", "libfork", "libv2", "multi", "pruned", "symlinked", "lazyhost", "lazydirect", "usec", "cdep", "cppdep", "syslibdep", "optdep" } },
+    .{ .manifest = "build.zig.zon", .deps = &.{ "leaf", "bottom", "top", "libv1", "libfork", "libv2", "multi", "pruned", "symlinked", "lazyhost", "lazydirect", "usec", "cdep", "cppdep", "syslibdep", "optdep", "cfgdep" } },
     .{ .manifest = "child/build.zig.zon", .deps = &.{ "leaf", "libv2" } },
 };
 
@@ -101,10 +102,19 @@ test "Zig packages are imported from file:// tarballs" {
     defer result.deinit();
     try std.testing.expect(result.success);
 
+    // `cfgdep`'s `configure` matrix links a different system library per
+    // optimize mode; building under `-c opt` selects the `rel` cell, so the
+    // binary's per-mode assertion exercises both cells.
+    const opt_result = try ctx.exec_bazel(.{
+        .argv = &[_][]const u8{ "run", "//:binary", "-c", "opt" },
+    });
+    defer opt_result.deinit();
+    try std.testing.expect(opt_result.success);
+
     // The extracted module graph is exposed per package; assert it against the
     // golden manifests.
     const manifest_result = try ctx.exec_bazel(.{
-        .argv = &[_][]const u8{ "test", "//:multi_manifest_test" },
+        .argv = &[_][]const u8{ "test", "//:multi_manifest_test", "//:cfgdep_manifest_test" },
     });
     defer manifest_result.deinit();
     try std.testing.expect(manifest_result.success);
