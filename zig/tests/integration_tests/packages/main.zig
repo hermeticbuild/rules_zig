@@ -9,6 +9,7 @@ const pruned = @import("pruned");
 const symlinked = @import("symlinked");
 const lazyhost = @import("lazyhost");
 const child = @import("child");
+const usec = @import("usec");
 
 pub fn main() void {
     std.debug.assert(leaf.value == 7);
@@ -28,4 +29,6 @@ pub fn main() void {
     // 7 + 2 + 100: `child_module` resolves its own manifest, importing `lib` at
     // v2 (a separate repository from the root's `lib` v1).
     std.debug.assert(child.value == 109);
+    // Calls libc's `getpid`; links only if the `usec` module pulls in libc.
+    std.debug.assert(usec.pid() > 0);
 }

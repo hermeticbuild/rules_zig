@@ -43,6 +43,10 @@
             .url = "__LAZYHOST_URL__",
             .hash = "__LAZYHOST_HASH__",
         },
+        .usec = .{
+            .url = "__USEC_URL__",
+            .hash = "__USEC_HASH__",
+        },
     },
     .paths = .{
         "build.zig.zon",

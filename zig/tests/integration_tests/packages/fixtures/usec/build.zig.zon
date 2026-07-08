@@ -1,0 +1,10 @@
+.{
+    .name = .usec,
+    .version = "0.0.0",
+    .fingerprint = 0xe723f6bb3527e304,
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
