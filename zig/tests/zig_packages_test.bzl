@@ -2,8 +2,28 @@
 
 load("@bazel_skylib//lib:partial.bzl", "partial")
 load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
-load("//zig/private/bzlmod:zig_packages.bzl", "package_name_version", "select_by_precedence")
+load(
+    "//zig/private/bzlmod:zig_packages.bzl",
+    "check_cells",
+    "collect_configs",
+    "package_cells",
+    "package_name_version",
+    "resolve_cell",
+    "select_by_precedence",
+)
 load("//zig/private/repo:zig_deps_index.bzl", "index_packages", "resolve_version")
+
+def _config_tag(name, optimize = "", select_on = [], zig_flags = []):
+    return struct(name = name, optimize = optimize, select_on = select_on, zig_flags = zig_flags)
+
+def _configure_tag(configs, fallback, package = "", version = ""):
+    return struct(configs = configs, fallback = fallback, package = package, version = version)
+
+def _module(name, is_root, config = [], configure = []):
+    return struct(name = name, is_root = is_root, tags = struct(config = config, configure = configure))
+
+def _cell(name, config_setting, select_on = [], zig_options = [], tag = None):
+    return struct(name = name, config_setting = config_setting, select_on = select_on, zig_options = zig_options, tag = tag)
 
 def _package_name_version_test_impl(ctx):
     env = unittest.begin(ctx)
@@ -129,6 +149,174 @@ def _resolve_version_test_impl(ctx):
 
 _resolve_version_test = unittest.make(_resolve_version_test_impl)
 
+def _resolve_cell_test_impl(ctx):
+    env = unittest.begin(ctx)
+
+    # `optimize` expands to a condition label and a `-Doptimize` build option.
+    error, cell = resolve_cell(_config_tag("opt", optimize = "release_fast"))
+    asserts.equals(env, None, error)
+    asserts.equals(env, "opt", cell.name)
+    asserts.equals(env, ["@rules_zig//zig/config/mode:release_fast"], cell.select_on)
+    asserts.equals(env, ["-Doptimize=fast"], cell.zig_options)
+
+    # `select_on` is appended verbatim; `zig_flags` become `-DNAME=VALUE`.
+    error, cell = resolve_cell(_config_tag(
+        "custom",
+        select_on = ["//conditions:foo"],
+        zig_flags = ["enable=true"],
+    ))
+    asserts.equals(env, None, error)
+    asserts.equals(env, ["//conditions:foo"], cell.select_on)
+    asserts.equals(env, ["-Denable=true"], cell.zig_options)
+
+    # An error carries the offending tag, so the extension can forward it to
+    # `fail()` and point at the declaration.
+    bad = _config_tag("bad", optimize = "nope")
+    error, cell = resolve_cell(bad)
+    asserts.true(env, error != None)
+    asserts.equals(env, bad, error.tag)
+    asserts.equals(env, None, cell)
+
+    error, cell = resolve_cell(_config_tag("bad", zig_flags = ["novalue"]))
+    asserts.true(env, error != None)
+    asserts.equals(env, None, cell)
+
+    return unittest.end(env)
+
+_resolve_cell_test = unittest.make(_resolve_cell_test_impl)
+
+def _check_cells_test_impl(ctx):
+    env = unittest.begin(ctx)
+
+    # Fallbacks precede deduplicated non-fallback cells; cells sharing
+    # conditions and options collapse to one.
+    error, cells = check_cells("clap", [
+        _cell("base", "", zig_options = ["-Doptimize=debug"]),
+        _cell("fast", "fast", select_on = ["//a"], zig_options = ["-Doptimize=fast"]),
+        _cell("fast_dup", "fast_dup", select_on = ["//a"], zig_options = ["-Doptimize=fast"]),
+    ])
+    asserts.equals(env, None, error)
+    asserts.equals(env, ["base", "fast"], [c.name for c in cells])
+
+    # A non-fallback cell needs conditions to select on.
+    error, _ = check_cells("clap", [_cell("x", "x")])
+    asserts.true(env, error != None)
+
+    # Same conditions but different options is a conflict.
+    error, _ = check_cells("clap", [
+        _cell("a", "a", select_on = ["//c"], zig_options = ["-Dx=1"]),
+        _cell("b", "b", select_on = ["//c"], zig_options = ["-Dx=2"]),
+    ])
+    asserts.true(env, error != None)
+
+    # One cell's conditions being a subset of another's is ambiguous.
+    error, _ = check_cells("clap", [
+        _cell("a", "a", select_on = ["//c"]),
+        _cell("b", "b", select_on = ["//c", "//d"]),
+    ])
+    asserts.true(env, error != None)
+
+    return unittest.end(env)
+
+_check_cells_test = unittest.make(_check_cells_test_impl)
+
+def _package_cells_test_impl(ctx):
+    env = unittest.begin(ctx)
+
+    cells_by_name = {
+        "base": resolve_cell(_config_tag("base"))[1],
+        "fast": resolve_cell(_config_tag("fast", optimize = "release_fast"))[1],
+    }
+
+    # No configure tag configures the package once at the host default.
+    error, cells = package_cells("clap-0.10.0-jv8oCwXlAQBW3ZgQlZ_cLSlp8AR8DBhCoryxNZgUW9ZS", cells_by_name, None, {})
+    asserts.equals(env, None, error)
+    asserts.equals(env, None, cells)
+
+    # A global configure applies its ordered configs, fallback first.
+    error, cells = package_cells(
+        "clap-0.10.0-jv8oCwXlAQBW3ZgQlZ_cLSlp8AR8DBhCoryxNZgUW9ZS",
+        cells_by_name,
+        _configure_tag(["base", "fast"], "base"),
+        {},
+    )
+    asserts.equals(env, None, error)
+    asserts.equals(env, ["base", "fast"], [c.name for c in cells])
+    asserts.equals(env, ["", "fast"], [c.config_setting for c in cells])
+
+    # A per-package configure overrides the global one.
+    error, cells = package_cells(
+        "clap-0.10.0-jv8oCwXlAQBW3ZgQlZ_cLSlp8AR8DBhCoryxNZgUW9ZS",
+        cells_by_name,
+        _configure_tag(["base", "fast"], "base"),
+        {("clap", "0.10.0"): _configure_tag(["fast"], "fast")},
+    )
+    asserts.equals(env, None, error)
+    asserts.equals(env, ["fast"], [c.name for c in cells])
+
+    # The fallback must be among the configs.
+    error, _ = package_cells(
+        "clap-0.10.0-jv8oCwXlAQBW3ZgQlZ_cLSlp8AR8DBhCoryxNZgUW9ZS",
+        cells_by_name,
+        _configure_tag(["fast"], "base"),
+        {},
+    )
+    asserts.true(env, error != None)
+
+    # An unknown config name is an error.
+    error, _ = package_cells(
+        "clap-0.10.0-jv8oCwXlAQBW3ZgQlZ_cLSlp8AR8DBhCoryxNZgUW9ZS",
+        cells_by_name,
+        _configure_tag(["ghost"], "ghost"),
+        {},
+    )
+    asserts.true(env, error != None)
+
+    return unittest.end(env)
+
+_package_cells_test = unittest.make(_package_cells_test_impl)
+
+def _collect_configs_test_impl(ctx):
+    env = unittest.begin(ctx)
+
+    error, result = collect_configs([
+        _module("root", True, config = [
+            _config_tag("base"),
+            _config_tag("fast", optimize = "release_fast"),
+        ], configure = [
+            _configure_tag(["base", "fast"], "base"),
+            _configure_tag(["fast"], "fast", package = "clap"),
+        ]),
+        _module("dep", False, config = [_config_tag("ignored")]),
+    ])
+    asserts.equals(env, None, error)
+    asserts.equals(env, ["base", "fast"], sorted(result.cells_by_name.keys()))
+    asserts.true(env, result.global_configure != None)
+    asserts.true(env, ("clap", "") in result.per_package_configure)
+    asserts.equals(env, ["dep"], [ignored.module for ignored in result.ignored])
+
+    # Two config tags with the same name but different content conflict.
+    error, _ = collect_configs([
+        _module("root", True, config = [
+            _config_tag("x", optimize = "debug"),
+            _config_tag("x", optimize = "release_fast"),
+        ]),
+    ])
+    asserts.true(env, error != None)
+
+    # At most one global configure tag is allowed.
+    error, _ = collect_configs([
+        _module("root", True, configure = [
+            _configure_tag(["a"], "a"),
+            _configure_tag(["b"], "b"),
+        ]),
+    ])
+    asserts.true(env, error != None)
+
+    return unittest.end(env)
+
+_collect_configs_test = unittest.make(_collect_configs_test_impl)
+
 def zig_packages_test_suite(name):
     """Instantiate the zig_packages test suite.
 
@@ -141,4 +329,8 @@ def zig_packages_test_suite(name):
         partial.make(_select_by_precedence_test),
         partial.make(_index_packages_test),
         partial.make(_resolve_version_test),
+        partial.make(_resolve_cell_test),
+        partial.make(_check_cells_test),
+        partial.make(_package_cells_test),
+        partial.make(_collect_configs_test),
     )

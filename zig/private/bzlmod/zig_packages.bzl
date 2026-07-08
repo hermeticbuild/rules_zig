@@ -139,6 +139,247 @@ system_integration = tag_class(
     },
 )
 
+config = tag_class(
+    doc = "Declare a build-configuration matrix cell that a `configure` tag can apply to Zig packages.",
+    attrs = {
+        "name": attr.string(
+            doc = "Module-local name of this configuration cell.",
+            mandatory = True,
+        ),
+        "optimize": attr.string(
+            doc = "Zig optimize mode: `debug`, `release_safe`, `release_small` or `release_fast`.",
+        ),
+        "select_on": attr.string_list(
+            doc = "Extra Bazel condition labels ANDed into this cell's `select()` branch.",
+        ),
+        "zig_flags": attr.string_list(
+            doc = "Extra Zig build options as `NAME=VALUE`, each passed as `-DNAME=VALUE`.",
+        ),
+    },
+)
+
+configure = tag_class(
+    doc = """\
+Apply a build-configuration matrix to Zig packages, globally or per package.
+
+Each package is configured once per listed `config` cell; its generated
+targets select the cell whose conditions (`optimize` mode and `select_on`)
+hold, or `fallback` otherwise. Only the root module's `config` and
+`configure` tags take effect.
+""",
+    attrs = {
+        "configs": attr.string_list(
+            doc = "Ordered `config` cell names that apply.",
+            mandatory = True,
+        ),
+        "fallback": attr.string(
+            doc = "The config name used for the `//conditions:default` branch.",
+            mandatory = True,
+        ),
+        "package": attr.string(
+            doc = "If set, apply only to the named package; otherwise apply globally.",
+        ),
+        "version": attr.string(
+            doc = "Disambiguate `package` by version.",
+        ),
+    },
+)
+
+_OPTIMIZE_MODES = {
+    "debug": "debug",
+    "release_safe": "safe",
+    "release_small": "small",
+    "release_fast": "fast",
+}
+
+def _config_error(message, tag):
+    """A configuration error carrying the `config`/`configure` tag that caused it.
+
+    The tag is forwarded to `fail()` so the reported error points at the
+    offending declaration in the consumer's `MODULE.bazel`.
+    """
+    return struct(message = message, tag = tag)
+
+def resolve_cell(tag):
+    """Resolve a `config` tag into a build-configuration matrix cell.
+
+    `optimize` expands to `//zig/config/mode:mode` and `-Doptimize=Mode`;
+    `select_on` is appended verbatim and `zig_flags` become `-DNAME=VALUE`.
+
+    Args:
+      tag: a `config` tag.
+
+    Returns:
+      `(error, cell)`, `cell`: `struct(name, select_on, zig_options, tag)`, where
+      `zig_options` is a list of `-DNAME=VALUE` Zig build option flags and `tag`
+      is the originating `config` tag, retained for error reporting.
+    """
+    select_on = []
+    zig_options = []
+
+    if tag.optimize:
+        mode = _OPTIMIZE_MODES.get(tag.optimize)
+        if mode == None:
+            return (_config_error("config '{}' has unknown optimize mode '{}'".format(tag.name, tag.optimize), tag), None)
+        select_on.append("@rules_zig//zig/config/mode:" + tag.optimize)
+        zig_options.append("-Doptimize=" + mode)
+
+    select_on.extend(tag.select_on)
+
+    for flag in tag.zig_flags:
+        if "=" not in flag:
+            return (_config_error("config '{}' flag '{}' is not NAME=VALUE".format(tag.name, flag), tag), None)
+        zig_options.append("-D" + flag)
+
+    return (None, struct(name = tag.name, select_on = select_on, zig_options = zig_options, tag = tag))
+
+def check_cells(package_name, cells):
+    """Validate and deduplicate a package's matrix cells.
+
+    Args:
+      package_name: the package the cells belong to, for error messages.
+      cells: the package's cells, each a
+        `struct(name, select_on, zig_options, config_setting, tag)`.
+
+    Returns:
+      (error, cells), the fallback cells followed by the deduplicated
+        non-fallback cells.
+    """
+    fallbacks = [cell for cell in cells if cell.config_setting == ""]
+    nonfallback = [cell for cell in cells if cell.config_setting != ""]
+
+    deduped = []
+    by_conditions = {}
+    for cell in nonfallback:
+        if not cell.select_on:
+            return (_config_error("package '{}' config '{}' has no select conditions".format(package_name, cell.name), cell.tag), None)
+
+        conditions = tuple(sorted(cell.select_on))
+        existing = by_conditions.get(conditions)
+        if existing != None:
+            if existing.zig_options != cell.zig_options:
+                return (_config_error("package '{}' configs '{}' and '{}' share conditions but differ in build options".format(
+                    package_name,
+                    existing.name,
+                    cell.name,
+                ), cell.tag), None)
+            continue
+        by_conditions[conditions] = cell
+        deduped.append(cell)
+
+    for outer in deduped:
+        for inner in deduped:
+            if outer.name == inner.name:
+                continue
+            if len(outer.select_on) < len(inner.select_on) and all([c in inner.select_on for c in outer.select_on]):
+                return (_config_error("package '{}' config '{}' conditions are a subset of '{}'; they would match ambiguously".format(
+                    package_name,
+                    outer.name,
+                    inner.name,
+                ), outer.tag), None)
+
+    return (None, fallbacks + deduped)
+
+def package_cells(key, cells_by_name, global_configure, per_package_configure):
+    """Resolve the matrix cells a URL package is configured under.
+
+    Args:
+      key: the package's Zig hash key.
+      cells_by_name: map from config name to its `struct(name, select_on, zig_options, tag)`.
+      global_configure: the global `configure` tag (with `configs`/`fallback`), or None.
+      per_package_configure: map from `(name, version)` to a `configure` tag.
+
+    Returns:
+      (error, cells): cells is the ordered list of `struct(name, select_on,
+        zig_options, config_setting, tag)`, or None if the package is configured
+        once at the host default.
+    """
+    name, version = package_name_version(key)
+
+    selected = per_package_configure.get((name, version))
+    if selected == None:
+        selected = per_package_configure.get((name, ""))
+    if selected == None:
+        selected = global_configure
+    if selected == None:
+        return (None, None)
+
+    if selected.fallback not in selected.configs:
+        return (_config_error("package '{}' configure fallback '{}' is not among its configs".format(name, selected.fallback), selected), None)
+
+    cells = []
+    seen = {}
+    for config_name in selected.configs:
+        if config_name in seen:
+            return (_config_error("package '{}' configure lists config '{}' more than once".format(name, config_name), selected), None)
+        seen[config_name] = True
+        cell = cells_by_name.get(config_name)
+        if cell == None:
+            return (_config_error("package '{}' configure references unknown config '{}'".format(name, config_name), selected), None)
+        cells.append(struct(
+            name = cell.name,
+            select_on = cell.select_on,
+            zig_options = cell.zig_options,
+            config_setting = "" if config_name == selected.fallback else cell.name,
+            tag = cell.tag,
+        ))
+
+    return check_cells(name, cells)
+
+def collect_configs(modules):
+    """Collect the build-configuration matrix from the root module's tags.
+
+    Configurations from non-root modules are ignored (each returned as
+    `struct(module, tag)` so the caller can warn, pointing at the tag).
+
+    Args:
+      modules: sequence of bazel_module, the extension's modules with
+        `tags.config` and `tags.configure`.
+
+    Returns:
+      (error, result), where result is `struct(cells_by_name, global_configure,
+        per_package_configure, ignored)`.
+    """
+    ignored = []
+    cells_by_name = {}
+    global_configure = None
+    per_package_configure = {}
+
+    for mod in modules:
+        if not mod.is_root:
+            for tag in mod.tags.config:
+                ignored.append(struct(module = mod.name, tag = tag))
+            for tag in mod.tags.configure:
+                ignored.append(struct(module = mod.name, tag = tag))
+            continue
+
+        for tag in mod.tags.config:
+            error, cell = resolve_cell(tag)
+            if error != None:
+                return (error, None)
+            existing = cells_by_name.get(tag.name)
+            if existing != None and (existing.select_on != cell.select_on or existing.zig_options != cell.zig_options):
+                return (_config_error("conflicting config tags named '{}'".format(tag.name), tag), None)
+            cells_by_name[tag.name] = cell
+
+        for tag in mod.tags.configure:
+            if tag.package:
+                pkg_key = (tag.package, tag.version)
+                if pkg_key in per_package_configure:
+                    return (_config_error("multiple configure tags for package '{}'".format(tag.package), tag), None)
+                per_package_configure[pkg_key] = tag
+            elif global_configure != None:
+                return (_config_error("at most one global configure tag is allowed", tag), None)
+            else:
+                global_configure = tag
+
+    return (None, struct(
+        cells_by_name = cells_by_name,
+        global_configure = global_configure,
+        per_package_configure = per_package_configure,
+        ignored = ignored,
+    ))
+
 def _resolve_graph(module_ctx, zig, resolver, cache, pkg_dir, manifests):
     result = module_ctx.execute(
         [zig, "run", "--cache-dir", cache, "--global-cache-dir", cache, resolver, "--", zig, cache, str(pkg_dir)] +
@@ -192,6 +433,13 @@ def _zig_packages_impl(module_ctx):
             system_integrations[tag.name] = True
     system_integrations = system_integrations.keys()
 
+    error, matrix = collect_configs(module_ctx.modules)
+    if error != None:
+        fail("Invalid Zig package configuration: {}.".format(error.message), error.tag)
+    for ignored in matrix.ignored:
+        # buildifier: disable=print
+        print("Ignoring a `config`/`configure` tag from non-root module '{}'.".format(ignored.module), ignored.tag)
+
     graph = _resolve_graph(module_ctx, zig, resolver, cache, pkg_dir, manifests)
 
     for index, root in enumerate(graph["roots"]):
@@ -224,6 +472,15 @@ def _zig_packages_impl(module_ctx):
         reachable[key] = reached
 
         hub_graph[key] = {"name": name, "version": version}
+
+        error, cells = package_cells(key, matrix.cells_by_name, matrix.global_configure, matrix.per_package_configure)
+        if error != None:
+            fail("Invalid Zig package configuration: {}.".format(error.message), error.tag)
+        configs = [] if cells == None else [
+            {"name": cell.name, "zig_options": cell.zig_options}
+            for cell in cells
+        ]
+
         zig_package(
             name = key,
             url = package["url"],
@@ -238,6 +495,7 @@ def _zig_packages_impl(module_ctx):
             dep_build_files = {dep: "@{}//:build.zig".format(dep) for dep in reached},
             system_libraries = system_libraries,
             system_integrations = system_integrations,
+            configs = json.encode(configs),
         )
 
     manifests = [
@@ -326,5 +584,7 @@ zig_binary(
         "from_file": from_file,
         "system_library": system_library,
         "system_integration": system_integration,
+        "config": config,
+        "configure": configure,
     },
 )

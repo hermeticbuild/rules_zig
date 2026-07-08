@@ -41,6 +41,10 @@ to configure the package; each dependency edge is `[name, key, lazy]`.
     "system_integrations": attr.string_list(
         doc = "Names of optional system integrations (`systemIntegrationOption`) to enable when configuring the package.",
     ),
+    "configs": attr.string(
+        default = "[]",
+        doc = "JSON list of build-configuration matrix cells `{name, zig_options}` to configure the package under.",
+    ),
 }
 
 _BUILD = """\
@@ -405,6 +409,10 @@ def _run_configurer(repository_ctx, zig, build_zig, cache, deps, available):
     ]
     for name in repository_ctx.attr.system_integrations:
         configure_args.extend(["--system-integration", name])
+    for cell in json.decode(repository_ctx.attr.configs):
+        configure_args.extend(["--config", cell["name"]])
+        for option in cell["zig_options"]:
+            configure_args.extend(["--zig-option", option])
 
     configured = repository_ctx.execute(configure_args)
     if configured.return_code != 0:
