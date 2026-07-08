@@ -70,6 +70,115 @@ zig_library(
 )
 """
 
+_CC_LOAD = """\
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+"""
+
+_HEADER_EXTENSIONS = ["h", "hh", "hpp", "hxx"]
+
+# The module's headers and include directories, collected once. Zig's module
+# model has no public/private header distinction — only include directories —
+# so a single library carries them; its `hdrs` and `includes` reach every C
+# group and the linking module through `deps`.
+_CC_HEADERS = """
+cc_library(
+    name = "{name}",
+    hdrs = glob({hdrs}, allow_empty = True),
+    includes = {includes},
+)
+"""
+
+# One `cc_library` per group of C sources sharing `copts`, aggregated by a
+# dependency-only `cc_library` the owning module links against. Each `copts`
+# entry is one literal compiler argument, so `no_copts_tokenization` disables
+# their Bourne-shell tokenization. A C source may textually include any file of
+# its package, such as a unity build including sibling `.c` files, so all of
+# them are compile inputs.
+_CC_LIBRARY = """
+cc_library(
+    name = "{name}",
+    srcs = {srcs},
+    copts = {copts},
+    features = ["no_copts_tokenization"],
+    additional_compiler_inputs = [":files"],
+    deps = {deps},
+)
+"""
+
+_CC_LIBRARY_GROUP = """
+cc_library(
+    name = "{name}",
+    deps = {deps},
+)
+"""
+
+def _literal_copts(flags):
+    # Rendered `copts` undergo Make-variable expansion, but the package's flags
+    # are literal.
+    return json.encode([flag.replace("$", "$$") for flag in flags])
+
+def _render_c_library(url, module):
+    """Render the `cc_library` targets for a module's vendored C sources.
+
+    Returns:
+      `(chunks, dep)`: the `cc_library` text chunks and the label the owning
+      module links against, or `([], None)` when the module has no C sources.
+    """
+    c_sources = []
+    for csrc in module.get("csrcs", []):
+        if csrc["language"] not in (None, "c", "cpp"):
+            fail("The Zig package '{}' module '{}' declares the unsupported C source language '{}'.".format(
+                url,
+                module["name"],
+                csrc["language"],
+            ))
+        c_sources.append((csrc["path"], csrc["flags"]))
+    if not c_sources:
+        return [], None
+
+    includes = [inc["path"] for inc in module.get("include_dirs", [])]
+
+    # Headers can live in an include directory or beside the C sources.
+    header_dirs = {inc: None for inc in includes}
+    for path, _flags in c_sources:
+        header_dirs[path.rpartition("/")[0]] = None
+    header_globs = [
+        (directory + "/" if directory else "") + "**/*." + ext
+        for directory in sorted(header_dirs)
+        for ext in _HEADER_EXTENSIONS
+    ]
+
+    name = module["name"] + ".cinc"
+    headers = name + ".hdrs"
+    chunks = [_CC_HEADERS.format(
+        name = headers,
+        hdrs = json.encode(header_globs),
+        includes = json.encode(includes),
+    )]
+
+    # `copts` apply to every source in a `cc_library`, so partition by flags.
+    groups = []
+    for path, flags in c_sources:
+        if groups and groups[-1][0] == flags:
+            groups[-1][1].append(path)
+        else:
+            groups.append((flags, [path]))
+
+    group_labels = []
+    for index in range(len(groups)):
+        flags, paths = groups[index]
+        group_name = "{}.{}".format(name, index)
+        group_labels.append(":" + group_name)
+        chunks.append(_CC_LIBRARY.format(
+            name = group_name,
+            srcs = json.encode(paths),
+            copts = _literal_copts(flags),
+            deps = json.encode([":" + headers]),
+        ))
+    chunks.append(_CC_LIBRARY_GROUP.format(name = name, deps = json.encode(group_labels)))
+    return chunks, ":" + name
+
 def _module_dep_label(repository_ctx, imported):
     # A same-package import resolves to a sibling target here; a cross-package
     # import resolves to the module's target in the dependency's own spoke.
@@ -81,13 +190,28 @@ def _render_libraries(repository_ctx, modules):
     """Render a `zig_library` for each module this package owns.
 
     A dependency is imported under its own name by default; an import under a
-    different name is remapped through `import_names`. Modules owned by a
+    different name is remapped through `import_names`. Vendored C sources become
+    sibling `cc_library` targets the module links against. Modules owned by a
     dependency are generated in that dependency's own spoke and skipped here.
+
+    Returns:
+      `(text, has_cc)`, the rendered targets and whether any `cc_library` was
+      generated (so the caller loads the `cc_library` rule).
     """
-    chunks = []
+    cc_chunks = []
+    library_chunks = []
     for module in modules:
         if module["package"] != "":
             continue
+
+        unsupported = module.get("unsupported")
+        if unsupported:
+            fail("The Zig package '{}' module '{}' uses unsupported constructs: {}.".format(
+                repository_ctx.attr.url,
+                module["name"],
+                "; ".join(unsupported),
+            ))
+
         deps = []
         import_names = {}
         for imported in module["imports"]:
@@ -99,13 +223,19 @@ def _render_libraries(repository_ctx, modules):
             deps.append("@rules_zig//zig/lib:libc")
         if module.get("link_libcpp"):
             deps.append("@rules_zig//zig/lib:libc++")
-        chunks.append(_ZIG_LIBRARY.format(
+
+        chunks, cc_dep = _render_c_library(repository_ctx.attr.url, module)
+        cc_chunks.extend(chunks)
+        if cc_dep:
+            deps.append(cc_dep)
+
+        library_chunks.append(_ZIG_LIBRARY.format(
             name = module["name"],
             main = module["root_source"],
             deps = json.encode(deps),
             import_names = json.encode(import_names),
         ))
-    return "".join(chunks)
+    return "".join(cc_chunks + library_chunks), len(cc_chunks) > 0
 
 # Directories the rule creates in the repository root for its own use.
 _SCRATCH_DIRS = ["_fetch", "_configure"]
@@ -305,8 +435,9 @@ def _zig_package_impl(repository_ctx):
         manifest = _configure(repository_ctx, zig, repository_ctx.path("build.zig"), cache)
         repository_ctx.delete("_configure")
         repository_ctx.file("module_manifest.json", manifest)
-        libraries = _render_libraries(repository_ctx, json.decode(manifest)["modules"])
-        build = _LIBRARY_LOAD + build + libraries + _EXPORT_MANIFEST
+        libraries, has_cc = _render_libraries(repository_ctx, json.decode(manifest)["modules"])
+        loads = _LIBRARY_LOAD + (_CC_LOAD if has_cc else "")
+        build = loads + build + libraries + _EXPORT_MANIFEST
 
     repository_ctx.file("BUILD.bazel", build)
 
