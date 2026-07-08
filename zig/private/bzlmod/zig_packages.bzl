@@ -454,6 +454,7 @@ def _zig_packages_impl(module_ctx):
     # `build.zig` runs those of its dependencies.
     reachable = {}
     hub_graph = {}
+    config_groups = {}
     for key, package in graph["packages"].items():
         if package["url"] == None:
             continue
@@ -476,10 +477,18 @@ def _zig_packages_impl(module_ctx):
         error, cells = package_cells(key, matrix.cells_by_name, matrix.global_configure, matrix.per_package_configure)
         if error != None:
             fail("Invalid Zig package configuration: {}.".format(error.message), error.tag)
-        configs = [] if cells == None else [
-            {"name": cell.name, "zig_options": cell.zig_options}
-            for cell in cells
-        ]
+        configs = []
+        config_settings = {}
+        if cells != None:
+            for cell in cells:
+                configs.append({
+                    "name": cell.name,
+                    "zig_options": cell.zig_options,
+                    "config_setting": cell.config_setting,
+                })
+                if cell.config_setting != "":
+                    config_settings[cell.name] = "@zig_deps//config:cfg_" + cell.name
+                    config_groups[cell.name] = {"name": cell.name, "select_on": cell.select_on}
 
         zig_package(
             name = key,
@@ -496,6 +505,7 @@ def _zig_packages_impl(module_ctx):
             system_libraries = system_libraries,
             system_integrations = system_integrations,
             configs = json.encode(configs),
+            config_settings = config_settings,
         )
 
     manifests = [
@@ -512,6 +522,7 @@ def _zig_packages_impl(module_ctx):
         package_files = {key: "@{}//:files".format(key) for key in hub_graph},
         graph = json.encode(hub_graph),
         manifests = json.encode(manifests),
+        config_groups = json.encode([config_groups[name] for name in sorted(config_groups)]),
     )
 
     for message, tag in warnings.items():

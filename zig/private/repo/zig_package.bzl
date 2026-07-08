@@ -43,7 +43,10 @@ to configure the package; each dependency edge is `[name, key, lazy]`.
     ),
     "configs": attr.string(
         default = "[]",
-        doc = "JSON list of build-configuration matrix cells `{name, zig_options}` to configure the package under.",
+        doc = "JSON list of build-configuration matrix cells `{name, zig_options, config_setting}` to configure the package under.",
+    ),
+    "config_settings": attr.string_keyed_label_dict(
+        doc = "Map from a non-fallback cell name to the `config_setting_group` its `select()` branch keys on.",
     ),
 }
 
@@ -196,7 +199,89 @@ def _module_dep_label(repository_ctx, imported):
         return ":" + imported["module"]
     return str(repository_ctx.attr.dep_build_files[imported["package"]].same_package_label(imported["module"]))
 
-def _render_libraries(repository_ctx, modules):
+def _cells(repository_ctx, manifest):
+    # The configurer names the cells it merged, fallback first; the `configs`
+    # attr supplies each cell's `config_setting` (empty for the fallback).
+    settings = {cell["name"]: cell["config_setting"] for cell in json.decode(repository_ctx.attr.configs)}
+    return [
+        struct(name = name, config_setting = settings.get(name, ""))
+        for name in manifest["cells"]
+    ]
+
+def _field(module, field, default, cell):
+    """The value of a merged module field in one cell.
+
+    A field the configurer found to vary carries a per-cell value under
+    `select`; an invariant field carries its single value directly.
+    """
+    select = module.get("select")
+    if select != None and field in select:
+        return select[field][cell]
+    return module.get(field, default)
+
+def _render_select(cells, config_settings, by_cell):
+    """Render a per-cell attribute value as a literal or a `select()`.
+
+    Args:
+      cells: the ordered cells, the `//conditions:default` fallback first.
+      config_settings: map from a non-fallback cell name to its
+        `config_setting_group` label.
+      by_cell: map from cell name to the attribute's value in that cell.
+
+    Returns:
+      the attribute's Starlark code.
+    """
+    fallback = by_cell[cells[0].name]
+    if all([by_cell[cell.name] == fallback for cell in cells]):
+        return json.encode(fallback)
+
+    lines = ["select({"]
+    for cell in cells:
+        if cell.config_setting != "":
+            lines.append("    {}: {},".format(json.encode(str(config_settings[cell.name])), json.encode(by_cell[cell.name])))
+    lines.append("    \"//conditions:default\": {},".format(json.encode(fallback)))
+    lines.append("})")
+    return "\n".join(lines)
+
+def _module_deps(repository_ctx, module, cell, cc_dep):
+    """The `deps` and `import_names` of a module's `zig_library` in one cell."""
+    deps = []
+    import_names = {}
+    for imported in _field(module, "imports", [], cell):
+        label = _module_dep_label(repository_ctx, imported)
+        deps.append(label)
+        if imported["name"] != imported["module"]:
+            import_names[label] = imported["name"]
+    if _field(module, "link_libc", False, cell):
+        deps.append("@rules_zig//zig/lib:libc")
+    if _field(module, "link_libcpp", False, cell):
+        deps.append("@rules_zig//zig/lib:libc++")
+
+    for name in _field(module, "system_libs", [], cell):
+        lib = repository_ctx.attr.system_libraries.get(name)
+        if lib == None:
+            fail(("The Zig package '{}' module '{}' requires the system library '{}', which is not " +
+                  "provided. Map it to a cc_library with a " +
+                  "`zig_packages.system_library(name = \"{}\", lib = ...)` annotation.").format(
+                repository_ctx.attr.url,
+                module["name"],
+                name,
+                name,
+            ))
+        deps.append(str(lib))
+
+    if cc_dep:
+        deps.append(cc_dep)
+    return deps, import_names
+
+# Fields that reshape the module's own targets, not its dependencies. Varying
+# them across configurations — e.g. platform-specific C sources — requires
+# pushing the differing source globs into each `select()` branch and selecting
+# which `cc_library` siblings a branch includes, which this renderer does not
+# do, so the importer requires these to agree across cells.
+_INVARIANT_FIELDS = ["root_source", "csrcs", "include_dirs"]
+
+def _render_libraries(repository_ctx, modules, cells):
     """Render a `zig_library` for each module this package owns.
 
     A dependency is imported under its own name by default; an import under a
@@ -204,59 +289,55 @@ def _render_libraries(repository_ctx, modules):
     sibling `cc_library` targets the module links against. Modules owned by a
     dependency are generated in that dependency's own spoke and skipped here.
 
+    A module's dependencies, libc linkage and system libraries may vary across
+    the configuration matrix, rendering as a `select()` on the cells'
+    `config_setting_group`s. Its root source, C sources and include directories
+    must agree across cells (see `_INVARIANT_FIELDS`).
+
     Returns:
       `(text, has_cc)`, the rendered targets and whether any `cc_library` was
       generated (so the caller loads the `cc_library` rule).
     """
+    config_settings = repository_ctx.attr.config_settings
     cc_chunks = []
     library_chunks = []
     for module in modules:
         if module["package"] != "":
             continue
 
-        unsupported = module.get("unsupported")
-        if unsupported:
-            fail("The Zig package '{}' module '{}' uses unsupported constructs: {}.".format(
-                repository_ctx.attr.url,
-                module["name"],
-                "; ".join(unsupported),
-            ))
-
-        deps = []
-        import_names = {}
-        for imported in module["imports"]:
-            label = _module_dep_label(repository_ctx, imported)
-            deps.append(label)
-            if imported["name"] != imported["module"]:
-                import_names[label] = imported["name"]
-        if module.get("link_libc"):
-            deps.append("@rules_zig//zig/lib:libc")
-        if module.get("link_libcpp"):
-            deps.append("@rules_zig//zig/lib:libc++")
-
-        for name in module.get("system_libs", []):
-            lib = repository_ctx.attr.system_libraries.get(name)
-            if lib == None:
-                fail(("The Zig package '{}' module '{}' requires the system library '{}', which is not " +
-                      "provided. Map it to a cc_library with a " +
-                      "`zig_packages.system_library(name = \"{}\", lib = ...)` annotation.").format(
+        for cell in cells:
+            unsupported = _field(module, "unsupported", [], cell.name)
+            if unsupported:
+                fail("The Zig package '{}' module '{}' uses unsupported constructs: {}.".format(
                     repository_ctx.attr.url,
                     module["name"],
-                    name,
-                    name,
+                    "; ".join(unsupported),
                 ))
-            deps.append(str(lib))
+
+        select = module.get("select", {})
+        for field in _INVARIANT_FIELDS:
+            if field in select:
+                fail("The Zig package '{}' module '{}' varies its '{}' across configurations, which the importer does not support.".format(
+                    repository_ctx.attr.url,
+                    module["name"],
+                    field,
+                ))
 
         chunks, cc_dep = _render_c_library(repository_ctx.attr.url, module)
         cc_chunks.extend(chunks)
-        if cc_dep:
-            deps.append(cc_dep)
+
+        deps_by_cell = {}
+        names_by_cell = {}
+        for cell in cells:
+            deps, import_names = _module_deps(repository_ctx, module, cell.name, cc_dep)
+            deps_by_cell[cell.name] = deps
+            names_by_cell[cell.name] = import_names
 
         library_chunks.append(_ZIG_LIBRARY.format(
             name = module["name"],
             main = module["root_source"],
-            deps = json.encode(deps),
-            import_names = json.encode(import_names),
+            deps = _render_select(cells, config_settings, deps_by_cell),
+            import_names = _render_select(cells, config_settings, names_by_cell),
         ))
     return "".join(cc_chunks + library_chunks), len(cc_chunks) > 0
 
@@ -463,10 +544,8 @@ def _zig_package_impl(repository_ctx):
         repository_ctx.delete("_configure")
         repository_ctx.file("module_manifest.json", manifest)
 
-        # The configurer merges the build configurations; each module carries
-        # its fallback-cell fields, which are the only values until a matrix is
-        # declared.
-        libraries, has_cc = _render_libraries(repository_ctx, json.decode(manifest)["modules"])
+        decoded = json.decode(manifest)
+        libraries, has_cc = _render_libraries(repository_ctx, decoded["modules"], _cells(repository_ctx, decoded))
         loads = _LIBRARY_LOAD + (_CC_LOAD if has_cc else "")
         build = loads + build + libraries + _EXPORT_MANIFEST
 
