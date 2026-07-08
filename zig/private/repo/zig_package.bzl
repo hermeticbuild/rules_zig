@@ -38,6 +38,9 @@ to configure the package; each dependency edge is `[name, key, lazy]`.
     "system_libraries": attr.string_keyed_label_dict(
         doc = "Map from a system-library name (as passed to `linkSystemLibrary`) to a `cc_library` or similar providing it.",
     ),
+    "system_integrations": attr.string_list(
+        doc = "Names of optional system integrations (`systemIntegrationOption`) to enable when configuring the package.",
+    ),
 }
 
 _BUILD = """\
@@ -393,13 +396,17 @@ def _run_configurer(repository_ctx, zig, build_zig, cache, deps, available):
     if compiled.return_code != 0:
         fail("Failed to compile the Zig configurer for '{}':\n{}".format(repository_ctx.attr.url, compiled.stderr))
 
-    configured = repository_ctx.execute([
+    configure_args = [
         str(repository_ctx.path("_configure/configurer")),
         "--zig",
         str(zig),
         "--build-root",
         str(repository_ctx.path(".")),
-    ])
+    ]
+    for name in repository_ctx.attr.system_integrations:
+        configure_args.extend(["--system-integration", name])
+
+    configured = repository_ctx.execute(configure_args)
     if configured.return_code != 0:
         fail("Failed to configure the Zig package '{}':\n{}".format(repository_ctx.attr.url, configured.stderr))
     return configured

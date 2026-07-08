@@ -1,7 +1,7 @@
 //! Configure a Zig package's `build.zig` and emit its public module graph as
 //! JSON on stdout, for translation into Bazel `zig_library` targets.
 //!
-//! Usage: configurer --zig <zig> --build-root <dir>
+//! Usage: configurer --zig <zig> --build-root <dir> [--system-integration NAME ...]
 //!
 //! If `build.zig` requests unavailable lazy dependencies, the output is
 //! `{"needed_lazy_dependencies": ["<hash>", ...]}` instead, so the caller can
@@ -10,6 +10,11 @@
 //! Modeled on `lib/compiler/configurer.zig` of Zig 0.17.0. The package's
 //! `build.zig` is provided as the `pkg` module and its dependency table as the
 //! `deps` module, both wired in at compile time.
+//!
+//! Each `--system-integration NAME` pre-enables the named optional system
+//! integration before the build runs, so the package's
+//! `systemIntegrationOption(NAME)` returns true and its guarded
+//! `linkSystemLibrary` calls run (surfacing as `system_libs`).
 
 const std = @import("std");
 const mem = std.mem;
@@ -27,12 +32,15 @@ pub fn main(init: process.Init) !void {
 
     var zig_exe: ?[]const u8 = null;
     var build_root: ?[]const u8 = null;
+    var system_integrations: std.ArrayList([]const u8) = .empty;
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
         if (mem.eql(u8, args[i], "--zig")) {
             zig_exe = nextArg(args, &i);
         } else if (mem.eql(u8, args[i], "--build-root")) {
             build_root = nextArg(args, &i);
+        } else if (mem.eql(u8, args[i], "--system-integration")) {
+            try system_integrations.append(arena, nextArg(args, &i));
         } else {
             fatal("unrecognized argument: {s}", .{args[i]});
         }
@@ -46,6 +54,10 @@ pub fn main(init: process.Init) !void {
         build_root orelse fatal("missing --build-root", .{}),
         dependencies.root_deps,
     );
+
+    for (system_integrations.items) |name| {
+        try builder.graph.system_integration_options.put(arena, name, .user_enabled);
+    }
 
     builder.runPackageScript(root);
 

@@ -10,6 +10,7 @@ Extension for importing Zig package dependencies.
 zig_packages = use_extension("@rules_zig//zig:packages.bzl", "zig_packages")
 zig_packages.from_file(<a href="#zig_packages.from_file-build_zig_zon">build_zig_zon</a>)
 zig_packages.system_library(<a href="#zig_packages.system_library-name">name</a>, <a href="#zig_packages.system_library-lib">lib</a>)
+zig_packages.system_integration(<a href="#zig_packages.system_integration-name">name</a>)
 </pre>
 
 Import Zig package dependencies.
@@ -86,5 +87,17 @@ modules' mappings apply, and must agree.
 | :------------- | :------------- | :------------- | :------------- | :------------- |
 | <a id="zig_packages.system_library-name"></a>name |  The name of the system library as passed to `linkSystemLibrary` in a package's `build.zig`.   | <a href="https://bazel.build/concepts/labels#target-names">Name</a> | required |  |
 | <a id="zig_packages.system_library-lib"></a>lib |  A `cc_library` or similar (any target providing `CcInfo`) that provides the named system library.   | <a href="https://bazel.build/concepts/labels">Label</a> | required |  |
+
+<a id="zig_packages.system_integration"></a>
+
+### system_integration
+
+Enable an optional system integration (`systemIntegrationOption`) when configuring Zig packages. Only the root module's `system_integration` tags take effect.
+
+**Attributes**
+
+| Name  | Description | Type | Mandatory | Default |
+| :------------- | :------------- | :------------- | :------------- | :------------- |
+| <a id="zig_packages.system_integration-name"></a>name |  The name of an optional system integration (`systemIntegrationOption`) to enable.   | <a href="https://bazel.build/concepts/labels#target-names">Name</a> | required |  |
 
 

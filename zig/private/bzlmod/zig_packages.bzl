@@ -129,6 +129,16 @@ modules' mappings apply, and must agree.
     },
 )
 
+system_integration = tag_class(
+    doc = "Enable an optional system integration (`systemIntegrationOption`) when configuring Zig packages. Only the root module's `system_integration` tags take effect.",
+    attrs = {
+        "name": attr.string(
+            doc = "The name of an optional system integration (`systemIntegrationOption`) to enable.",
+            mandatory = True,
+        ),
+    },
+)
+
 def _resolve_graph(module_ctx, zig, resolver, cache, pkg_dir, manifests):
     result = module_ctx.execute(
         [zig, "run", "--cache-dir", cache, "--global-cache-dir", cache, resolver, "--", zig, cache, str(pkg_dir)] +
@@ -172,6 +182,15 @@ def _zig_packages_impl(module_ctx):
     system_libraries = {}
     for name in system_library_entries:
         system_libraries[name] = _apply_precedence(system_library_entries, [name], "system_library", _system_library_subject, warnings).value
+
+    system_integrations = {}
+    for mod in module_ctx.modules:
+        for tag in mod.tags.system_integration:
+            if not mod.is_root:
+                warnings["Ignoring a `system_integration` tag from non-root module '{}'.".format(mod.name)] = tag
+                continue
+            system_integrations[tag.name] = True
+    system_integrations = system_integrations.keys()
 
     graph = _resolve_graph(module_ctx, zig, resolver, cache, pkg_dir, manifests)
 
@@ -218,6 +237,7 @@ def _zig_packages_impl(module_ctx):
             }),
             dep_build_files = {dep: "@{}//:build.zig".format(dep) for dep in reached},
             system_libraries = system_libraries,
+            system_integrations = system_integrations,
         )
 
     manifests = [
@@ -305,5 +325,6 @@ zig_binary(
     tag_classes = {
         "from_file": from_file,
         "system_library": system_library,
+        "system_integration": system_integration,
     },
 )
