@@ -53,7 +53,7 @@ const Consumer = struct {
 
 // Manifests that resolve dependencies via `zig_packages.from_file`.
 const consumers = [_]Consumer{
-    .{ .manifest = "build.zig.zon", .deps = &.{ "leaf", "bottom", "top", "libv1", "libfork", "libv2", "multi", "pruned", "symlinked", "lazyhost", "lazydirect", "usec", "cdep", "cppdep", "syslibdep", "optdep", "cfgdep", "host" } },
+    .{ .manifest = "build.zig.zon", .deps = &.{ "leaf", "bottom", "top", "libv1", "libfork", "libv2", "multi", "pruned", "symlinked", "lazyhost", "lazydirect", "usec", "cdep", "cppdep", "syslibdep", "optdep", "cfgdep", "host", "srconly" } },
     .{ .manifest = "child/build.zig.zon", .deps = &.{ "leaf", "libv2", "hostuser" } },
 };
 
@@ -121,6 +121,81 @@ test "Zig packages are imported from file:// tarballs" {
     });
     defer manifest_result.deinit();
     try std.testing.expect(manifest_result.success);
+}
+
+// Runs after the positive test above has packed the fixtures and patched the
+// consumer manifests. Breaks one thing at a time, asserts the build fails as
+// expected, and restores the original.
+test "the importer rejects invalid package configurations" {
+    const ctx = try BitContext.init();
+    defer ctx.deinit();
+
+    // A declared hash that does not match the fetched package.
+    try ctx.patchWorkspaceFile("build.zig.zon", &.{.{ "leaf-0.0.0-", "leaf-0.0.0-x" }});
+    try expectBuildFailure(ctx, "hash mismatch");
+    try ctx.patchWorkspaceFile("build.zig.zon", &.{.{ "leaf-0.0.0-x", "leaf-0.0.0-" }});
+
+    // A path dependency whose `build.zig.zon` is not provided via `from_file`.
+    const greeter_manifest = "path_deps/greeter/build.zig.zon";
+    try ctx.patchWorkspaceFile(greeter_manifest, &.{.{ "../message", "../../fixtures/leaf" }});
+    try expectBuildFailure(ctx, "has no provided manifest");
+    try ctx.patchWorkspaceFile(greeter_manifest, &.{.{ "../../fixtures/leaf", "../message" }});
+
+    // `zig_dep` referencing a dependency the manifest does not declare.
+    const greeter_build = "path_deps/greeter/BUILD.bazel";
+    try ctx.patchWorkspaceFile(greeter_build, &.{
+        .{ "\"zig_deps\")", "\"zig_dep\", \"zig_deps\")" },
+        .{ "deps = zig_deps()", "deps = [zig_dep(\"nonexistent\")]" },
+    });
+    try expectBuildFailure(ctx, "declares no dependency");
+    try ctx.patchWorkspaceFile(greeter_build, &.{
+        .{ "\"zig_dep\", \"zig_deps\")", "\"zig_deps\")" },
+        .{ "deps = [zig_dep(\"nonexistent\")]", "deps = zig_deps()" },
+    });
+
+    // Package lookups through the hub that must not resolve: a version shared
+    // by two packages, and a package the manifest does not declare.
+    const lookup = "zig_package_file(\"multi\", \"module_manifest.json\")";
+    const ambiguous = "zig_package_file(\"lib\", \"src/lib.zig\", version = \"1.0.0\")";
+    try ctx.patchWorkspaceFile("BUILD.bazel", &.{.{ lookup, ambiguous }});
+    try expectBuildFailure(ctx, "is ambiguous");
+    try ctx.patchWorkspaceFile("BUILD.bazel", &.{.{ ambiguous, lookup }});
+    const undeclared = "zig_package_file(\"base\", \"module_manifest.json\")";
+    try ctx.patchWorkspaceFile("BUILD.bazel", &.{.{ lookup, undeclared }});
+    try expectBuildFailure(ctx, "declares no dependency");
+    try ctx.patchWorkspaceFile("BUILD.bazel", &.{.{ undeclared, lookup }});
+
+    // A dependency with a source-only (`build.zig`-less) path dependency.
+    try ctx.patchWorkspaceFile("build.zig.zon", &.{.{ "// .srconly", ".srconly" }});
+    try expectBuildFailure(ctx, "source-only");
+    try ctx.patchWorkspaceFile("build.zig.zon", &.{.{ ".srconly", "// .srconly" }});
+
+    // A required system library with no matching annotation.
+    try ctx.patchWorkspaceFile("MODULE.bazel", &.{.{ "name = \"mymath\"", "name = \"mymath-unprovided\"" }});
+    try expectBuildFailure(ctx, "system library");
+    try ctx.patchWorkspaceFile("MODULE.bazel", &.{.{ "name = \"mymath-unprovided\"", "name = \"mymath\"" }});
+
+    // A disabled system integration leaves the guarded symbol unlinked, though
+    // the non-root `child_module` enables it.
+    try ctx.patchWorkspaceFile("MODULE.bazel", &.{.{ "system_integration(name = \"optmath\")", "system_integration(name = \"optmath-off\")" }});
+    try expectBuildFailure(ctx, "opt_compute");
+    try ctx.patchWorkspaceFile("MODULE.bazel", &.{.{ "system_integration(name = \"optmath-off\")", "system_integration(name = \"optmath\")" }});
+}
+
+fn expectBuildFailure(ctx: BitContext, expected: []const u8) !void {
+    const result = try ctx.exec_bazel(.{
+        .argv = &[_][]const u8{ "build", "//:binary" },
+        .print_on_error = false,
+    });
+    defer result.deinit();
+    if (result.success) {
+        std.debug.print("expected build to FAIL (mentioning '{s}') but it succeeded\n", .{expected});
+        return error.BuildUnexpectedlySucceeded;
+    }
+    if (std.mem.indexOf(u8, result.stderr, expected) == null) {
+        std.debug.print("expected build failure mentioning '{s}', stderr:\n{s}\n", .{ expected, result.stderr });
+        return error.UnexpectedFailureMessage;
+    }
 }
 
 fn depReplacements(
