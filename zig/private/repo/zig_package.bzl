@@ -318,7 +318,8 @@ def _module_deps(repository_ctx, module, cell, cc_dep, packages):
 # pushing the differing source globs into each `select()` branch and selecting
 # which `cc_library` siblings a branch includes, which this renderer does not
 # do, so the importer requires these to agree across cells.
-_INVARIANT_FIELDS = ["root_source", "csrcs", "include_dirs"]
+# `generated_source` is materialized to one file shared by every cell.
+_INVARIANT_FIELDS = ["root_source", "generated_source", "csrcs", "include_dirs"]
 
 def _render_libraries(repository_ctx, modules, cells, packages):
     """Render a `zig_library` for each module this package owns.
@@ -365,6 +366,15 @@ def _render_libraries(repository_ctx, modules, cells, packages):
                     field,
                 ))
 
+        # A `b.addOptions()` module has no file in the package tree; materialize
+        # its source into the spoke and treat it as the module's root.
+        generated = module.get("generated_source")
+        if generated != None:
+            root_source = "_zig_generated/" + module["name"] + ".zig"
+            repository_ctx.file((packages[owner]["path"] + "/" if owner else "") + root_source, generated)
+        else:
+            root_source = module["root_source"]
+
         chunks, cc_dep = _render_c_library(repository_ctx.attr.url, module, packages, owner)
         cc_chunks.extend(chunks)
 
@@ -380,7 +390,7 @@ def _render_libraries(repository_ctx, modules, cells, packages):
         if owner == "":
             library_chunks.append(_ZIG_LIBRARY.format(
                 name = module["name"],
-                main = module["root_source"],
+                main = root_source,
                 deps = deps,
                 import_names = import_names,
             ))
@@ -389,7 +399,7 @@ def _render_libraries(repository_ctx, modules, cells, packages):
             library_chunks.append(_ZIG_LIBRARY_SUBTREE.format(
                 name = _target_name(packages, owner, module["name"]),
                 import_name = module["name"],
-                main = subpath + "/" + module["root_source"],
+                main = subpath + "/" + root_source,
                 subpath = subpath,
                 deps = deps,
                 import_names = import_names,
@@ -397,7 +407,7 @@ def _render_libraries(repository_ctx, modules, cells, packages):
     return "".join(cc_chunks + library_chunks), len(cc_chunks) > 0
 
 # Directories the rule creates in the repository root for its own use.
-_SCRATCH_DIRS = ["_fetch", "_configure"]
+_SCRATCH_DIRS = ["_fetch", "_configure", "_zig_generated"]
 
 def _fetch(repository_ctx, zig, cache):
     """Fetch the package into the repository root.

@@ -5,6 +5,7 @@
 //! The emitted JSON has the shape:
 //!
 //!     {"modules": [{"name": ..., "package": <hash>, "root_source": ...,
+//!         "generated_source": ...,  // present only for `b.addOptions()` modules
 //!         "link_libc": true, "link_libcpp": true,  // each present only when set
 //!         "csrcs": [...], "include_dirs": [...], "system_libs": [...], "unsupported": [...],  // each present only when non-empty
 //!         "imports": [{"name": ..., "module": ..., "package": <hash>}]}]}
@@ -124,8 +125,12 @@ pub const Module = struct {
     /// The Zig hash of the owning package, or the empty string for the package
     /// being configured.
     package: []const u8,
-    /// The root source file within the owning package, if any.
+    /// The root source file within the owning package; null for a generated
+    /// root.
     root_source: ?[]const u8,
+    /// The source of a module whose root is produced by `b.addOptions()`, which
+    /// has no file in the package tree; null for a file-backed module.
+    generated_source: ?[]const u8,
     /// Whether the module links the C standard library, by its own setting
     /// (`.link_libc = true`, `linkSystemLibrary("c", .{})`).
     link_libc: bool,
@@ -139,11 +144,32 @@ pub const Module = struct {
     /// The non-libc system libraries the module links (`linkSystemLibrary`),
     /// each of which the importer requires to be mapped to a `cc_library`.
     system_libs: []const []const u8,
-    /// Human-readable descriptions of C or link constructs the importer cannot
-    /// represent (assembly, prebuilt objects, generated config headers, linked
-    /// compile steps, ...).
+    /// Human-readable descriptions of constructs the importer cannot represent
+    /// (assembly, prebuilt objects, generated config headers, linked compile
+    /// steps, path options, ...).
     unsupported: []const []const u8,
 };
+
+/// If `lazy_path` is the generated output of a `b.addOptions()` step, return
+/// that step. Other paths return null.
+fn optionsStep(builder: *Build, lazy_path: ?LazyPath) ?*Build.Step.Options {
+    const generated = switch (lazy_path orelse return null) {
+        .generated => |generated| generated,
+        else => return null,
+    };
+    if (generated.up != 0 or generated.sub_path.len != 0) return null;
+    const step = builder.graph.generated_files.items[@backingInt(generated.index)];
+    if (step.tag != .options) return null;
+    return @fieldParentPtr("step", step);
+}
+
+/// The source a `b.addOptions()` step generates at `lazy_path`, or null for
+/// other paths. It is fully determined once `build` has run, so the importer,
+/// which cannot run build steps, materializes it as a static file.
+fn generatedOptionsSource(builder: *Build, lazy_path: ?LazyPath) ?[]const u8 {
+    const options = optionsStep(builder, lazy_path) orelse return null;
+    return options.contents.items;
+}
 
 /// The C fields of a `Module`.
 const CInfo = struct {
@@ -190,12 +216,19 @@ fn appendIncludeDir(
 
 /// Collect `module`'s C information; `root_source_error` is how `lazyPathString`
 /// rejected its root source, if it did.
-fn collectC(arena: Allocator, module: *Build.Module, root_source_error: ?ResolvePathError) !CInfo {
+fn collectC(arena: Allocator, builder: *Build, module: *Build.Module, root_source_error: ?ResolvePathError) !CInfo {
     var csrcs: std.ArrayList(CSource) = .empty;
     var include_dirs: std.ArrayList(IncludeDir) = .empty;
     var system_libs: std.ArrayList([]const u8) = .empty;
     var unsupported: std.StringArrayHashMapUnmanaged(void) = .empty;
     if (root_source_error) |err| try reportPath(arena, &unsupported, module.root_source_file.?, err);
+
+    // A path option enters the options source only when the step runs.
+    if (optionsStep(builder, module.root_source_file)) |options| {
+        if (options.files.items.len + options.directories.items.len + options.untracked_paths.items.len > 0) {
+            try unsupported.put(arena, "a path option (`addOptionPath`, `addOptionPathDirectory`, or `addOptionPathUntracked`)", {});
+        }
+    }
 
     for (module.link_objects.items) |link_object| switch (link_object) {
         .c_source_file => |c| {
@@ -273,11 +306,12 @@ pub fn collectModules(arena: Allocator, builder: *Build) ![]const Module {
                 .package = imported.owner.pkg_hash,
             });
         }
-        const c = try collectC(arena, module, root_source_error);
+        const c = try collectC(arena, builder, module, root_source_error);
         try result.append(arena, .{
             .name = names.get(module).?,
             .package = module.owner.pkg_hash,
             .root_source = root_source,
+            .generated_source = generatedOptionsSource(builder, module.root_source_file),
             .link_libc = module.link_libc == true,
             .link_libcpp = module.link_libcpp == true,
             .imports = imports.items,
@@ -299,6 +333,10 @@ fn writeModuleFields(json: *std.json.Stringify, module: Module) !void {
     try json.write(module.package);
     try json.objectField("root_source");
     try json.write(module.root_source);
+    if (module.generated_source) |generated| {
+        try json.objectField("generated_source");
+        try json.write(generated);
+    }
     if (module.link_libc) {
         try json.objectField("link_libc");
         try json.write(true);
@@ -362,7 +400,7 @@ pub const Cell = struct {
 
 /// A configuration-dependent module field, merged across cells into a
 /// `select()` when its value varies.
-const Field = enum { root_source, link_libc, link_libcpp, imports, csrcs, include_dirs, system_libs, unsupported };
+const Field = enum { root_source, generated_source, link_libc, link_libcpp, imports, csrcs, include_dirs, system_libs, unsupported };
 
 fn eqlOptStr(a: ?[]const u8, b: ?[]const u8) bool {
     if (a == null or b == null) return (a == null) == (b == null);
@@ -400,6 +438,7 @@ fn eqlIncludeDirs(a: []const IncludeDir, b: []const IncludeDir) bool {
 fn fieldEqual(field: Field, a: Module, b: Module) bool {
     return switch (field) {
         .root_source => eqlOptStr(a.root_source, b.root_source),
+        .generated_source => eqlOptStr(a.generated_source, b.generated_source),
         .link_libc => a.link_libc == b.link_libc,
         .link_libcpp => a.link_libcpp == b.link_libcpp,
         .imports => eqlImports(a.imports, b.imports),
@@ -413,6 +452,7 @@ fn fieldEqual(field: Field, a: Module, b: Module) bool {
 fn writeField(json: *std.json.Stringify, field: Field, module: Module) !void {
     switch (field) {
         .root_source => try json.write(module.root_source),
+        .generated_source => try json.write(module.generated_source),
         .link_libc => try json.write(module.link_libc),
         .link_libcpp => try json.write(module.link_libcpp),
         .imports => try json.write(module.imports),
@@ -884,11 +924,46 @@ test "emits the system libraries a module links" {
     try std.testing.expectEqualStrings("mymath", system_libs[0].string);
 }
 
+test "reports path options of a generated option module as unsupported" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const build_root = try std.fmt.allocPrint(arena, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+
+    const b = try createBuilder(arena, std.testing.io, .{ .array_hash_map = .empty, .allocator = arena }, "unused-zig", build_root, &.{});
+
+    const plain = b.addOptions();
+    plain.addOption(bool, "flag", true);
+    _ = b.addModule("plain", .{ .root_source_file = plain.getOutput() });
+
+    const with_path = b.addOptions();
+    with_path.addOptionPath("data", b.path("data.txt"));
+    _ = b.addModule("with_path", .{ .root_source_file = with_path.getOutput() });
+
+    var out: std.Io.Writer.Allocating = .init(arena);
+    try emit(arena, &out.writer, b);
+
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, out.written(), .{});
+    const modules = parsed.object.get("modules").?.array.items;
+
+    try std.testing.expectEqualStrings("plain", modules[0].object.get("name").?.string);
+    try std.testing.expectEqual(null, modules[0].object.get("unsupported"));
+
+    try std.testing.expectEqualStrings("with_path", modules[1].object.get("name").?.string);
+    const unsupported = modules[1].object.get("unsupported").?.array.items;
+    try std.testing.expectEqual(1, unsupported.len);
+    try std.testing.expect(std.mem.indexOf(u8, unsupported[0].string, "addOptionPath") != null);
+}
+
 fn testModule(name: []const u8, root: []const u8, link_libc: bool, imports: []const Import) Module {
     return .{
         .name = name,
         .package = "",
         .root_source = root,
+        .generated_source = null,
         .link_libc = link_libc,
         .link_libcpp = false,
         .imports = imports,

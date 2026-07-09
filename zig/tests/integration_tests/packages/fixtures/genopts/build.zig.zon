@@ -1,0 +1,10 @@
+.{
+    .name = .genopts,
+    .version = "0.0.0",
+    .fingerprint = 0x18ade9a14ecf9519,
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

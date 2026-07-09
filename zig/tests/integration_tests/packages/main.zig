@@ -19,6 +19,7 @@ const optdep = @import("optdep");
 const cfgdep = @import("cfgdep");
 const host = @import("host");
 const greeter = @import("greeter");
+const genopts = @import("genopts");
 
 pub fn main() void {
     std.debug.assert(leaf.value == 7);
@@ -66,4 +67,7 @@ pub fn main() void {
     // `greeter` path-depends on the sibling `message` package (value 1), both
     // resolved from their provided `from_file` manifests.
     std.debug.assert(greeter.value == 1);
+    // `feature` is true: `genopts` imports a `b.addOptions()` module whose
+    // generated source the configurer wrote into the package's repository.
+    std.debug.assert(genopts.value == 7);
 }
