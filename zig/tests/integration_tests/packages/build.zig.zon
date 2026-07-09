@@ -51,6 +51,10 @@
             .url = "__CDEP_URL__",
             .hash = "__CDEP_HASH__",
         },
+        .cppdep = .{
+            .url = "__CPPDEP_URL__",
+            .hash = "__CPPDEP_HASH__",
+        },
     },
     .paths = .{
         "build.zig.zon",

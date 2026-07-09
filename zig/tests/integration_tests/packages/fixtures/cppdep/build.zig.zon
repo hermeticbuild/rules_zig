@@ -1,0 +1,10 @@
+.{
+    .name = .cppdep,
+    .version = "0.0.0",
+    .fingerprint = 0xaa1e1126b9a5e407,
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

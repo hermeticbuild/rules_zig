@@ -11,6 +11,7 @@ const lazyhost = @import("lazyhost");
 const child = @import("child");
 const usec = @import("usec");
 const cdep = @import("cdep");
+const cppdep = @import("cppdep");
 
 pub fn main() void {
     std.debug.assert(leaf.value == 7);
@@ -34,4 +35,7 @@ pub fn main() void {
     std.debug.assert(usec.pid() > 0);
     // 3*14 + 7*2, proving each C source got its own `-DSCALE` copts.
     std.debug.assert(cdep.value() == 56);
+    // `new int(2)` then `+ 1`, computed by the vendored C++ source the module
+    // links via libc++.
+    std.debug.assert(cppdep.value() == 3);
 }
