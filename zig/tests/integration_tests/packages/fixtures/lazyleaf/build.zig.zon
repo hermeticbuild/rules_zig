@@ -1,0 +1,10 @@
+.{
+    .name = .lazyleaf,
+    .version = "0.0.0",
+    .fingerprint = 0x76075e2e0af3a2a5,
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

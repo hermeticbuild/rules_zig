@@ -7,6 +7,7 @@ const libfork = @import("libfork");
 const lib2 = @import("lib2");
 const pruned = @import("pruned");
 const symlinked = @import("symlinked");
+const lazyhost = @import("lazyhost");
 
 pub fn main() void {
     std.debug.assert(leaf.value == 7);
@@ -20,4 +21,7 @@ pub fn main() void {
     std.debug.assert(pruned.value == 13);
     // `src/aliased.zig` is a symlink to `real.zig`; the packer followed it.
     std.debug.assert(symlinked.value == 3000);
+    // 2000 + 1: the `lazy = true` `lazyleaf` dependency is fetched eagerly and
+    // resolved through `b.lazyDependency`.
+    std.debug.assert(lazyhost.value == 2001);
 }

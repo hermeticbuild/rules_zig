@@ -31,6 +31,8 @@ const packages = [_]Package{
     .{ .name = "multi" },
     .{ .name = "pruned" },
     .{ .name = "symlinked", .symlink = .{ "real.zig", "src/aliased.zig" } },
+    .{ .name = "lazyleaf" },
+    .{ .name = "lazyhost", .patches = &.{.{ .deps = &.{"lazyleaf"} }} },
 };
 
 const Consumer = struct {
@@ -40,7 +42,7 @@ const Consumer = struct {
 
 // Manifests that resolve dependencies via `zig_packages.from_file`.
 const consumers = [_]Consumer{
-    .{ .manifest = "build.zig.zon", .deps = &.{ "leaf", "bottom", "top", "libv1", "libfork", "libv2", "multi", "pruned", "symlinked" } },
+    .{ .manifest = "build.zig.zon", .deps = &.{ "leaf", "bottom", "top", "libv1", "libfork", "libv2", "multi", "pruned", "symlinked", "lazyhost" } },
 };
 
 test "Zig packages are imported from file:// tarballs" {

@@ -1,0 +1,17 @@
+.{
+    .name = .lazyhost,
+    .version = "0.0.0",
+    .fingerprint = 0x7fbf4d34c537a82c,
+    .dependencies = .{
+        .lazyleaf = .{
+            .url = "__LAZYLEAF_URL__",
+            .hash = "__LAZYLEAF_HASH__",
+            .lazy = true,
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
