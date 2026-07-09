@@ -22,7 +22,7 @@ ATTRS = {
     ),
     "manifests": attr.string(
         default = "[]",
-        doc = "JSON list of `{repo, package, deps}` consumer manifests, where `deps` maps a declared dependency name to `{key}`, its hash key.",
+        doc = "JSON list of `{repo, package, deps}` consumer manifests, where `deps` maps a declared dependency name to `{key}`, its hash key, or for a path dependency to `{target}`, the label that provides it.",
     ),
     "config_groups": attr.string(
         default = "[]",
@@ -86,7 +86,10 @@ def _declared(name):
 
 def _package(name, version):
     if version == None:
-        return _PACKAGES[_declared(name)["key"]]
+        entry = _declared(name)
+        if "key" not in entry:
+            fail("Zig dependency '%s' is a path dependency, which is not a package; use `zig_dep`" % name)
+        return _PACKAGES[entry["key"]]
     error, key = resolve_version(_VERSIONS, name, version)
     if error != None:
         fail(error)
@@ -116,9 +119,15 @@ def zig_package_target(name, module = None, version = None):
 def zig_dep(name, module = None):
     """The label of the dependency `name` declared by the enclosing manifest.
 
-    Resolves to the dependency's module of the same name as its package; pass
-    `module` to select another module the dependency exposes.
+    A URL dependency resolves to its module of the same name as its package;
+    pass `module` to select another module it exposes. A path dependency
+    resolves to the single target its own provided manifest supplies.
     """
+    entry = _declared(name)
+    if "target" in entry:
+        if module != None:
+            fail("Zig path dependency '%s' exposes a single module; `module` is not supported" % name)
+        return Label(entry["target"])
     return zig_package_target(name, module = module)
 
 def zig_deps():
@@ -134,8 +143,8 @@ def zig_import_names():
     """
     deps = _enclosing_deps()
     remap = {}
-    for name in deps:
-        if name != _PACKAGES[deps[name]["key"]]["name"]:
+    for name, entry in deps.items():
+        if "key" in entry and name != _PACKAGES[entry["key"]]["name"]:
             remap[zig_dep(name)] = name
     return remap
 '''

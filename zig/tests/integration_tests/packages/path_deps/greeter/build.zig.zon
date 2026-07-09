@@ -1,0 +1,11 @@
+.{
+    .name = .greeter,
+    .version = "0.0.0",
+    .dependencies = .{
+        .message = .{ .path = "../message" },
+    },
+    .paths = .{
+        "build.zig.zon",
+        "greeter.zig",
+    },
+}

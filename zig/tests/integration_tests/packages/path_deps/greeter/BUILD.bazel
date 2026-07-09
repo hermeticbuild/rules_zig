@@ -1,0 +1,10 @@
+load("@rules_zig//zig:defs.bzl", "zig_library")
+load("@zig_deps//:defs.bzl", "zig_deps")
+
+zig_library(
+    name = "greeter",
+    import_name = "greeter",
+    main = "greeter.zig",
+    visibility = ["//visibility:public"],
+    deps = zig_deps(),
+)

@@ -568,14 +568,25 @@ def _zig_packages_impl(module_ctx):
             config_settings = config_settings,
         )
 
-    manifests = [
-        {
+    # Resolve each provided manifest's declared dependencies to the target that
+    # satisfies them: a URL dependency to its spoke (by hash key), a consumer
+    # path dependency to a target of the same name in its own provided
+    # manifest's package, which the user defines.
+    tag_by_label = {str(tag.build_zig_zon): tag for tag in tags}
+    manifests = []
+    for index, root in enumerate(graph["roots"]):
+        deps = {}
+        for name, key in root["deps"].items():
+            package = graph["packages"][key]
+            if package["url"] != None:
+                deps[name] = {"key": key}
+            else:
+                deps[name] = {"target": str(tag_by_label[key].build_zig_zon.same_package_label(name))}
+        manifests.append({
             "repo": tags[index].build_zig_zon.repo_name,
             "package": tags[index].build_zig_zon.package,
-            "deps": {name: {"key": key} for name, key in root["deps"].items()},
-        }
-        for index, root in enumerate(graph["roots"])
-    ]
+            "deps": deps,
+        })
 
     zig_deps_hub(
         name = "zig_deps",

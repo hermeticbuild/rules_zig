@@ -13,7 +13,12 @@ zig_binary(
     main = "main.zig",
     # `@child_module//:child_lib` is imported as `child`; its own dependencies
     # resolve through the `child_module`'s separate `from_file` manifest.
-    deps = zig_deps() + ["@child_module//:child_lib"],
+    # `greeter` is a local package that path-depends on a sibling `message`,
+    # both provided as `from_file` manifests.
+    deps = zig_deps() + [
+        "//path_deps/greeter",
+        "@child_module//:child_lib",
+    ],
 )
 
 # The extracted module graph of the multi-module fixture: two registered

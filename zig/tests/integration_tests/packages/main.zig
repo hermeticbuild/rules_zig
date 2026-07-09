@@ -18,6 +18,7 @@ const syslibdep = @import("syslibdep");
 const optdep = @import("optdep");
 const cfgdep = @import("cfgdep");
 const host = @import("host");
+const greeter = @import("greeter");
 
 pub fn main() void {
     std.debug.assert(leaf.value == 7);
@@ -62,4 +63,7 @@ pub fn main() void {
     // `foo` pulls its own nested `bar` (5) and the URL `leaf` (7), while `host`
     // links a distinct `bar` (9) — the two `bar`s stay separate by sub-path.
     std.debug.assert(host.value == 63);
+    // `greeter` path-depends on the sibling `message` package (value 1), both
+    // resolved from their provided `from_file` manifests.
+    std.debug.assert(greeter.value == 1);
 }

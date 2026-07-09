@@ -30,6 +30,8 @@ use_repo(buildbuddy, "buildbuddy_toolchain")
 
 zig_packages = use_extension("@rules_zig//zig:packages.bzl", "zig_packages")
 zig_packages.from_file(build_zig_zon = "//:build.zig.zon")
+zig_packages.from_file(build_zig_zon = "//path_deps/greeter:build.zig.zon")
+zig_packages.from_file(build_zig_zon = "//path_deps/message:build.zig.zon")
 zig_packages.system_library(
     name = "mymath",
     lib = "//:mymath_impl",

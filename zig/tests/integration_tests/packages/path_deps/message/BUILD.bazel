@@ -1,0 +1,8 @@
+load("@rules_zig//zig:defs.bzl", "zig_library")
+
+zig_library(
+    name = "message",
+    import_name = "message",
+    main = "message.zig",
+    visibility = ["//visibility:public"],
+)
