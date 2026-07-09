@@ -8,6 +8,7 @@ const lib2 = @import("lib2");
 const pruned = @import("pruned");
 const symlinked = @import("symlinked");
 const lazyhost = @import("lazyhost");
+const child = @import("child");
 
 pub fn main() void {
     std.debug.assert(leaf.value == 7);
@@ -24,4 +25,7 @@ pub fn main() void {
     // 2000 + 1: the `lazy = true` `lazyleaf` dependency is fetched eagerly and
     // resolved through `b.lazyDependency`.
     std.debug.assert(lazyhost.value == 2001);
+    // 7 + 2 + 100: `child_module` resolves its own manifest, importing `lib` at
+    // v2 (a separate repository from the root's `lib` v1).
+    std.debug.assert(child.value == 109);
 }

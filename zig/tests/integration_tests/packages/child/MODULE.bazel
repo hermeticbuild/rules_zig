@@ -1,0 +1,10 @@
+module(
+    name = "child_module",
+    version = "0.0.0",
+)
+
+bazel_dep(name = "rules_zig", version = "0.0.0")
+
+zig_packages = use_extension("@rules_zig//zig:packages.bzl", "zig_packages")
+zig_packages.from_file(build_zig_zon = "//:build.zig.zon")
+use_repo(zig_packages, "zig_deps")

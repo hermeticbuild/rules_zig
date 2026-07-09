@@ -1,0 +1,21 @@
+.{
+    .name = .child,
+    .version = "0.0.0",
+    .fingerprint = 0x2b9d6e1f7a4c8053,
+    .dependencies = .{
+        .leaf = .{
+            .url = "__LEAF_URL__",
+            .hash = "__LEAF_HASH__",
+        },
+        // The same package `lib` as the root module depends on, but a different
+        // version: the two must resolve to separate repositories (no MVS).
+        .lib = .{
+            .url = "__LIBV2_URL__",
+            .hash = "__LIBV2_HASH__",
+        },
+    },
+    .paths = .{
+        "build.zig.zon",
+        "src",
+    },
+}
