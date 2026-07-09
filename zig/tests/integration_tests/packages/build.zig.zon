@@ -35,6 +35,10 @@
             .url = "__PRUNED_URL__",
             .hash = "__PRUNED_HASH__",
         },
+        .symlinked = .{
+            .url = "__SYMLINKED_URL__",
+            .hash = "__SYMLINKED_HASH__",
+        },
     },
     .paths = .{
         "build.zig.zon",

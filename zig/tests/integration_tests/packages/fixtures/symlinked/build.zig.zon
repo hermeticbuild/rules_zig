@@ -1,0 +1,10 @@
+.{
+    .name = .symlinked,
+    .version = "0.0.0",
+    .fingerprint = 0x5063086f099ee769,
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
