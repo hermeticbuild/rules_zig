@@ -43,6 +43,7 @@ const packages = [_]Package{
     .{ .name = "cfgdep" },
     .{ .name = "host", .patches = &.{.{ .manifest = "libs/foo/build.zig.zon", .deps = &.{"leaf"} }} },
     .{ .name = "hostuser", .patches = &.{.{ .deps = &.{"host"} }} },
+    .{ .name = "srconly" },
 };
 
 const Consumer = struct {

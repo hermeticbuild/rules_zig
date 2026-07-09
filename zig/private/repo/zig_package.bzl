@@ -514,6 +514,15 @@ def _run_configurer(repository_ctx, zig, build_zig, cache, deps, available):
     # so editing the configurer re-runs configuration.
     repository_ctx.watch(Label("//zig/private/packages:module_graph.zig"))
 
+    for key in sorted(deps["packages"]):
+        package = deps["packages"][key]
+        if package["path"] != None and not repository_ctx.path(package["path"] + "/build.zig").exists:
+            fail(("The Zig package '{}' has a source-only dependency at '{}' (a `build.zig.zon` " +
+                  "with no `build.zig`); source-only dependencies are not supported.").format(
+                repository_ctx.attr.url,
+                package["path"],
+            ))
+
     repository_ctx.file("_configure/deps.zig", _dependencies_source(repository_ctx, deps, available))
 
     keys = sorted(available)
