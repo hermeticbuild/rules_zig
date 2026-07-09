@@ -31,6 +31,10 @@
             .url = "__MULTI_URL__",
             .hash = "__MULTI_HASH__",
         },
+        .pruned = .{
+            .url = "__PRUNED_URL__",
+            .hash = "__PRUNED_HASH__",
+        },
     },
     .paths = .{
         "build.zig.zon",

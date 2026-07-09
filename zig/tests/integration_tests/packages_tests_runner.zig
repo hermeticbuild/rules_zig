@@ -26,6 +26,7 @@ const packages = [_]Package{
     .{ .name = "libfork" },
     .{ .name = "libv2" },
     .{ .name = "multi" },
+    .{ .name = "pruned" },
 };
 
 const Consumer = struct {
@@ -35,7 +36,7 @@ const Consumer = struct {
 
 // Manifests that resolve dependencies via `zig_packages.from_file`.
 const consumers = [_]Consumer{
-    .{ .manifest = "build.zig.zon", .deps = &.{ "leaf", "bottom", "top", "libv1", "libfork", "libv2", "multi" } },
+    .{ .manifest = "build.zig.zon", .deps = &.{ "leaf", "bottom", "top", "libv1", "libfork", "libv2", "multi", "pruned" } },
 };
 
 test "Zig packages are imported from file:// tarballs" {
