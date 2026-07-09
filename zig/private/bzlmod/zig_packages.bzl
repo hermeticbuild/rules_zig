@@ -380,6 +380,78 @@ def collect_configs(modules):
         ignored = ignored,
     ))
 
+def _portable_key(key, pkg_dir, manifest_labels):
+    """Map a path dependency's absolute directory to a portable key.
+
+    Absolute paths are local to a single resolution and must not be persisted.
+    A path inside the resolver's package directory is a sub-tree dependency of a
+    fetched package and becomes a package-relative key; a path in module source
+    is a consumer path dependency and becomes the label of its provided manifest.
+
+    Args:
+      key: the path dependency's absolute directory.
+      pkg_dir: the resolver's package directory (holds fetched manifests).
+      manifest_labels: map from a provided manifest's absolute path to its label.
+
+    Returns:
+      the portable key.
+    """
+    if key.startswith(pkg_dir + "/"):
+        return key[len(pkg_dir) + 1:]
+
+    manifest = key + "/build.zig.zon"
+    if manifest in manifest_labels:
+        return manifest_labels[manifest]
+
+    fail("Zig path dependency at '{}' has no provided manifest; add its `build.zig.zon` as a `from_file` tag.".format(key))
+
+def _localize_paths(graph, pkg_dir, manifest_labels):
+    """Rewrite the graph's absolute path-dependency keys to portable keys."""
+    remap = {
+        key: _portable_key(key, pkg_dir, manifest_labels)
+        for key, package in graph["packages"].items()
+        if package["path"] != None
+    }
+
+    packages = {}
+    for key, package in graph["packages"].items():
+        package["deps"] = {name: remap.get(child, child) for name, child in package["deps"].items()}
+        if package["path"] != None:
+            package["path"] = remap[key]
+        packages[remap.get(key, key)] = package
+    graph["packages"] = packages
+
+    for root in graph["roots"]:
+        root["deps"] = {name: remap.get(child, child) for name, child in root["deps"].items()}
+
+    return graph
+
+def _deps_data(graph, key, reached):
+    """The `deps` closure to configure the URL package `key` against.
+
+    Every reachable package must be configurable: a sub-tree path dependency of
+    `key` is configured in-tree, its `path` being its location relative to
+    `key`; a URL dependency, or a sub-tree of one, resolves through that
+    dependency's sibling spoke (`path` is None).
+    """
+    packages = {}
+    for dep in reached:
+        package = graph["packages"][dep]
+        if dep.startswith(key + "/"):
+            path = dep[len(key) + 1:]
+        elif package["url"] != None or dep.partition("/")[0] in reached:
+            path = None
+        else:
+            fail("Zig package '{}' depends on out-of-tree path dependency '{}', which is unsupported.".format(key, dep))
+        packages[dep] = {
+            "deps": _dep_edges(package),
+            "path": path,
+        }
+    return {
+        "root_deps": _dep_edges(graph["packages"][key]),
+        "packages": packages,
+    }
+
 def _resolve_graph(module_ctx, zig, resolver, cache, pkg_dir, manifests):
     result = module_ctx.execute(
         [zig, "run", "--cache-dir", cache, "--global-cache-dir", cache, resolver, "--", zig, cache, str(pkg_dir)] +
@@ -397,6 +469,7 @@ def _zig_packages_impl(module_ctx):
     pkg_dir = module_ctx.path("pkg")
 
     manifests = []
+    manifest_labels = {}
     tags = []
     root_tags = {}
     for mod in module_ctx.modules:
@@ -406,6 +479,7 @@ def _zig_packages_impl(module_ctx):
             # The manifest is read by the resolver, which is opaque to Bazel.
             module_ctx.watch(manifest)
             manifests.append(manifest)
+            manifest_labels[str(manifest)] = str(tag.build_zig_zon)
             tags.append(tag)
             if mod.is_root:
                 root_tags[len(tags) - 1] = module_ctx.is_dev_dependency(tag)
@@ -441,36 +515,27 @@ def _zig_packages_impl(module_ctx):
         print("Ignoring a `config`/`configure` tag from non-root module '{}'.".format(ignored.module), ignored.tag)
 
     graph = _resolve_graph(module_ctx, zig, resolver, cache, pkg_dir, manifests)
-
-    for index, root in enumerate(graph["roots"]):
-        tag = tags[index]
-        for name, key in root["deps"].items():
-            if graph["packages"][key]["url"] == None:
-                fail("Zig dependency '{}' is a path dependency, which is not supported; declared by".format(name), tag)
+    graph = _localize_paths(graph, str(pkg_dir), manifest_labels)
 
     # `graph["packages"]` is topologically ordered, so each dependency's
     # reachable set is already known by the time we reach a package: accumulate
     # in one pass. A package is configured against its full closure, since its
-    # `build.zig` runs those of its dependencies.
+    # `build.zig` runs those of its dependencies. Reachability follows every
+    # edge (URL and sub-tree path), so a URL spoke reached only through a
+    # sub-tree dependency is configured too.
     reachable = {}
     hub_graph = {}
     config_groups = {}
     for key, package in graph["packages"].items():
-        if package["url"] == None:
-            continue
-        name, version = package_name_version(key)
-
         reached = {}
-        for dep_name, dep_key in package["deps"].items():
-            if graph["packages"][dep_key]["url"] == None:
-                fail("Zig package '{}' has a path dependency '{}', which is not supported inside fetched packages.".format(
-                    key,
-                    dep_name,
-                ))
+        for _dep_name, dep_key in package["deps"].items():
             reached[dep_key] = True
             for dep in reachable[dep_key]:
                 reached[dep] = True
         reachable[key] = reached
+        if package["url"] == None:
+            continue
+        name, version = package_name_version(key)
 
         hub_graph[key] = {"name": name, "version": version}
 
@@ -490,18 +555,13 @@ def _zig_packages_impl(module_ctx):
                     config_settings[cell.name] = "@zig_deps//config:cfg_" + cell.name
                     config_groups[cell.name] = {"name": cell.name, "select_on": cell.select_on}
 
+        url_deps = [dep for dep in reached if graph["packages"][dep]["url"] != None]
         zig_package(
             name = key,
             url = package["url"],
             zig_hash = key,
-            deps = json.encode({
-                "root_deps": _dep_edges(package),
-                "packages": {
-                    dep: {"deps": _dep_edges(graph["packages"][dep])}
-                    for dep in reached
-                },
-            }),
-            dep_build_files = {dep: "@{}//:build.zig".format(dep) for dep in reached},
+            deps = json.encode(_deps_data(graph, key, reached)),
+            dep_build_files = {dep: "@{}//:build.zig".format(dep) for dep in url_deps},
             system_libraries = system_libraries,
             system_integrations = system_integrations,
             configs = json.encode(configs),

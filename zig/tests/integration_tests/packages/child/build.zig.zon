@@ -13,6 +13,10 @@
             .url = "__LIBV2_URL__",
             .hash = "__LIBV2_HASH__",
         },
+        .hostuser = .{
+            .url = "__HOSTUSER_URL__",
+            .hash = "__HOSTUSER_HASH__",
+        },
     },
     .paths = .{
         "build.zig.zon",

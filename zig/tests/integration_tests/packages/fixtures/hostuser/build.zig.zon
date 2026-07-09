@@ -1,0 +1,16 @@
+.{
+    .name = .hostuser,
+    .version = "0.0.0",
+    .fingerprint = 0x36e1685e427d0497,
+    .dependencies = .{
+        .host = .{
+            .url = "__HOST_URL__",
+            .hash = "__HOST_HASH__",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

@@ -17,6 +17,7 @@ const cppdep = @import("cppdep");
 const syslibdep = @import("syslibdep");
 const optdep = @import("optdep");
 const cfgdep = @import("cfgdep");
+const host = @import("host");
 
 pub fn main() void {
     std.debug.assert(leaf.value == 7);
@@ -39,6 +40,9 @@ pub fn main() void {
     // 7 + 2 + 100: `child_module` resolves its own manifest, importing `lib` at
     // v2 (a separate repository from the root's `lib` v1).
     std.debug.assert(child.value == 109);
+    // `host`'s value + 1: `hostuser` depends on the URL package `host`, so its
+    // spoke configures `host`'s sub-tree path dependencies through `host`'s.
+    std.debug.assert(child.host_value == 64);
     // Calls libc's `getpid`; links only if the `usec` module pulls in libc.
     std.debug.assert(usec.pid() > 0);
     // 3*14 + 7*2, proving each C source got its own `-DSCALE` copts.
@@ -54,4 +58,8 @@ pub fn main() void {
     // cell and `relonly` (returns 2) in the `rel` cell; the build's optimize
     // mode selects the cell, matching the mode `cfgdep` itself compiles under.
     std.debug.assert(cfgdep.value() == @as(c_int, if (builtin.mode == .debug) 1 else 2));
+    // (5 + 7 + 42) + 9: `host` has sub-tree path dependencies `foo` and `bar`;
+    // `foo` pulls its own nested `bar` (5) and the URL `leaf` (7), while `host`
+    // links a distinct `bar` (9) — the two `bar`s stay separate by sub-path.
+    std.debug.assert(host.value == 63);
 }

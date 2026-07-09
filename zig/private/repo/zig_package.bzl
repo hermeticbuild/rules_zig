@@ -29,11 +29,13 @@ ATTRS = {
         default = "{\"root_deps\": [], \"packages\": {}}",
         doc = """\
 JSON `{root_deps, packages}` describing the `@dependencies` closure used
-to configure the package; each dependency edge is `[name, key, lazy]`.
+to configure the package; each package carries its `deps` and a `path`
+(its location as a sub-tree of this package, or null for a package in another
+spoke). Each dependency edge is `[name, key, lazy]`.
 """,
     ),
     "dep_build_files": attr.string_keyed_label_dict(
-        doc = "Map from each dependency package hash to its `build.zig`, used to wire `@dependencies`.",
+        doc = "Map from each URL dependency's hash to its `build.zig`, used to wire `@dependencies` (sub-tree dependencies are configured in-tree).",
     ),
     "system_libraries": attr.string_keyed_label_dict(
         doc = "Map from a system-library name (as passed to `linkSystemLibrary`) to a `cc_library` or similar providing it.",
@@ -83,6 +85,20 @@ zig_library(
 )
 """
 
+# A module owned by an in-tree sub-tree path dependency: its target is
+# namespaced by the sub-path so identically named modules in different sub-trees
+# do not collide, while its `import_name` stays the module's own name.
+_ZIG_LIBRARY_SUBTREE = """
+zig_library(
+    name = "{name}",
+    main = "{main}",
+    import_name = "{import_name}",
+    srcs = glob(["{subpath}/**/*.zig"], exclude = ["{main}"]),
+    deps = {deps},
+    import_names = {import_names},
+)
+"""
+
 _CC_LOAD = """\
 load("@rules_cc//cc:defs.bzl", "cc_library")
 
@@ -126,18 +142,38 @@ cc_library(
 )
 """
 
+def _is_subtree(packages, owner):
+    return owner in packages and packages[owner]["path"] != None
+
+def _target_name(packages, owner, module):
+    # Root-package modules keep their bare name; an in-tree sub-tree module is
+    # namespaced by its sub-path so identically named modules in different
+    # sub-trees do not collide.
+    if not owner:
+        return module
+    return packages[owner]["path"] + "/" + module
+
+def _spoke_label(labels, key, target):
+    # A package in another spoke is a URL dependency, keyed by its hash, or a
+    # sub-tree of one, keyed `<hash>/<sub-path>`, whose targets that spoke
+    # namespaces by the sub-path. `labels` maps each hash to a label in its spoke.
+    spoke, _, sub_path = key.partition("/")
+    return labels[spoke].same_package_label(sub_path + "/" + target if sub_path else target)
+
 def _literal_copts(flags):
     # Rendered `copts` undergo Make-variable expansion, but the package's flags
     # are literal.
     return json.encode([flag.replace("$", "$$") for flag in flags])
 
-def _render_c_library(url, module):
+def _render_c_library(url, module, packages, owner):
     """Render the `cc_library` targets for a module's vendored C sources.
 
     Returns:
       `(chunks, dep)`: the `cc_library` text chunks and the label the owning
       module links against, or `([], None)` when the module has no C sources.
     """
+    prefix = (packages[owner]["path"] + "/") if owner else ""
+
     c_sources = []
     for csrc in module.get("csrcs", []):
         if csrc["language"] not in (None, "c", "cpp"):
@@ -146,11 +182,11 @@ def _render_c_library(url, module):
                 module["name"],
                 csrc["language"],
             ))
-        c_sources.append((csrc["path"], csrc["flags"]))
+        c_sources.append((prefix + csrc["path"], csrc["flags"]))
     if not c_sources:
         return [], None
 
-    includes = [inc["path"] for inc in module.get("include_dirs", [])]
+    includes = [prefix + inc["path"] for inc in module.get("include_dirs", [])]
 
     # Headers can live in an include directory or beside the C sources.
     header_dirs = {inc: None for inc in includes}
@@ -162,7 +198,7 @@ def _render_c_library(url, module):
         for ext in _HEADER_EXTENSIONS
     ]
 
-    name = module["name"] + ".cinc"
+    name = _target_name(packages, owner, module["name"]) + ".cinc"
     headers = name + ".hdrs"
     chunks = [_CC_HEADERS.format(
         name = headers,
@@ -192,12 +228,15 @@ def _render_c_library(url, module):
     chunks.append(_CC_LIBRARY_GROUP.format(name = name, deps = json.encode(group_labels)))
     return chunks, ":" + name
 
-def _module_dep_label(repository_ctx, imported):
-    # A same-package import resolves to a sibling target here; a cross-package
-    # import resolves to the module's target in the dependency's own spoke.
-    if imported["package"] == "":
+def _module_dep_label(repository_ctx, imported, packages):
+    # A same-package or in-tree sub-tree import resolves to a sibling target
+    # here; any other import resolves to the module's target in its spoke.
+    key = imported["package"]
+    if key == "":
         return ":" + imported["module"]
-    return str(repository_ctx.attr.dep_build_files[imported["package"]].same_package_label(imported["module"]))
+    if _is_subtree(packages, key):
+        return ":" + _target_name(packages, key, imported["module"])
+    return str(_spoke_label(repository_ctx.attr.dep_build_files, key, imported["module"]))
 
 def _cells(repository_ctx, manifest):
     # The configurer names the cells it merged, fallback first; the `configs`
@@ -243,12 +282,12 @@ def _render_select(cells, config_settings, by_cell):
     lines.append("})")
     return "\n".join(lines)
 
-def _module_deps(repository_ctx, module, cell, cc_dep):
+def _module_deps(repository_ctx, module, cell, cc_dep, packages):
     """The `deps` and `import_names` of a module's `zig_library` in one cell."""
     deps = []
     import_names = {}
     for imported in _field(module, "imports", [], cell):
-        label = _module_dep_label(repository_ctx, imported)
+        label = _module_dep_label(repository_ctx, imported, packages)
         deps.append(label)
         if imported["name"] != imported["module"]:
             import_names[label] = imported["name"]
@@ -281,13 +320,15 @@ def _module_deps(repository_ctx, module, cell, cc_dep):
 # do, so the importer requires these to agree across cells.
 _INVARIANT_FIELDS = ["root_source", "csrcs", "include_dirs"]
 
-def _render_libraries(repository_ctx, modules, cells):
+def _render_libraries(repository_ctx, modules, cells, packages):
     """Render a `zig_library` for each module this package owns.
 
     A dependency is imported under its own name by default; an import under a
     different name is remapped through `import_names`. Vendored C sources become
-    sibling `cc_library` targets the module links against. Modules owned by a
-    dependency are generated in that dependency's own spoke and skipped here.
+    sibling `cc_library` targets the module links against. Root-package modules
+    become top-level libraries; a module owned by an in-tree sub-tree path
+    dependency becomes a library scoped to its sub-path; a module owned by a URL
+    dependency lives in that dependency's own spoke and is skipped here.
 
     A module's dependencies, libc linkage and system libraries may vary across
     the configuration matrix, rendering as a `select()` on the cells'
@@ -302,7 +343,8 @@ def _render_libraries(repository_ctx, modules, cells):
     cc_chunks = []
     library_chunks = []
     for module in modules:
-        if module["package"] != "":
+        owner = module["package"]
+        if owner != "" and not _is_subtree(packages, owner):
             continue
 
         for cell in cells:
@@ -323,22 +365,35 @@ def _render_libraries(repository_ctx, modules, cells):
                     field,
                 ))
 
-        chunks, cc_dep = _render_c_library(repository_ctx.attr.url, module)
+        chunks, cc_dep = _render_c_library(repository_ctx.attr.url, module, packages, owner)
         cc_chunks.extend(chunks)
 
         deps_by_cell = {}
         names_by_cell = {}
         for cell in cells:
-            deps, import_names = _module_deps(repository_ctx, module, cell.name, cc_dep)
+            deps, import_names = _module_deps(repository_ctx, module, cell.name, cc_dep, packages)
             deps_by_cell[cell.name] = deps
             names_by_cell[cell.name] = import_names
 
-        library_chunks.append(_ZIG_LIBRARY.format(
-            name = module["name"],
-            main = module["root_source"],
-            deps = _render_select(cells, config_settings, deps_by_cell),
-            import_names = _render_select(cells, config_settings, names_by_cell),
-        ))
+        deps = _render_select(cells, config_settings, deps_by_cell)
+        import_names = _render_select(cells, config_settings, names_by_cell)
+        if owner == "":
+            library_chunks.append(_ZIG_LIBRARY.format(
+                name = module["name"],
+                main = module["root_source"],
+                deps = deps,
+                import_names = import_names,
+            ))
+        else:
+            subpath = packages[owner]["path"]
+            library_chunks.append(_ZIG_LIBRARY_SUBTREE.format(
+                name = _target_name(packages, owner, module["name"]),
+                import_name = module["name"],
+                main = subpath + "/" + module["root_source"],
+                subpath = subpath,
+                deps = deps,
+                import_names = import_names,
+            ))
     return "".join(cc_chunks + library_chunks), len(cc_chunks) > 0
 
 # Directories the rule creates in the repository root for its own use.
@@ -394,6 +449,11 @@ def _edge_lines(edges, indent):
         for name, key, _lazy in edges
     ]
 
+def _dep_build_zig(repository_ctx, key, package):
+    if package["path"] != None:
+        return repository_ctx.path(package["path"] + "/build.zig")
+    return repository_ctx.path(_spoke_label(repository_ctx.attr.dep_build_files, key, "build.zig"))
+
 def _available(deps, requested):
     """The packages reachable through eager or `requested` lazy dependency edges."""
     packages = deps["packages"]
@@ -426,7 +486,7 @@ def _dependencies_source(repository_ctx, deps, available):
             lines.append("        pub const available = false;")
             lines.append("    };")
             continue
-        build_zig = repository_ctx.path(repository_ctx.attr.dep_build_files[key])
+        build_zig = _dep_build_zig(repository_ctx, key, package)
         lines.append("        pub const build_root = {};".format(_zig_string(str(build_zig.dirname))))
         lines.append("        pub const build_zig = @import(\"{}\");".format(key))
         lines.append("        pub const deps: []const struct { []const u8, []const u8 } = &.{")
@@ -463,11 +523,15 @@ def _run_configurer(repository_ctx, zig, build_zig, cache, deps, available):
         args.extend(["--dep", key])
     args.append("-Mdeps=" + str(repository_ctx.path("_configure/deps.zig")))
     for key in keys:
-        dep_build_zig = repository_ctx.path(repository_ctx.attr.dep_build_files[key])
+        package = deps["packages"][key]
+        dep_build_zig = _dep_build_zig(repository_ctx, key, package)
 
-        # The configurer is compiled against each dependency's `build.zig`, so
-        # a change to one must re-run configuration.
-        repository_ctx.watch(dep_build_zig)
+        # The configurer is compiled against each dependency's `build.zig`, so a
+        # change to one in another spoke must re-run configuration. A sub-tree
+        # `build.zig` of this package is inside this spoke already, and Bazel
+        # forbids watching a path under the repository's own working directory.
+        if package["path"] == None:
+            repository_ctx.watch(dep_build_zig)
         args.append("-M{}={}".format(key, dep_build_zig))
     args.extend([
         "--cache-dir",
@@ -545,7 +609,8 @@ def _zig_package_impl(repository_ctx):
         repository_ctx.file("module_manifest.json", manifest)
 
         decoded = json.decode(manifest)
-        libraries, has_cc = _render_libraries(repository_ctx, decoded["modules"], _cells(repository_ctx, decoded))
+        packages = json.decode(repository_ctx.attr.deps)["packages"]
+        libraries, has_cc = _render_libraries(repository_ctx, decoded["modules"], _cells(repository_ctx, decoded), packages)
         loads = _LIBRARY_LOAD + (_CC_LOAD if has_cc else "")
         build = loads + build + libraries + _EXPORT_MANIFEST
 
