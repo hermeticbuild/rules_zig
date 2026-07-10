@@ -1,0 +1,10 @@
+.{
+    .name = .tgtdep,
+    .version = "0.0.0",
+    .fingerprint = 0xe96fffc0c791cd2d,
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

@@ -45,6 +45,7 @@ const packages = [_]Package{
     .{ .name = "hostuser", .patches = &.{.{ .deps = &.{"host"} }} },
     .{ .name = "srconly" },
     .{ .name = "genopts" },
+    .{ .name = "tgtdep" },
 };
 
 const Consumer = struct {
@@ -54,7 +55,7 @@ const Consumer = struct {
 
 // Manifests that resolve dependencies via `zig_packages.from_file`.
 const consumers = [_]Consumer{
-    .{ .manifest = "build.zig.zon", .deps = &.{ "leaf", "bottom", "top", "libv1", "libfork", "libv2", "multi", "pruned", "symlinked", "lazyhost", "lazydirect", "usec", "cdep", "cppdep", "syslibdep", "optdep", "cfgdep", "host", "srconly", "genopts" } },
+    .{ .manifest = "build.zig.zon", .deps = &.{ "leaf", "bottom", "top", "libv1", "libfork", "libv2", "multi", "pruned", "symlinked", "lazyhost", "lazydirect", "usec", "cdep", "cppdep", "syslibdep", "optdep", "cfgdep", "host", "srconly", "genopts", "tgtdep" } },
     .{ .manifest = "child/build.zig.zon", .deps = &.{ "leaf", "libv2", "hostuser" } },
 };
 
@@ -118,7 +119,7 @@ test "Zig packages are imported from file:// tarballs" {
     // The extracted module graph is exposed per package; assert it against the
     // golden manifests.
     const manifest_result = try ctx.exec_bazel(.{
-        .argv = &[_][]const u8{ "test", "//:multi_manifest_test", "//:cfgdep_manifest_test" },
+        .argv = &[_][]const u8{ "test", "//:multi_manifest_test", "//:cfgdep_manifest_test", "//:tgtdep_manifest_test" },
     });
     defer manifest_result.deinit();
     try std.testing.expect(manifest_result.success);

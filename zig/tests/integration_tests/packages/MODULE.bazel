@@ -49,6 +49,18 @@ zig_packages.system_library(
     name = "relonly",
     lib = "//:relonly_impl",
 )
+zig_packages.system_library(
+    name = "posixonly",
+    lib = "//:posixonly_impl",
+)
+zig_packages.system_library(
+    name = "winonly",
+    lib = "//:winonly_impl",
+)
+zig_packages.system_library(
+    name = "maconly",
+    lib = "//:maconly_impl",
+)
 zig_packages.config(
     name = "dbg",
     optimize = "debug",
@@ -64,5 +76,37 @@ zig_packages.configure(
     ],
     fallback = "dbg",
     package = "cfgdep",
+)
+zig_packages.config(
+    name = "linux",
+    target = "x86_64-linux-gnu",
+)
+zig_packages.config(
+    name = "windows",
+    select_on = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:windows",
+    ],
+    target = "x86_64-windows-gnu",
+)
+
+# `@platforms//cpu:arm64` and `@platforms//os:macos` are aliases; the
+# `config_setting_group` keys on the underlying constraint values.
+zig_packages.config(
+    name = "macos",
+    select_on = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:osx",
+    ],
+    target = "aarch64-macos",
+)
+zig_packages.configure(
+    configs = [
+        "linux",
+        "macos",
+        "windows",
+    ],
+    fallback = "linux",
+    package = "tgtdep",
 )
 use_repo(zig_packages, "zig_deps")

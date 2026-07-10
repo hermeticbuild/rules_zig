@@ -20,6 +20,7 @@ const cfgdep = @import("cfgdep");
 const host = @import("host");
 const greeter = @import("greeter");
 const genopts = @import("genopts");
+const tgtdep = @import("tgtdep");
 
 pub fn main() void {
     std.debug.assert(leaf.value == 7);
@@ -70,4 +71,8 @@ pub fn main() void {
     // `feature` is true: `genopts` imports a `b.addOptions()` module whose
     // generated source the configurer wrote into the package's repository.
     std.debug.assert(genopts.value == 7);
+    // The `configure` matrix configures `tgtdep` once per target OS, linking
+    // `posixonly` (returns 7) for the fallback `linux` cell and `winonly` for
+    // the `windows` cell; the host build selects the `linux` cell.
+    std.debug.assert(tgtdep.value() == 7);
 }

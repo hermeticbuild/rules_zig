@@ -67,3 +67,33 @@ diff_test(
     file1 = "cfgdep_manifest.expected.json",
     file2 = zig_package_file("cfgdep", "module_manifest.json"),
 )
+
+# Provide the system libraries the `tgtdep` package links under each cell of
+# its target `configure` matrix: `posixonly` for the fallback `linux` cell,
+# `winonly` for the `windows` cell, `maconly` for the `macos` cell.
+cc_library(
+    name = "posixonly_impl",
+    srcs = ["posixonly.c"],
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
+    name = "winonly_impl",
+    srcs = ["winonly.c"],
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
+    name = "maconly_impl",
+    srcs = ["maconly.c"],
+    visibility = ["//visibility:public"],
+)
+
+# `tgtdep` links a different system library per target OS; its `configure`
+# matrix configures it once per target, pushing the divergence into a `select`
+# overlay on the extracted module graph.
+diff_test(
+    name = "tgtdep_manifest_test",
+    file1 = "tgtdep_manifest.expected.json",
+    file2 = zig_package_file("tgtdep", "module_manifest.json"),
+)

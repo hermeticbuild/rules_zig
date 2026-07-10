@@ -1,0 +1,1 @@
+{"cells":["linux","macos","windows"],"modules":[{"name":"tgtdep","package":"","root_source":"src/tgtdep.zig","system_libs":["posixonly"],"imports":[],"select":{"system_libs":{"linux":["posixonly"],"macos":["maconly"],"windows":["winonly"]}}}]}
