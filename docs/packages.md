@@ -11,7 +11,7 @@ zig_packages = use_extension("@rules_zig//zig:packages.bzl", "zig_packages")
 zig_packages.from_file(<a href="#zig_packages.from_file-build_zig_zon">build_zig_zon</a>)
 zig_packages.system_library(<a href="#zig_packages.system_library-name">name</a>, <a href="#zig_packages.system_library-lib">lib</a>)
 zig_packages.system_integration(<a href="#zig_packages.system_integration-name">name</a>)
-zig_packages.config(<a href="#zig_packages.config-name">name</a>, <a href="#zig_packages.config-optimize">optimize</a>, <a href="#zig_packages.config-select_on">select_on</a>, <a href="#zig_packages.config-zig_flags">zig_flags</a>)
+zig_packages.config(<a href="#zig_packages.config-name">name</a>, <a href="#zig_packages.config-optimize">optimize</a>, <a href="#zig_packages.config-select_on">select_on</a>, <a href="#zig_packages.config-target">target</a>, <a href="#zig_packages.config-zig_flags">zig_flags</a>)
 zig_packages.configure(<a href="#zig_packages.configure-configs">configs</a>, <a href="#zig_packages.configure-fallback">fallback</a>, <a href="#zig_packages.configure-package">package</a>, <a href="#zig_packages.configure-version">version</a>)
 </pre>
 
@@ -115,6 +115,7 @@ Declare a build-configuration matrix cell that a `configure` tag can apply to Zi
 | <a id="zig_packages.config-name"></a>name |  Module-local name of this configuration cell.   | <a href="https://bazel.build/concepts/labels#target-names">Name</a> | required |  |
 | <a id="zig_packages.config-optimize"></a>optimize |  Zig optimize mode: `debug`, `release_safe`, `release_small` or `release_fast`.   | String | optional |  `""`  |
 | <a id="zig_packages.config-select_on"></a>select_on |  Extra Bazel condition labels ANDed into this cell's `select()` branch.   | List of strings | optional |  `[]`  |
+| <a id="zig_packages.config-target"></a>target |  Zig target triple (e.g. `x86_64-linux-gnu`) to configure the package for, passed as `-Dtarget=<triple>`. The package's `build.zig` must accept it, typically via `b.standardTargetOptions`.   | String | optional |  `""`  |
 | <a id="zig_packages.config-zig_flags"></a>zig_flags |  Extra Zig build options as `NAME=VALUE`, each passed as `-DNAME=VALUE`.   | List of strings | optional |  `[]`  |
 
 <a id="zig_packages.configure"></a>

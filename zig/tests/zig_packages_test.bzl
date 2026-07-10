@@ -13,8 +13,8 @@ load(
 )
 load("//zig/private/repo:zig_deps_index.bzl", "index_packages", "resolve_version")
 
-def _config_tag(name, optimize = "", select_on = [], zig_flags = []):
-    return struct(name = name, optimize = optimize, select_on = select_on, zig_flags = zig_flags)
+def _config_tag(name, optimize = "", target = "", select_on = [], zig_flags = []):
+    return struct(name = name, optimize = optimize, target = target, select_on = select_on, zig_flags = zig_flags)
 
 def _configure_tag(configs, fallback, package = "", version = ""):
     return struct(configs = configs, fallback = fallback, package = package, version = version)
@@ -158,6 +158,17 @@ def _resolve_cell_test_impl(ctx):
     asserts.equals(env, "opt", cell.name)
     asserts.equals(env, ["@rules_zig//zig/config/mode:release_fast"], cell.select_on)
     asserts.equals(env, ["-Doptimize=fast"], cell.zig_options)
+
+    # `target` expands to a `-Dtarget` build option, keyed by caller-supplied
+    # `select_on` conditions.
+    error, cell = resolve_cell(_config_tag(
+        "win",
+        target = "x86_64-windows-gnu",
+        select_on = ["@platforms//cpu:x86_64", "@platforms//os:windows"],
+    ))
+    asserts.equals(env, None, error)
+    asserts.equals(env, ["@platforms//cpu:x86_64", "@platforms//os:windows"], cell.select_on)
+    asserts.equals(env, ["-Dtarget=x86_64-windows-gnu"], cell.zig_options)
 
     # `select_on` is appended verbatim; `zig_flags` become `-DNAME=VALUE`.
     error, cell = resolve_cell(_config_tag(

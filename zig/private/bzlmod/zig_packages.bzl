@@ -149,6 +149,9 @@ config = tag_class(
         "optimize": attr.string(
             doc = "Zig optimize mode: `debug`, `release_safe`, `release_small` or `release_fast`.",
         ),
+        "target": attr.string(
+            doc = "Zig target triple (e.g. `x86_64-linux-gnu`) to configure the package for, passed as `-Dtarget=<triple>`. The package's `build.zig` must accept it, typically via `b.standardTargetOptions`.",
+        ),
         "select_on": attr.string_list(
             doc = "Extra Bazel condition labels ANDed into this cell's `select()` branch.",
         ),
@@ -204,7 +207,8 @@ def resolve_cell(tag):
     """Resolve a `config` tag into a build-configuration matrix cell.
 
     `optimize` expands to `//zig/config/mode:mode` and `-Doptimize=Mode`;
-    `select_on` is appended verbatim and `zig_flags` become `-DNAME=VALUE`.
+    `target` expands to `-Dtarget=<triple>`; `select_on` is appended verbatim
+    and `zig_flags` become `-DNAME=VALUE`.
 
     Args:
       tag: a `config` tag.
@@ -223,6 +227,9 @@ def resolve_cell(tag):
             return (_config_error("config '{}' has unknown optimize mode '{}'".format(tag.name, tag.optimize), tag), None)
         select_on.append("@rules_zig//zig/config/mode:" + tag.optimize)
         zig_options.append("-Doptimize=" + mode)
+
+    if tag.target:
+        zig_options.append("-Dtarget=" + tag.target)
 
     select_on.extend(tag.select_on)
 
