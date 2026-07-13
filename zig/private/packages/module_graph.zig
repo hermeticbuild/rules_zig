@@ -132,7 +132,8 @@ pub const Module = struct {
     /// has no file in the package tree; null for a file-backed module.
     generated_source: ?[]const u8,
     /// Whether the module links the C standard library, by its own setting
-    /// (`.link_libc = true`, `linkSystemLibrary("c", .{})`).
+    /// (`.link_libc = true`, `linkSystemLibrary("c", .{})`) or through a C
+    /// library it links (`linkLibrary`).
     link_libc: bool,
     /// As `link_libc`, for the C++ standard library.
     link_libcpp: bool,
@@ -177,6 +178,17 @@ const CInfo = struct {
     include_dirs: []const IncludeDir,
     system_libs: []const []const u8,
     unsupported: []const []const u8,
+    link_libc: bool,
+    link_libcpp: bool,
+};
+
+const CAccum = struct {
+    csrcs: std.StringArrayHashMapUnmanaged(CSource) = .empty,
+    include_dirs: std.StringArrayHashMapUnmanaged(IncludeDir) = .empty,
+    system_libs: std.StringArrayHashMapUnmanaged(void) = .empty,
+    unsupported: std.StringArrayHashMapUnmanaged(void) = .empty,
+    link_libc: bool = false,
+    link_libcpp: bool = false,
 };
 
 fn joinPath(arena: Allocator, base: []const u8, sub: []const u8) ![]const u8 {
@@ -199,85 +211,117 @@ fn nonEmptyFlags(arena: Allocator, flags: []const []const u8) ![]const []const u
     return kept.items;
 }
 
+fn appendUniqueCSource(arena: Allocator, csrcs: *std.StringArrayHashMapUnmanaged(CSource), source: CSource) !void {
+    var c = source;
+    c.flags = try nonEmptyFlags(arena, source.flags);
+    var key: std.ArrayList(u8) = .empty;
+    try key.appendSlice(arena, c.path);
+    try key.append(arena, 0);
+    try key.appendSlice(arena, c.language orelse "");
+    for (c.flags) |flag| {
+        try key.append(arena, 0);
+        try key.appendSlice(arena, flag);
+    }
+    try csrcs.put(arena, key.items, c);
+}
 fn appendIncludeDir(
     arena: Allocator,
-    include_dirs: *std.ArrayList(IncludeDir),
+    include_dirs: *std.StringArrayHashMapUnmanaged(IncludeDir),
     unsupported: *std.StringArrayHashMapUnmanaged(void),
     kind: []const u8,
     lazy_path: LazyPath,
 ) !void {
     const resolved_path = lazyPathString(arena, lazy_path) catch |err| return reportPath(arena, unsupported, lazy_path, err);
     if (resolved_path) |path| {
-        try include_dirs.append(arena, .{ .kind = kind, .path = path });
+        try appendUniqueIncludeDir(arena, include_dirs, .{ .kind = kind, .path = path });
     } else {
         try unsupported.put(arena, "an include path with a generated or out-of-package location", {});
     }
 }
 
-/// Collect `module`'s C information; `root_source_error` is how `lazyPathString`
-/// rejected its root source, if it did.
-fn collectC(arena: Allocator, builder: *Build, module: *Build.Module, root_source_error: ?ResolvePathError) !CInfo {
-    var csrcs: std.ArrayList(CSource) = .empty;
-    var include_dirs: std.ArrayList(IncludeDir) = .empty;
-    var system_libs: std.ArrayList([]const u8) = .empty;
-    var unsupported: std.StringArrayHashMapUnmanaged(void) = .empty;
-    if (root_source_error) |err| try reportPath(arena, &unsupported, module.root_source_file.?, err);
+fn appendUniqueIncludeDir(arena: Allocator, include_dirs: *std.StringArrayHashMapUnmanaged(IncludeDir), dir: IncludeDir) !void {
+    const key = try std.fmt.allocPrint(arena, "{s}\x00{s}", .{ dir.kind, dir.path });
+    try include_dirs.put(arena, key, dir);
+}
 
-    // A path option enters the options source only when the step runs.
-    if (optionsStep(builder, module.root_source_file)) |options| {
-        if (options.files.items.len + options.directories.items.len + options.untracked_paths.items.len > 0) {
-            try unsupported.put(arena, "a path option (`addOptionPath`, `addOptionPathDirectory`, or `addOptionPathUntracked`)", {});
-        }
-    }
+/// Accumulate `module`'s C into `acc`, recursing into the C libraries it links
+/// (`linkLibrary`, `addObject`): a package compiles vendored C as such a
+/// library and links it into its Zig module.
+fn collectCInto(arena: Allocator, acc: *CAccum, module: *Build.Module) !void {
+    if (module.link_libc == true) acc.link_libc = true;
+    if (module.link_libcpp == true) acc.link_libcpp = true;
 
     for (module.link_objects.items) |link_object| switch (link_object) {
         .c_source_file => |c| {
             const resolved_path = lazyPathString(arena, c.file) catch |err| {
-                try reportPath(arena, &unsupported, c.file, err);
+                try reportPath(arena, &acc.unsupported, c.file, err);
                 continue;
             };
             if (resolved_path) |path| {
-                try csrcs.append(arena, .{ .path = path, .flags = try nonEmptyFlags(arena, c.flags), .language = languageName(c.language) });
+                try appendUniqueCSource(arena, &acc.csrcs, .{ .path = path, .flags = c.flags, .language = languageName(c.language) });
             } else {
-                try unsupported.put(arena, "a C source file with a generated or out-of-package path", {});
+                try acc.unsupported.put(arena, "a C source file with a generated or out-of-package path", {});
             }
         },
         .c_source_files => |c| {
             const resolved_path = lazyPathString(arena, c.root) catch |err| {
-                try reportPath(arena, &unsupported, c.root, err);
+                try reportPath(arena, &acc.unsupported, c.root, err);
                 continue;
             };
             if (resolved_path) |root_path| {
                 for (c.files) |file| {
                     const path = try normalizePath(arena, try joinPath(arena, root_path, file));
-                    try csrcs.append(arena, .{ .path = path, .flags = try nonEmptyFlags(arena, c.flags), .language = languageName(c.language) });
+                    try appendUniqueCSource(arena, &acc.csrcs, .{ .path = path, .flags = c.flags, .language = languageName(c.language) });
                 }
             } else {
-                try unsupported.put(arena, "C source files with a generated or out-of-package root", {});
+                try acc.unsupported.put(arena, "C source files with a generated or out-of-package root", {});
             }
         },
-        .system_lib => |lib| try system_libs.append(arena, lib.name),
-        .static_path => try unsupported.put(arena, "a precompiled object or static library (`addObjectFile`)", {}),
-        .assembly_file => try unsupported.put(arena, "an assembly source file", {}),
-        .win32_resource_file => try unsupported.put(arena, "a Win32 resource file", {}),
-        .other_step => try unsupported.put(arena, "a linked compile step (`linkLibrary`/`addObject`)", {}),
+        .system_lib => |lib| try acc.system_libs.put(arena, lib.name, {}),
+        .static_path => try acc.unsupported.put(arena, "a precompiled object or static library (`addObjectFile`)", {}),
+        .assembly_file => try acc.unsupported.put(arena, "an assembly source file", {}),
+        .win32_resource_file => try acc.unsupported.put(arena, "a Win32 resource file", {}),
+        .other_step => |compile| {
+            if (compile.root_module.root_source_file != null) {
+                try acc.unsupported.put(arena, "a linked compile step with its own Zig root source (`linkLibrary` of a Zig library)", {});
+            } else {
+                try collectCInto(arena, acc, compile.root_module);
+            }
+        },
     };
 
     for (module.include_dirs.items) |include_dir| switch (include_dir) {
-        .path => |lp| try appendIncludeDir(arena, &include_dirs, &unsupported, "path", lp),
-        .path_system => |lp| try appendIncludeDir(arena, &include_dirs, &unsupported, "path_system", lp),
-        .path_after => |lp| try appendIncludeDir(arena, &include_dirs, &unsupported, "path_after", lp),
-        .embed_path => try unsupported.put(arena, "an embed include path (`addEmbedPath`)", {}),
-        .framework_path, .framework_path_system => try unsupported.put(arena, "a framework include path", {}),
-        .config_header_step => try unsupported.put(arena, "a generated config header (`addConfigHeader`)", {}),
-        .other_step => try unsupported.put(arena, "an include path from a linked compile step", {}),
+        .path => |lp| try appendIncludeDir(arena, &acc.include_dirs, &acc.unsupported, "path", lp),
+        .path_system => |lp| try appendIncludeDir(arena, &acc.include_dirs, &acc.unsupported, "path_system", lp),
+        .path_after => |lp| try appendIncludeDir(arena, &acc.include_dirs, &acc.unsupported, "path_after", lp),
+        .embed_path => try acc.unsupported.put(arena, "an embed include path (`addEmbedPath`)", {}),
+        .framework_path, .framework_path_system => try acc.unsupported.put(arena, "a framework include path", {}),
+        .config_header_step => try acc.unsupported.put(arena, "a generated config header (`addConfigHeader`)", {}),
+        // `linkLibrary` pairs this with a `.other_step` link object above, which
+        // folds the linked library's own include directories; nothing to add.
+        .other_step => {},
     };
+}
 
+/// Collect `module`'s C information; `root_source_error` is how `lazyPathString`
+/// rejected its root source, if it did.
+fn collectC(arena: Allocator, builder: *Build, module: *Build.Module, root_source_error: ?ResolvePathError) !CInfo {
+    var acc: CAccum = .{};
+    if (root_source_error) |err| try reportPath(arena, &acc.unsupported, module.root_source_file.?, err);
+    try collectCInto(arena, &acc, module);
+    // A path option enters the options source only when the step runs.
+    if (optionsStep(builder, module.root_source_file)) |options| {
+        if (options.files.items.len + options.directories.items.len + options.untracked_paths.items.len > 0) {
+            try acc.unsupported.put(arena, "a path option (`addOptionPath`, `addOptionPathDirectory`, or `addOptionPathUntracked`)", {});
+        }
+    }
     return .{
-        .csrcs = csrcs.items,
-        .include_dirs = include_dirs.items,
-        .system_libs = system_libs.items,
-        .unsupported = unsupported.keys(),
+        .csrcs = acc.csrcs.values(),
+        .include_dirs = acc.include_dirs.values(),
+        .system_libs = acc.system_libs.keys(),
+        .unsupported = acc.unsupported.keys(),
+        .link_libc = acc.link_libc,
+        .link_libcpp = acc.link_libcpp,
     };
 }
 
@@ -298,6 +342,15 @@ pub fn collectModules(arena: Allocator, builder: *Build) ![]const Module {
             },
             error.OutOfMemory => |e| return e,
         };
+        const generated_source = generatedOptionsSource(builder, module.root_source_file);
+        // A module with neither a Zig root source nor a generated source is a
+        // pure C-library carrier (`b.addLibrary` over C sources only); it is
+        // never a `zig_library` and reaches the graph only by being linked, so
+        // it is not emitted here: its C folds into the linking module. So is a
+        // module rooted in another step's output (e.g. aro's `generateDef`); a
+        // dep on it is undeclared, harmless while only a build.zig imports it.
+        if (root_source == null and root_source_error == null and generated_source == null) continue;
+
         var imports: std.ArrayList(Import) = .empty;
         for (module.import_table.keys(), module.import_table.values()) |import_name, imported| {
             try imports.append(arena, .{
@@ -311,9 +364,9 @@ pub fn collectModules(arena: Allocator, builder: *Build) ![]const Module {
             .name = names.get(module).?,
             .package = module.owner.pkg_hash,
             .root_source = root_source,
-            .generated_source = generatedOptionsSource(builder, module.root_source_file),
-            .link_libc = module.link_libc == true,
-            .link_libcpp = module.link_libcpp == true,
+            .generated_source = generated_source,
+            .link_libc = c.link_libc,
+            .link_libcpp = c.link_libcpp,
             .imports = imports.items,
             .csrcs = c.csrcs,
             .include_dirs = c.include_dirs,
@@ -874,6 +927,143 @@ test "reports an absolute C source root as unsupported" {
     try std.testing.expectEqualStrings("an absolute path (`/usr/src`)", unsupported[0].string);
 }
 
+test "folds a linked C library's sources into the linking module" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const build_root = try std.fmt.allocPrint(arena, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+
+    const b = try createBuilder(arena, std.testing.io, .{ .array_hash_map = .empty, .allocator = arena }, "unused-zig", build_root, &.{});
+
+    // A rootless carrier module built into a static library, then linked into a
+    // Zig module — the vendored-C-library shape.
+    const carrier = b.addModule("carrier", .{ .target = b.graph.host, .link_libc = true });
+    carrier.addCSourceFile(.{ .file = b.path("c/impl.c"), .flags = &.{"-DSCALE=3"} });
+    carrier.addIncludePath(b.path("c"));
+    const lib = b.addLibrary(.{ .name = "carrier", .linkage = .static, .root_module = carrier });
+
+    const consumer = b.addModule("consumer", .{ .root_source_file = b.path("src/consumer.zig") });
+    consumer.linkLibrary(lib);
+
+    var out: std.Io.Writer.Allocating = .init(arena);
+    try emit(arena, &out.writer, b);
+
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, out.written(), .{});
+    const modules = parsed.object.get("modules").?.array.items;
+
+    // The rootless carrier is not emitted; only the linking module is.
+    try std.testing.expectEqual(1, modules.len);
+    const entry = modules[0].object;
+    try std.testing.expectEqualStrings("consumer", entry.get("name").?.string);
+
+    // The carrier's C source, include dir, and libc linkage fold into it.
+    const csrcs = entry.get("csrcs").?.array.items;
+    try std.testing.expectEqual(1, csrcs.len);
+    try std.testing.expectEqualStrings("c/impl.c", csrcs[0].object.get("path").?.string);
+    try std.testing.expectEqualStrings("-DSCALE=3", csrcs[0].object.get("flags").?.array.items[0].string);
+    const incs = entry.get("include_dirs").?.array.items;
+    try std.testing.expectEqual(1, incs.len);
+    try std.testing.expectEqualStrings("c", incs[0].object.get("path").?.string);
+    try std.testing.expectEqual(true, entry.get("link_libc").?.bool);
+    try std.testing.expectEqual(null, entry.get("unsupported"));
+}
+
+test "collapses a system library the linking module reaches through two C libraries" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const build_root = try std.fmt.allocPrint(arena, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+
+    const b = try createBuilder(arena, std.testing.io, .{ .array_hash_map = .empty, .allocator = arena }, "unused-zig", build_root, &.{});
+
+    const one = b.addModule("one", .{ .target = b.graph.host });
+    one.addCSourceFile(.{ .file = b.path("src/one.c") });
+    one.linkSystemLibrary("z", .{});
+    const two = b.addModule("two", .{ .target = b.graph.host });
+    two.addCSourceFile(.{ .file = b.path("src/two.c") });
+    two.linkSystemLibrary("z", .{});
+
+    const consumer = b.addModule("consumer", .{ .root_source_file = b.path("src/consumer.zig") });
+    consumer.linkLibrary(b.addLibrary(.{ .name = "one", .linkage = .static, .root_module = one }));
+    consumer.linkLibrary(b.addLibrary(.{ .name = "two", .linkage = .static, .root_module = two }));
+
+    var out: std.Io.Writer.Allocating = .init(arena);
+    try emit(arena, &out.writer, b);
+
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, out.written(), .{});
+    const entry = parsed.object.get("modules").?.array.items[0].object;
+    const system_libs = entry.get("system_libs").?.array.items;
+    try std.testing.expectEqual(1, system_libs.len);
+    try std.testing.expectEqualStrings("z", system_libs[0].string);
+}
+
+test "collapses a C source shared by a module and the C library it links" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const build_root = try std.fmt.allocPrint(arena, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+
+    const b = try createBuilder(arena, std.testing.io, .{ .array_hash_map = .empty, .allocator = arena }, "unused-zig", build_root, &.{});
+
+    const carrier = b.addModule("carrier", .{ .target = b.graph.host });
+    carrier.addCSourceFile(.{ .file = b.path("src/impl.c") });
+    const lib = b.addLibrary(.{ .name = "carrier", .linkage = .static, .root_module = carrier });
+
+    const consumer = b.addModule("consumer", .{ .root_source_file = b.path("src/consumer.zig") });
+    consumer.addCSourceFile(.{ .file = b.path("src/impl.c") });
+    consumer.linkLibrary(lib);
+
+    var out: std.Io.Writer.Allocating = .init(arena);
+    try emit(arena, &out.writer, b);
+
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, out.written(), .{});
+    const entry = parsed.object.get("modules").?.array.items[0].object;
+    const csrcs = entry.get("csrcs").?.array.items;
+    try std.testing.expectEqual(1, csrcs.len);
+    try std.testing.expectEqualStrings("src/impl.c", csrcs[0].object.get("path").?.string);
+}
+
+test "collapses an include dir shared by a module and the C library it links" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const build_root = try std.fmt.allocPrint(arena, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+
+    const b = try createBuilder(arena, std.testing.io, .{ .array_hash_map = .empty, .allocator = arena }, "unused-zig", build_root, &.{});
+
+    // The vendored-C-library shape where the linking module and the library it
+    // links both add the same include directory (`src`).
+    const carrier = b.addModule("carrier", .{ .target = b.graph.host });
+    carrier.addCSourceFile(.{ .file = b.path("src/impl.c") });
+    carrier.addIncludePath(b.path("src"));
+    const lib = b.addLibrary(.{ .name = "carrier", .linkage = .static, .root_module = carrier });
+
+    const consumer = b.addModule("consumer", .{ .root_source_file = b.path("src/consumer.zig") });
+    consumer.addIncludePath(b.path("src"));
+    consumer.linkLibrary(lib);
+
+    var out: std.Io.Writer.Allocating = .init(arena);
+    try emit(arena, &out.writer, b);
+
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, out.written(), .{});
+    const entry = parsed.object.get("modules").?.array.items[0].object;
+    const incs = entry.get("include_dirs").?.array.items;
+    try std.testing.expectEqual(1, incs.len);
+    try std.testing.expectEqualStrings("src", incs[0].object.get("path").?.string);
+}
+
 test "collapses repeated identical unsupported-construct messages" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
@@ -897,6 +1087,38 @@ test "collapses repeated identical unsupported-construct messages" {
     const unsupported = entry.get("unsupported").?.array.items;
     try std.testing.expectEqual(1, unsupported.len);
     try std.testing.expect(std.mem.indexOf(u8, unsupported[0].string, "assembly") != null);
+}
+
+test "rejects linking a library with its own Zig root source" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const build_root = try std.fmt.allocPrint(arena, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+
+    const b = try createBuilder(arena, std.testing.io, .{ .array_hash_map = .empty, .allocator = arena }, "unused-zig", build_root, &.{});
+
+    const zig_lib_mod = b.addModule("ziglib", .{ .root_source_file = b.path("src/ziglib.zig"), .target = b.graph.host });
+    const lib = b.addLibrary(.{ .name = "ziglib", .linkage = .static, .root_module = zig_lib_mod });
+
+    const consumer = b.addModule("consumer", .{ .root_source_file = b.path("src/consumer.zig") });
+    consumer.linkLibrary(lib);
+
+    var out: std.Io.Writer.Allocating = .init(arena);
+    try emit(arena, &out.writer, b);
+
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, out.written(), .{});
+    const modules = parsed.object.get("modules").?.array.items;
+    // `ziglib` has a Zig root, so it is emitted as its own module; the consumer
+    // reports the unsupported Zig-library link.
+    const consumer_entry = for (modules) |m| {
+        if (std.mem.eql(u8, m.object.get("name").?.string, "consumer")) break m.object;
+    } else unreachable;
+    const unsupported = consumer_entry.get("unsupported").?.array.items;
+    try std.testing.expectEqual(1, unsupported.len);
+    try std.testing.expect(std.mem.indexOf(u8, unsupported[0].string, "Zig root source") != null);
 }
 
 test "emits the system libraries a module links" {
