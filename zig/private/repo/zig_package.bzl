@@ -12,11 +12,11 @@ Fetch a Zig package with the Zig SDK.
 
 The Zig SDK downloads, verifies, and prunes the package according to its
 `build.zig.zon`, and supports `git+` URLs. Fetching fails if the resulting
-package hash does not match the expected `zig_hash`. The package's `build.zig`
-is then configured to extract its public module graph
-(`module_manifest.json`), and a `zig_library` is generated for each module the
-package owns. The package's files are public, individually and grouped as the
-`files` filegroup.
+package hash does not match the expected `zig_hash`. Any `patches` are then
+applied to the verified tree. The package's `build.zig` is configured to
+extract its public module graph (`module_manifest.json`), and a `zig_library`
+is generated for each module the package owns. The package's files are public,
+individually and grouped as the `files` filegroup.
 
 With `zig_hash` the fetch is reproducible. Without it, the repository reports
 the fetched hash so a fetch cycle surfaces the value to pin.
@@ -49,6 +49,14 @@ spoke). Each dependency edge is `[name, key, lazy]`.
     ),
     "config_settings": attr.string_keyed_label_dict(
         doc = "Map from a non-fallback cell name to the `config_setting_group` its `select()` branch keys on.",
+    ),
+    "patches": attr.label_list(
+        allow_files = True,
+        doc = "Patches applied to the fetched package tree after hash verification and before configuration.",
+    ),
+    "patch_strip": attr.int(
+        default = 1,
+        doc = "Number of leading path components to strip when applying `patches` (as `patch -p<N>`).",
     ),
 }
 
@@ -620,6 +628,9 @@ def _zig_package_impl(repository_ctx):
             repository_ctx.attr.zig_hash,
             fetched_hash,
         ))
+
+    for patch in repository_ctx.attr.patches:
+        repository_ctx.patch(patch, strip = repository_ctx.attr.patch_strip)
 
     build = _BUILD
     if repository_ctx.path("build.zig").exists:

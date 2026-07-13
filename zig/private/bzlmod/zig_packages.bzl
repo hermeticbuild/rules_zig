@@ -99,6 +99,10 @@ def _apply_precedence(entries, keys, tag_class_name, subject, warnings):
 def _system_library_subject(name):
     return "system library '{}'".format(name)
 
+def _package_subject(pkg_key):
+    name, version = pkg_key
+    return "Zig package '{}'{}".format(name, " version '{}'".format(version) if version else "")
+
 from_file = tag_class(
     doc = "Resolve the Zig package dependencies declared in a `build.zig.zon` manifest.",
     attrs = {
@@ -125,6 +129,33 @@ modules' mappings apply, and must agree.
         "lib": attr.label(
             doc = "A `cc_library` or similar (any target providing `CcInfo`) that provides the named system library.",
             mandatory = True,
+        ),
+    },
+)
+
+patch = tag_class(
+    doc = """\
+Apply patches to a fetched Zig package before it is configured.
+
+The root module's `patch` tags for a package take precedence; otherwise other
+modules' apply, and must agree.
+""",
+    attrs = {
+        "name": attr.string(
+            doc = "The name of the Zig package to patch.",
+            mandatory = True,
+        ),
+        "version": attr.string(
+            doc = "Disambiguate `name` by version.",
+        ),
+        "patches": attr.label_list(
+            doc = "Patch files applied in order to the fetched package tree. An empty list in the root module disables other modules' patches of the package.",
+            allow_files = True,
+            mandatory = True,
+        ),
+        "patch_strip": attr.int(
+            default = 1,
+            doc = "Number of leading path components to strip when applying `patches` (as `patch -p<N>`).",
         ),
     },
 )
@@ -521,6 +552,16 @@ def _zig_packages_impl(module_ctx):
             system_integrations[tag.name] = True
     system_integrations = system_integrations.keys()
 
+    patch_entries = {}
+    for mod in module_ctx.modules:
+        for tag in mod.tags.patch:
+            pkg_key = (tag.name, tag.version)
+            entries = patch_entries.setdefault(pkg_key, [])
+            if [entry for entry in entries if entry.module == mod.name]:
+                fail("Multiple `patch` tags for {}.".format(_package_subject(pkg_key)), tag)
+            entries.append(_tag_entry(mod, pkg_key, struct(patches = tag.patches, patch_strip = tag.patch_strip), tag))
+    used_patches = {}
+
     error, matrix = collect_configs(module_ctx.modules)
     if error != None:
         fail("Invalid Zig package configuration: {}.".format(error.message), error.tag)
@@ -569,6 +610,12 @@ def _zig_packages_impl(module_ctx):
                     config_settings[cell.name] = "@zig_deps//config:cfg_" + cell.name
                     config_groups[cell.name] = {"name": cell.name, "select_on": cell.select_on}
 
+        patch_keys = [(name, version), (name, "")]
+        patch = _apply_precedence(patch_entries, patch_keys, "patch", _package_subject, warnings)
+        for pkg_key in patch_keys:
+            if pkg_key in patch_entries:
+                used_patches[pkg_key] = True
+
         url_deps = [dep for dep in reached if graph["packages"][dep]["url"] != None]
         zig_package(
             name = key,
@@ -580,7 +627,13 @@ def _zig_packages_impl(module_ctx):
             system_integrations = system_integrations,
             configs = json.encode(configs),
             config_settings = config_settings,
+            patches = patch.value.patches if patch else [],
+            patch_strip = patch.value.patch_strip if patch else 1,
         )
+
+    for pkg_key, entries in patch_entries.items():
+        if pkg_key not in used_patches:
+            fail("`patch` tag targets {}, which is not a URL package in the resolved dependency graph.".format(_package_subject(pkg_key)), entries[0].tag)
 
     # Resolve each provided manifest's declared dependencies to the target that
     # satisfies them: a URL dependency to its spoke (by hash key), a consumer
@@ -680,6 +733,7 @@ zig_binary(
         "from_file": from_file,
         "system_library": system_library,
         "system_integration": system_integration,
+        "patch": patch,
         "config": config,
         "configure": configure,
     },

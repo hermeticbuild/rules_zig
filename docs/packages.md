@@ -11,6 +11,7 @@ zig_packages = use_extension("@rules_zig//zig:packages.bzl", "zig_packages")
 zig_packages.from_file(<a href="#zig_packages.from_file-build_zig_zon">build_zig_zon</a>)
 zig_packages.system_library(<a href="#zig_packages.system_library-name">name</a>, <a href="#zig_packages.system_library-lib">lib</a>)
 zig_packages.system_integration(<a href="#zig_packages.system_integration-name">name</a>)
+zig_packages.patch(<a href="#zig_packages.patch-name">name</a>, <a href="#zig_packages.patch-patch_strip">patch_strip</a>, <a href="#zig_packages.patch-patches">patches</a>, <a href="#zig_packages.patch-version">version</a>)
 zig_packages.config(<a href="#zig_packages.config-name">name</a>, <a href="#zig_packages.config-optimize">optimize</a>, <a href="#zig_packages.config-select_on">select_on</a>, <a href="#zig_packages.config-target">target</a>, <a href="#zig_packages.config-zig_flags">zig_flags</a>)
 zig_packages.configure(<a href="#zig_packages.configure-configs">configs</a>, <a href="#zig_packages.configure-fallback">fallback</a>, <a href="#zig_packages.configure-package">package</a>, <a href="#zig_packages.configure-version">version</a>)
 </pre>
@@ -101,6 +102,24 @@ Enable an optional system integration (`systemIntegrationOption`) when configuri
 | Name  | Description | Type | Mandatory | Default |
 | :------------- | :------------- | :------------- | :------------- | :------------- |
 | <a id="zig_packages.system_integration-name"></a>name |  The name of an optional system integration (`systemIntegrationOption`) to enable.   | <a href="https://bazel.build/concepts/labels#target-names">Name</a> | required |  |
+
+<a id="zig_packages.patch"></a>
+
+### patch
+
+Apply patches to a fetched Zig package before it is configured.
+
+The root module's `patch` tags for a package take precedence; otherwise other
+modules' apply, and must agree.
+
+**Attributes**
+
+| Name  | Description | Type | Mandatory | Default |
+| :------------- | :------------- | :------------- | :------------- | :------------- |
+| <a id="zig_packages.patch-name"></a>name |  The name of the Zig package to patch.   | <a href="https://bazel.build/concepts/labels#target-names">Name</a> | required |  |
+| <a id="zig_packages.patch-patch_strip"></a>patch_strip |  Number of leading path components to strip when applying `patches` (as `patch -p<N>`).   | Integer | optional |  `1`  |
+| <a id="zig_packages.patch-patches"></a>patches |  Patch files applied in order to the fetched package tree. An empty list in the root module disables other modules' patches of the package.   | <a href="https://bazel.build/concepts/labels">List of labels</a> | required |  |
+| <a id="zig_packages.patch-version"></a>version |  Disambiguate `name` by version.   | String | optional |  `""`  |
 
 <a id="zig_packages.config"></a>
 
