@@ -8,6 +8,10 @@
             .url = "https://github.com/Hejsil/zig-clap/archive/05faf3905e8548f5cc269a8836e154065e70128d.tar.gz",
             .hash = "clap-0.12.0-oBajB4XpAQCF1WRKnD5KOKPsnwwT_NNdAJ7Ww3irYJac",
         },
+        .libxev = .{
+            .url = "git+https://github.com/mitchellh/libxev.git#b2b77b44b1e3dd64f25b829f82631b2bb843b3dd",
+            .hash = "libxev-0.0.0-86vtc-ARFADPQmfxgXn-txKs8W3hmXMp0OlTFzOU0MWP",
+        },
     },
     .paths = .{
         "build.zig.zon",

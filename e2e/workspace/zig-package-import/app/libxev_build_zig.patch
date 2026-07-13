@@ -1,0 +1,12 @@
+--- a/build.zig
++++ b/build.zig
+@@ -15,6 +15,9 @@
+         .root_source_file = b.path("src/main.zig"),
+     });
+
++    // Bazel imports only the public module graph; skip the rest of build().
++    if (true) return;
++
+     const emit_man = b.option(
+         bool,
+         "emit-man-pages",

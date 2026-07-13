@@ -3,11 +3,13 @@ load("@bazel_skylib//rules:diff_test.bzl", "diff_test")
 load("@rules_zig//zig:defs.bzl", "zig_binary")
 load("@zig_deps//:defs.bzl", "zig_deps")
 
-# The binary imports the fetched `clap` package resolved through `zig_deps()`.
+# The binary imports the fetched `clap` and `libxev` packages, both resolved
+# through `zig_deps()`; `libxev` exposes its module as `xev`, reached through
+# the alias the importer generates under the package name.
 zig_binary(
     name = "app",
     main = "src/main.zig",
-    # `clap` requires Zig 0.17+.
+    # `clap` and `libxev` require Zig 0.17+.
     target_compatible_with = select({
         "@zig_toolchains//:0.16.0": ["@platforms//:incompatible"],
         "//conditions:default": [],
@@ -22,10 +24,14 @@ genrule(
     tools = [":app"],
 )
 
+# `libxev`'s backend, and so the output, depends on the target platform.
 diff_test(
     name = "output_test",
     size = "small",
-    file1 = ":output.expected",
+    file1 = select({
+        "@platforms//os:macos": ":output.macos.expected",
+        "//conditions:default": ":output.linux.expected",
+    }),
     file2 = ":output.actual",
 )
 
