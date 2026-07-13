@@ -1,0 +1,11 @@
+.{
+    .name = .linklib,
+    .version = "0.0.0",
+    .fingerprint = 0x62eafc8d90c5ffae,
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "c",
+    },
+}

@@ -23,6 +23,7 @@ const genopts = @import("genopts");
 const tgtdep = @import("tgtdep");
 const patchdep = @import("patchdep");
 const core = @import("core");
+const linklib = @import("linklib");
 
 pub fn main() void {
     std.debug.assert(leaf.value == 7);
@@ -83,4 +84,7 @@ pub fn main() void {
     // `aliasmod` exposes only the `core` module; `zig_deps()` resolves it
     // through the alias generated under the package name.
     std.debug.assert(core.value == 55);
+    // 6*7: `linklib` links a static C library built from a rootless carrier
+    // module, whose C source folds into the module's `cc_library`.
+    std.debug.assert(linklib.value() == 42);
 }
