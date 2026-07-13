@@ -87,6 +87,10 @@
             .url = "__PATCHDEP_URL__",
             .hash = "__PATCHDEP_HASH__",
         },
+        .aliasmod = .{
+            .url = "__ALIASMOD_URL__",
+            .hash = "__ALIASMOD_HASH__",
+        },
         // Uncommented by the negative test to assert that a package with a
         // source-only dependency is rejected.
         // .srconly = .{ .url = "__SRCONLY_URL__", .hash = "__SRCONLY_HASH__" },

@@ -1,0 +1,10 @@
+.{
+    .name = .aliasmod,
+    .version = "0.0.0",
+    .fingerprint = 0x2fe3dc9af6c5bfd2,
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

@@ -22,6 +22,7 @@ const greeter = @import("greeter");
 const genopts = @import("genopts");
 const tgtdep = @import("tgtdep");
 const patchdep = @import("patchdep");
+const core = @import("core");
 
 pub fn main() void {
     std.debug.assert(leaf.value == 7);
@@ -79,4 +80,7 @@ pub fn main() void {
     // Reaching this value proves the root module's patch of patchdep's
     // `build.zig` was applied and `child_module`'s patch of its value was not.
     std.debug.assert(patchdep.value == 77);
+    // `aliasmod` exposes only the `core` module; `zig_deps()` resolves it
+    // through the alias generated under the package name.
+    std.debug.assert(core.value == 55);
 }
