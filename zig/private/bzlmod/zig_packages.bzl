@@ -621,6 +621,7 @@ def _zig_packages_impl(module_ctx):
             name = key,
             url = package["url"],
             zig_hash = key,
+            package_name = name,
             deps = json.encode(_deps_data(graph, key, reached)),
             dep_build_files = {dep: "@{}//:build.zig".format(dep) for dep in url_deps},
             system_libraries = system_libraries,

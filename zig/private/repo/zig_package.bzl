@@ -58,6 +58,9 @@ spoke). Each dependency edge is `[name, key, lazy]`.
         default = 1,
         doc = "Number of leading path components to strip when applying `patches` (as `patch -p<N>`).",
     ),
+    "package_name": attr.string(
+        doc = "The package's name, under which its sole module is aliased when the module has a different name.",
+    ),
 }
 
 _BUILD = """\
@@ -75,6 +78,13 @@ filegroup(
 _EXPORT_MANIFEST = """\
 
 exports_files(["module_manifest.json"])
+"""
+
+_ALIAS = """
+alias(
+    name = "{name}",
+    actual = "{actual}",
+)
 """
 
 _LIBRARY_LOAD = """\
@@ -617,6 +627,23 @@ def _configure(repository_ctx, zig, build_zig, cache):
         configured.stderr,
     ))
 
+def _main_module_alias(package_name, modules):
+    """An `alias` from the package name to its sole owned module, when they differ.
+
+    `zig_dep`/`zig_deps` address a package's default module by the package name;
+    a package that owns exactly one module under a different name is reachable
+    through that default only via this alias. Anonymous modules are internal and
+    do not count.
+    """
+    owned = [
+        module["name"]
+        for module in modules
+        if module["package"] == "" and not module["name"].startswith("__anon_")
+    ]
+    if not package_name or len(owned) != 1 or owned[0] == package_name:
+        return ""
+    return _ALIAS.format(name = package_name, actual = ":" + owned[0])
+
 def _zig_package_impl(repository_ctx):
     zig = zig_path(repository_ctx)
     cache = zig_cache(repository_ctx)
@@ -642,7 +669,7 @@ def _zig_package_impl(repository_ctx):
         packages = json.decode(repository_ctx.attr.deps)["packages"]
         libraries, has_cc = _render_libraries(repository_ctx, decoded["modules"], _cells(repository_ctx, decoded), packages)
         loads = _LIBRARY_LOAD + (_CC_LOAD if has_cc else "")
-        build = loads + build + libraries + _EXPORT_MANIFEST
+        build = loads + build + libraries + _main_module_alias(repository_ctx.attr.package_name, decoded["modules"]) + _EXPORT_MANIFEST
 
     repository_ctx.file("BUILD.bazel", build)
 
