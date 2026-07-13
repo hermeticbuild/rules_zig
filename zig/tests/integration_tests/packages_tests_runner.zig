@@ -46,6 +46,7 @@ const packages = [_]Package{
     .{ .name = "srconly" },
     .{ .name = "genopts" },
     .{ .name = "tgtdep" },
+    .{ .name = "patchdep" },
 };
 
 const Consumer = struct {
@@ -55,7 +56,7 @@ const Consumer = struct {
 
 // Manifests that resolve dependencies via `zig_packages.from_file`.
 const consumers = [_]Consumer{
-    .{ .manifest = "build.zig.zon", .deps = &.{ "leaf", "bottom", "top", "libv1", "libfork", "libv2", "multi", "pruned", "symlinked", "lazyhost", "lazydirect", "usec", "cdep", "cppdep", "syslibdep", "optdep", "cfgdep", "host", "srconly", "genopts", "tgtdep" } },
+    .{ .manifest = "build.zig.zon", .deps = &.{ "leaf", "bottom", "top", "libv1", "libfork", "libv2", "multi", "pruned", "symlinked", "lazyhost", "lazydirect", "usec", "cdep", "cppdep", "syslibdep", "optdep", "cfgdep", "host", "srconly", "genopts", "tgtdep", "patchdep" } },
     .{ .manifest = "child/build.zig.zon", .deps = &.{ "leaf", "libv2", "hostuser" } },
 };
 
@@ -182,6 +183,11 @@ test "the importer rejects invalid package configurations" {
     try ctx.patchWorkspaceFile("MODULE.bazel", &.{.{ "system_integration(name = \"optmath\")", "system_integration(name = \"optmath-off\")" }});
     try expectBuildFailure(ctx, "opt_compute");
     try ctx.patchWorkspaceFile("MODULE.bazel", &.{.{ "system_integration(name = \"optmath-off\")", "system_integration(name = \"optmath\")" }});
+
+    // A patch tag that names a package absent from the graph is rejected.
+    try ctx.patchWorkspaceFile("MODULE.bazel", &.{.{ "name = \"patchdep\"", "name = \"patchdep-absent\"" }});
+    try expectBuildFailure(ctx, "not a URL package");
+    try ctx.patchWorkspaceFile("MODULE.bazel", &.{.{ "name = \"patchdep-absent\"", "name = \"patchdep\"" }});
 }
 
 fn expectBuildFailure(ctx: BitContext, expected: []const u8) !void {

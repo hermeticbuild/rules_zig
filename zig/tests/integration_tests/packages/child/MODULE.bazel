@@ -8,4 +8,8 @@ bazel_dep(name = "rules_zig", version = "0.0.0")
 zig_packages = use_extension("@rules_zig//zig:packages.bzl", "zig_packages")
 zig_packages.from_file(build_zig_zon = "//:build.zig.zon")
 zig_packages.system_integration(name = "optmath")
+zig_packages.patch(
+    name = "patchdep",
+    patches = ["//:patches/patchdep_value.patch"],
+)
 use_repo(zig_packages, "zig_deps")

@@ -1,0 +1,5 @@
+--- a/src/patchdep.zig
++++ b/src/patchdep.zig
+@@ -1 +1 @@
+-pub const value = 77;
++pub const value = 66;

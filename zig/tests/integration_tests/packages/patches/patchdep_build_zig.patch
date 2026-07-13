@@ -1,0 +1,11 @@
+--- a/build.zig
++++ b/build.zig
+@@ -4,8 +4,4 @@
+     _ = b.addModule("patchdep", .{
+         .root_source_file = b.path("src/patchdep.zig"),
+     });
+-
+-    // The published build.zig does not configure; the consumer's patch removes
+-    // this line.
+-    @compileError("patchdep must be patched before it can be configured");
+ }

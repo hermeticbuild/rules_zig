@@ -61,6 +61,10 @@ zig_packages.system_library(
     name = "maconly",
     lib = "//:maconly_impl",
 )
+zig_packages.patch(
+    name = "patchdep",
+    patches = ["//:patches/patchdep_build_zig.patch"],
+)
 zig_packages.config(
     name = "dbg",
     optimize = "debug",

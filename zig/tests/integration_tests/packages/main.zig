@@ -21,6 +21,7 @@ const host = @import("host");
 const greeter = @import("greeter");
 const genopts = @import("genopts");
 const tgtdep = @import("tgtdep");
+const patchdep = @import("patchdep");
 
 pub fn main() void {
     std.debug.assert(leaf.value == 7);
@@ -75,4 +76,7 @@ pub fn main() void {
     // `posixonly` (returns 7) for the fallback `linux` cell and `winonly` for
     // the `windows` cell; the host build selects the `linux` cell.
     std.debug.assert(tgtdep.value() == 7);
+    // Reaching this value proves the root module's patch of patchdep's
+    // `build.zig` was applied and `child_module`'s patch of its value was not.
+    std.debug.assert(patchdep.value == 77);
 }
