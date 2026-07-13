@@ -1,2 +1,4 @@
 clap declares 2 parameters
 libxev backend: io_uring
+httpz methods: 9
+httpz blocking: false

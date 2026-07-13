@@ -1,0 +1,12 @@
+--- a/build.zig
++++ b/build.zig
+@@ -27,6 +27,9 @@ pub fn build(b: *std.Build) !void {
+         httpz_module.addOptions("build", options);
+     }
+ 
++    // Bazel imports only the public module graph; skip the rest of build().
++    if (true) return;
++
+     {
+         const test_filter = b.option([]const []const u8, "test-filter", "Filters for test: specify multiple times for multiple filters");
+         const tests = b.addTest(.{

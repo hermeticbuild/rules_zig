@@ -29,6 +29,14 @@ zig_packages.patch(
     name = "libxev",
     patches = ["//zig-package-import/app:libxev_build_zig.patch"],
 )
+zig_packages.patch(
+    name = "httpz",
+    patches = ["//zig-package-import/app:httpz_build_zig.patch"],
+)
+zig_packages.patch(
+    name = "metrics",
+    patches = ["//zig-package-import/app:metrics_build_zig.patch"],
+)
 use_repo(zig_packages, "zig_deps")
 
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")

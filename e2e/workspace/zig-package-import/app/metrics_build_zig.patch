@@ -1,0 +1,12 @@
+--- a/build.zig
++++ b/build.zig
+@@ -10,6 +10,9 @@ pub fn build(b: *std.Build) !void {
+         .optimize = optimize,
+     });
+ 
++    // Bazel imports only the public module graph; skip the rest of build().
++    if (true) return;
++
+     {
+         // setup example
+         const example_module = b.createModule(.{

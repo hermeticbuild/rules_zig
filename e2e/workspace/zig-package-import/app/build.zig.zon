@@ -12,6 +12,10 @@
             .url = "git+https://github.com/mitchellh/libxev.git#b2b77b44b1e3dd64f25b829f82631b2bb843b3dd",
             .hash = "libxev-0.0.0-86vtc-ARFADPQmfxgXn-txKs8W3hmXMp0OlTFzOU0MWP",
         },
+        .httpz = .{
+            .url = "https://github.com/karlseguin/http.zig/archive/8aeb4e522b122fd2d9ba6731480b5d3878d2845f.tar.gz",
+            .hash = "httpz-0.0.0-PNVzrPoWCQDh-mpVLlE6Ryjobya3u-oDwOTq0aoQHdms",
+        },
     },
     .paths = .{
         "build.zig.zon",

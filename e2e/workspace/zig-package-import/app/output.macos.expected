@@ -1,2 +1,4 @@
 clap declares 2 parameters
 libxev backend: kqueue
+httpz methods: 9
+httpz blocking: false
