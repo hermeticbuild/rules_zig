@@ -151,8 +151,16 @@ fn writeTar(io: Io, pkg_dir: Io.Dir, root: []const u8, entries: []const Entry, o
     try out_writer.interface.flush();
 }
 
+// A package with no `build.zig.zon` (a bare source drop) has no name, version,
+// or fingerprint; Zig hashes all its files and renders `N-V-<...>` with a
+// sentinel id. Matching this lets fixtures stand in for such dependencies.
+const NAKED_ID: u32 = 0x0000_ffff;
+
 fn parseManifest(arena: Allocator, io: Io, pkg_dir: Io.Dir) !Manifest {
-    const source = try pkg_dir.readFileAllocOptions(io, "build.zig.zon", arena, .unlimited, .of(u8), 0);
+    const source = pkg_dir.readFileAllocOptions(io, "build.zig.zon", arena, .unlimited, .of(u8), 0) catch |err| switch (err) {
+        error.FileNotFound => return .{ .name = "N", .version = "V", .id = NAKED_ID, .paths = &.{""} },
+        else => return err,
+    };
 
     const ast = try std.zig.Ast.parse(arena, source, .{ .mode = .zon });
     const zoir = try std.zig.ZonGen.generate(arena, ast, .{});

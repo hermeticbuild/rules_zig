@@ -24,6 +24,7 @@ const tgtdep = @import("tgtdep");
 const patchdep = @import("patchdep");
 const core = @import("core");
 const linklib = @import("linklib");
+const linkamalg = @import("linkamalg");
 
 pub fn main() void {
     std.debug.assert(leaf.value == 7);
@@ -87,4 +88,13 @@ pub fn main() void {
     // 6*7: `linklib` links a static C library built from a rootless carrier
     // module, whose C source folds into the module's `cc_library`.
     std.debug.assert(linklib.value() == 42);
+    // 21*2: `linkamalg` compiles a C source from a source-only dependency (no
+    // `build.zig.zon`), reached across repositories with a sub-directory of the
+    // dependency as its include path; the source includes the dependency's
+    // other files.
+    std.debug.assert(linkamalg.value() == 42);
+    // 10*2*2 + 2: a local C source of `linkamalg` includes the dependency's
+    // header, which in turn includes a `.inc` file beside it and a header
+    // outside its include directory.
+    std.debug.assert(linkamalg.scaled() == 42);
 }

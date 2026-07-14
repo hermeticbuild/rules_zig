@@ -95,6 +95,10 @@
             .url = "__LINKLIB_URL__",
             .hash = "__LINKLIB_HASH__",
         },
+        .linkamalg = .{
+            .url = "__LINKAMALG_URL__",
+            .hash = "__LINKAMALG_HASH__",
+        },
         // Uncommented by the negative test to assert that a package with a
         // source-only dependency is rejected.
         // .srconly = .{ .url = "__SRCONLY_URL__", .hash = "__SRCONLY_HASH__" },

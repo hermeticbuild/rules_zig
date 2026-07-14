@@ -1,0 +1,17 @@
+.{
+    .name = .linkamalg,
+    .version = "0.0.0",
+    .fingerprint = 0x14d515cb101f5c5b,
+    .dependencies = .{
+        .amalg = .{
+            .url = "__CAMALG_URL__",
+            .hash = "__CAMALG_HASH__",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "csrc",
+    },
+}
