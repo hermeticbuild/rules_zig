@@ -133,6 +133,9 @@ const Package = struct {
     path: ?[]const u8,
     paths: []const []const u8,
     deps: []const Edge,
+    /// A URL package whose archive carries no `build.zig.zon`: a bare source
+    /// drop that exposes only its files and is never configured.
+    naked: bool = false,
 };
 
 const Resolved = struct {
@@ -207,6 +210,22 @@ const Walker = struct {
         if (gop.found_existing) return;
 
         const manifest_path = try std.fs.path.join(walker.arena, &.{ resolved.dir, "build.zig.zon" });
+
+        // A URL package whose archive carries no `build.zig.zon` is a bare
+        // source drop (e.g. a C amalgamation). It has no dependencies of its
+        // own; record it as a leaf that exposes only its files. A path
+        // dependency without a manifest remains an error.
+        if (resolved.url != null and !fileExists(walker.io, manifest_path)) {
+            try walker.packages.put(walker.arena, resolved.key, .{
+                .url = resolved.url,
+                .path = resolved.path,
+                .paths = &.{},
+                .deps = &.{},
+                .naked = true,
+            });
+            return;
+        }
+
         const manifest = try readManifest(walker.arena, walker.io, manifest_path);
         const edges = try walker.resolveEdges(manifest, resolved.dir);
 
@@ -220,6 +239,11 @@ const Walker = struct {
         });
     }
 };
+
+fn fileExists(io: Io, path: []const u8) bool {
+    Io.Dir.cwd().access(io, path, .{}) catch return false;
+    return true;
+}
 
 /// The dependency name `zig fetch --save` records each package under. Explicit,
 /// since a package without `build.zig.zon` has no name to default to.
@@ -290,6 +314,10 @@ pub fn main(init: std.process.Init) !void {
         try json.write(package.path);
         try json.objectField("paths");
         try json.write(package.paths);
+        if (package.naked) {
+            try json.objectField("naked");
+            try json.write(true);
+        }
         try json.objectField("deps");
         try writeEdges(&json, package.deps);
         try json.objectField("lazy");

@@ -61,7 +61,7 @@ def _render_config_groups(config_groups):
 _DEFS = '''\
 """Accessors for the resolved Zig package dependency graph."""
 
-load("@rules_zig//zig/private/repo:zig_deps_index.bzl", "resolve_version")
+load("@rules_zig//zig/private/repo:zig_deps_index.bzl", "has_modules", "resolve_version")
 
 _PACKAGES = json.decode("""%PACKAGES%""")
 _VERSIONS = json.decode("""%VERSIONS%""")
@@ -95,6 +95,15 @@ def _package(name, version):
         fail(error)
     return _PACKAGES[key]
 
+def _module_package(name, version):
+    package = _package(name, version)
+    if not has_modules(package):
+        fail("Zig package '%s' has no `build.zig.zon`, so no Zig modules; reference its files with `zig_package_files` or `zig_package_file`" % name)
+    return package
+
+def _entry_has_modules(entry):
+    return "key" not in entry or has_modules(_PACKAGES[entry["key"]])
+
 def zig_package_files(name, version = None):
     """The label of a Zig package's `files` filegroup.
 
@@ -113,7 +122,7 @@ def zig_package_target(name, module = None, version = None):
     Defaults to the module of the same name as the package; pass `module` to
     select another module the package exposes.
     """
-    package = _package(name, version)
+    package = _module_package(name, version)
     return Label(package["files"]).same_package_label(module or package["name"])
 
 def zig_dep(name, module = None):
@@ -131,8 +140,8 @@ def zig_dep(name, module = None):
     return zig_package_target(name, module = module)
 
 def zig_deps():
-    """The labels of every dependency declared by the enclosing manifest."""
-    return [zig_dep(name) for name in _enclosing_deps()]
+    """The labels of every dependency declared by the enclosing manifest that has Zig modules."""
+    return [zig_dep(name) for name, entry in _enclosing_deps().items() if _entry_has_modules(entry)]
 
 def zig_import_names():
     """The `import_names` remapping each dependency to its declared name.
@@ -144,7 +153,7 @@ def zig_import_names():
     deps = _enclosing_deps()
     remap = {}
     for name, entry in deps.items():
-        if "key" in entry and name != _PACKAGES[entry["key"]]["name"]:
+        if "key" in entry and _entry_has_modules(entry) and name != _PACKAGES[entry["key"]]["name"]:
             remap[zig_dep(name)] = name
     return remap
 '''

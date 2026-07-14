@@ -55,15 +55,9 @@ fn nameModules(arena: Allocator, modules: *const ModuleSet) !NameMap {
     return names;
 }
 
-fn lazyPathString(arena: Allocator, lazy_path: ?LazyPath) ResolvePathError!?[]const u8 {
-    const path = lazy_path orelse return null;
-    const sub_path = switch (path) {
-        .src_path => |src| src.sub_path,
-        .cwd_relative => |rel| if (std.fs.path.isAbsolute(rel)) return error.AbsolutePath else rel,
-        .relative => |rel| rel.sub_path,
-        else => return null,
-    };
-    return try normalizePath(arena, sub_path);
+fn lazyPathString(arena: Allocator, lazy_path: ?LazyPath) !?[]const u8 {
+    const resolved = (try resolvePath(arena, lazy_path)) orelse return null;
+    return resolved.sub_path;
 }
 
 /// Canonicalize a package-relative path, as header globs, `srcs`, and
@@ -79,13 +73,36 @@ fn normalizePath(arena: Allocator, path: []const u8) ![]const u8 {
     return std.mem.join(arena, "/", segments.items);
 }
 
+/// A file path resolved to the package that owns it and its location within
+/// that package.
+const ResolvedPath = struct {
+    /// Empty for the package being configured; a dependency's Zig hash for a
+    /// file reached through `dep.path(...)`.
+    package: []const u8,
+    /// Canonical (see `normalizePath`).
+    sub_path: []const u8,
+};
+
 const ResolvePathError = Allocator.Error || error{
     /// An absolute `cwd_relative` path names a location on the configuring
     /// machine, which generated targets cannot reference.
     AbsolutePath,
 };
 
-/// Record `lazy_path`, which `lazyPathString` rejected with `err`, as unsupported.
+/// Resolve a source path; null for a generated one.
+fn resolvePath(arena: Allocator, lazy_path: ?LazyPath) ResolvePathError!?ResolvedPath {
+    const path = lazy_path orelse return null;
+    const resolved: ResolvedPath = switch (path) {
+        .src_path => |src| .{ .package = src.owner.pkg_hash, .sub_path = src.sub_path },
+        .cwd_relative => |rel| if (std.fs.path.isAbsolute(rel)) return error.AbsolutePath else .{ .package = "", .sub_path = rel },
+        .relative => |rel| .{ .package = "", .sub_path = rel.sub_path },
+        .dependency => |dep| .{ .package = dep.dependency.builder.pkg_hash, .sub_path = dep.sub_path },
+        .generated => return null,
+    };
+    return .{ .package = resolved.package, .sub_path = try normalizePath(arena, resolved.sub_path) };
+}
+
+/// Record `lazy_path`, which `resolvePath` rejected with `err`, as unsupported.
 fn reportPath(arena: Allocator, unsupported: *std.StringArrayHashMapUnmanaged(void), lazy_path: LazyPath, err: ResolvePathError) Allocator.Error!void {
     switch (err) {
         error.AbsolutePath => try unsupported.put(arena, try std.fmt.allocPrint(arena, "an absolute path (`{s}`)", .{lazy_path.cwd_relative}), {}),
@@ -94,6 +111,9 @@ fn reportPath(arena: Allocator, unsupported: *std.StringArrayHashMapUnmanaged(vo
 }
 
 pub const CSource = struct {
+    /// The package owning the source file: empty for this package, a
+    /// dependency's Zig hash for an out-of-package (`dep.path`) source.
+    package: []const u8,
     path: []const u8,
     /// Per-file C flags.
     flags: []const []const u8,
@@ -105,6 +125,8 @@ pub const CSource = struct {
 pub const IncludeDir = struct {
     /// `path`, `path_system`, or `path_after`.
     kind: []const u8,
+    /// The package owning the include directory, as for `CSource.package`.
+    package: []const u8,
     path: []const u8,
 };
 
@@ -215,6 +237,8 @@ fn appendUniqueCSource(arena: Allocator, csrcs: *std.StringArrayHashMapUnmanaged
     var c = source;
     c.flags = try nonEmptyFlags(arena, source.flags);
     var key: std.ArrayList(u8) = .empty;
+    try key.appendSlice(arena, c.package);
+    try key.append(arena, 0);
     try key.appendSlice(arena, c.path);
     try key.append(arena, 0);
     try key.appendSlice(arena, c.language orelse "");
@@ -231,16 +255,16 @@ fn appendIncludeDir(
     kind: []const u8,
     lazy_path: LazyPath,
 ) !void {
-    const resolved_path = lazyPathString(arena, lazy_path) catch |err| return reportPath(arena, unsupported, lazy_path, err);
-    if (resolved_path) |path| {
-        try appendUniqueIncludeDir(arena, include_dirs, .{ .kind = kind, .path = path });
+    const resolved_path = resolvePath(arena, lazy_path) catch |err| return reportPath(arena, unsupported, lazy_path, err);
+    if (resolved_path) |resolved| {
+        try appendUniqueIncludeDir(arena, include_dirs, .{ .kind = kind, .package = resolved.package, .path = resolved.sub_path });
     } else {
-        try unsupported.put(arena, "an include path with a generated or out-of-package location", {});
+        try unsupported.put(arena, "an include path with a generated location", {});
     }
 }
 
 fn appendUniqueIncludeDir(arena: Allocator, include_dirs: *std.StringArrayHashMapUnmanaged(IncludeDir), dir: IncludeDir) !void {
-    const key = try std.fmt.allocPrint(arena, "{s}\x00{s}", .{ dir.kind, dir.path });
+    const key = try std.fmt.allocPrint(arena, "{s}\x00{s}\x00{s}", .{ dir.kind, dir.package, dir.path });
     try include_dirs.put(arena, key, dir);
 }
 
@@ -253,28 +277,28 @@ fn collectCInto(arena: Allocator, acc: *CAccum, module: *Build.Module) !void {
 
     for (module.link_objects.items) |link_object| switch (link_object) {
         .c_source_file => |c| {
-            const resolved_path = lazyPathString(arena, c.file) catch |err| {
+            const resolved_path = resolvePath(arena, c.file) catch |err| {
                 try reportPath(arena, &acc.unsupported, c.file, err);
                 continue;
             };
-            if (resolved_path) |path| {
-                try appendUniqueCSource(arena, &acc.csrcs, .{ .path = path, .flags = c.flags, .language = languageName(c.language) });
+            if (resolved_path) |resolved| {
+                try appendUniqueCSource(arena, &acc.csrcs, .{ .package = resolved.package, .path = resolved.sub_path, .flags = c.flags, .language = languageName(c.language) });
             } else {
-                try acc.unsupported.put(arena, "a C source file with a generated or out-of-package path", {});
+                try acc.unsupported.put(arena, "a C source file with a generated path", {});
             }
         },
         .c_source_files => |c| {
-            const resolved_path = lazyPathString(arena, c.root) catch |err| {
+            const resolved_path = resolvePath(arena, c.root) catch |err| {
                 try reportPath(arena, &acc.unsupported, c.root, err);
                 continue;
             };
-            if (resolved_path) |root_path| {
+            if (resolved_path) |resolved| {
                 for (c.files) |file| {
-                    const path = try normalizePath(arena, try joinPath(arena, root_path, file));
-                    try appendUniqueCSource(arena, &acc.csrcs, .{ .path = path, .flags = c.flags, .language = languageName(c.language) });
+                    const path = try normalizePath(arena, try joinPath(arena, resolved.sub_path, file));
+                    try appendUniqueCSource(arena, &acc.csrcs, .{ .package = resolved.package, .path = path, .flags = c.flags, .language = languageName(c.language) });
                 }
             } else {
-                try acc.unsupported.put(arena, "C source files with a generated or out-of-package root", {});
+                try acc.unsupported.put(arena, "C source files with a generated root", {});
             }
         },
         .system_lib => |lib| try acc.system_libs.put(arena, lib.name, {}),
@@ -303,7 +327,7 @@ fn collectCInto(arena: Allocator, acc: *CAccum, module: *Build.Module) !void {
     };
 }
 
-/// Collect `module`'s C information; `root_source_error` is how `lazyPathString`
+/// Collect `module`'s C information; `root_source_error` is how `resolvePath`
 /// rejected its root source, if it did.
 fn collectC(arena: Allocator, builder: *Build, module: *Build.Module, root_source_error: ?ResolvePathError) !CInfo {
     var acc: CAccum = .{};
@@ -400,11 +424,11 @@ fn writeModuleFields(json: *std.json.Stringify, module: Module) !void {
     }
     if (module.csrcs.len > 0) {
         try json.objectField("csrcs");
-        try json.write(module.csrcs);
+        try writeCSources(json, module.csrcs);
     }
     if (module.include_dirs.len > 0) {
         try json.objectField("include_dirs");
-        try json.write(module.include_dirs);
+        try writeIncludeDirs(json, module.include_dirs);
     }
     if (module.system_libs.len > 0) {
         try json.objectField("system_libs");
@@ -477,15 +501,52 @@ fn eqlImports(a: []const Import, b: []const Import) bool {
 fn eqlCSources(a: []const CSource, b: []const CSource) bool {
     if (a.len != b.len) return false;
     for (a, b) |x, y| {
-        if (!mem.eql(u8, x.path, y.path) or !eqlStrList(x.flags, y.flags) or !eqlOptStr(x.language, y.language)) return false;
+        if (!mem.eql(u8, x.package, y.package) or !mem.eql(u8, x.path, y.path) or !eqlStrList(x.flags, y.flags) or !eqlOptStr(x.language, y.language)) return false;
     }
     return true;
 }
 
 fn eqlIncludeDirs(a: []const IncludeDir, b: []const IncludeDir) bool {
     if (a.len != b.len) return false;
-    for (a, b) |x, y| if (!mem.eql(u8, x.kind, y.kind) or !mem.eql(u8, x.path, y.path)) return false;
+    for (a, b) |x, y| if (!mem.eql(u8, x.kind, y.kind) or !mem.eql(u8, x.package, y.package) or !mem.eql(u8, x.path, y.path)) return false;
     return true;
+}
+
+/// Omits an empty `package`, which marks an in-package path.
+fn writeCSources(json: *std.json.Stringify, csrcs: []const CSource) !void {
+    try json.beginArray();
+    for (csrcs) |c| {
+        try json.beginObject();
+        if (c.package.len > 0) {
+            try json.objectField("package");
+            try json.write(c.package);
+        }
+        try json.objectField("path");
+        try json.write(c.path);
+        try json.objectField("flags");
+        try json.write(c.flags);
+        try json.objectField("language");
+        try json.write(c.language);
+        try json.endObject();
+    }
+    try json.endArray();
+}
+
+fn writeIncludeDirs(json: *std.json.Stringify, include_dirs: []const IncludeDir) !void {
+    try json.beginArray();
+    for (include_dirs) |d| {
+        try json.beginObject();
+        try json.objectField("kind");
+        try json.write(d.kind);
+        if (d.package.len > 0) {
+            try json.objectField("package");
+            try json.write(d.package);
+        }
+        try json.objectField("path");
+        try json.write(d.path);
+        try json.endObject();
+    }
+    try json.endArray();
 }
 
 fn fieldEqual(field: Field, a: Module, b: Module) bool {
@@ -509,8 +570,8 @@ fn writeField(json: *std.json.Stringify, field: Field, module: Module) !void {
         .link_libc => try json.write(module.link_libc),
         .link_libcpp => try json.write(module.link_libcpp),
         .imports => try json.write(module.imports),
-        .csrcs => try json.write(module.csrcs),
-        .include_dirs => try json.write(module.include_dirs),
+        .csrcs => try writeCSources(json, module.csrcs),
+        .include_dirs => try writeIncludeDirs(json, module.include_dirs),
         .system_libs => try json.write(module.system_libs),
         .unsupported => try json.write(module.unsupported),
     }

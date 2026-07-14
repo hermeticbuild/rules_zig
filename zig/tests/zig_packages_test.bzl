@@ -11,7 +11,7 @@ load(
     "resolve_cell",
     "select_by_precedence",
 )
-load("//zig/private/repo:zig_deps_index.bzl", "index_packages", "resolve_version")
+load("//zig/private/repo:zig_deps_index.bzl", "has_modules", "index_packages", "resolve_version")
 
 def _config_tag(name, optimize = "", target = "", select_on = [], zig_flags = []):
     return struct(name = name, optimize = optimize, target = target, select_on = select_on, zig_flags = zig_flags)
@@ -145,9 +145,35 @@ def _resolve_version_test_impl(ctx):
     asserts.equals(env, None, key)
     asserts.true(env, "unknown Zig package 'nope'" in error, error)
 
+    # Packages without a manifest are indexed, but `N`/`V` names none of them.
+    _, naked_versions = index_packages(
+        {"N-V-AAAA": {"name": "N", "version": "V"}},
+        {"N-V-AAAA": "@N-V-AAAA//:files"},
+    )
+    error, key = resolve_version(naked_versions, "N", "V")
+    asserts.equals(env, None, key)
+    asserts.true(env, "without a `build.zig.zon`" in error, error)
+
     return unittest.end(env)
 
 _resolve_version_test = unittest.make(_resolve_version_test_impl)
+
+def _has_modules_test_impl(ctx):
+    env = unittest.begin(ctx)
+
+    packages, _ = index_packages(
+        {
+            _LIB_A: {"name": "lib", "version": "1.0.0"},
+            "N-V-AAAA": {"name": "N", "version": "V"},
+        },
+        {_LIB_A: "@" + _LIB_A + "//:files", "N-V-AAAA": "@N-V-AAAA//:files"},
+    )
+    asserts.true(env, has_modules(packages[_LIB_A]))
+    asserts.false(env, has_modules(packages["N-V-AAAA"]))
+
+    return unittest.end(env)
+
+_has_modules_test = unittest.make(_has_modules_test_impl)
 
 def _resolve_cell_test_impl(ctx):
     env = unittest.begin(ctx)
@@ -380,6 +406,7 @@ def zig_packages_test_suite(name):
         partial.make(_select_by_precedence_test),
         partial.make(_index_packages_test),
         partial.make(_resolve_version_test),
+        partial.make(_has_modules_test),
         partial.make(_resolve_cell_test),
         partial.make(_check_cells_test),
         partial.make(_package_cells_test),

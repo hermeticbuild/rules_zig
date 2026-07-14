@@ -29,13 +29,21 @@ ATTRS = {
         default = "{\"root_deps\": [], \"packages\": {}}",
         doc = """\
 JSON `{root_deps, packages}` describing the `@dependencies` closure used
-to configure the package; each package carries its `deps` and a `path`
-(its location as a sub-tree of this package, or null for a package in another
-spoke). Each dependency edge is `[name, key, lazy]`.
+to configure the package; each package carries its `deps`, a `path` (its
+location as a sub-tree of this package, or null for a package in another
+spoke), and whether it is `naked` (has no `build.zig.zon`). Each dependency
+edge is `[name, key, lazy]`.
 """,
     ),
     "dep_build_files": attr.string_keyed_label_dict(
         doc = "Map from each URL dependency's hash to its `build.zig`, used to wire `@dependencies` (sub-tree dependencies are configured in-tree).",
+    ),
+    "dep_files": attr.string_keyed_label_dict(
+        doc = """\
+Map from each URL dependency's hash to its `files` filegroup, used to
+reference the dependency's files across repositories for out-of-package
+(`dep.path`) C sources and include directories.
+""",
     ),
     "system_libraries": attr.string_keyed_label_dict(
         doc = "Map from a system-library name (as passed to `linkSystemLibrary`) to a `cc_library` or similar providing it.",
@@ -80,6 +88,12 @@ _EXPORT_MANIFEST = """\
 exports_files(["module_manifest.json"])
 """
 
+# Every package publishes its files so another package's spoke can reference
+# them across repositories for out-of-package C.
+_EXPORTS = """
+exports_files(glob(["**"], exclude = ["BUILD.bazel", "module_manifest.json"]))
+"""
+
 _ALIAS = """
 alias(
     name = "{name}",
@@ -119,6 +133,7 @@ zig_library(
 
 _CC_LOAD = """\
 load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@rules_zig//zig/private:package_headers.bzl", "package_headers")
 
 """
 
@@ -136,6 +151,17 @@ cc_library(
 )
 """
 
+# An out-of-package include directory, searched in place within the
+# dependency's spoke; its search path and the spoke's files reach this compile
+# and forward to consumers' `@cImport`.
+_CC_CROSS_INCLUDE = """
+package_headers(
+    name = "{name}",
+    files = "{files}",
+    directory = "{directory}",
+)
+"""
+
 # One `cc_library` per group of C sources sharing `copts`, aggregated by a
 # dependency-only `cc_library` the owning module links against. Each `copts`
 # entry is one literal compiler argument, so `no_copts_tokenization` disables
@@ -148,7 +174,7 @@ cc_library(
     srcs = {srcs},
     copts = {copts},
     features = ["no_copts_tokenization"],
-    additional_compiler_inputs = [":files"],
+    additional_compiler_inputs = {compile_inputs},
     deps = {deps},
 )
 """
@@ -178,18 +204,38 @@ def _spoke_label(labels, key, target):
     spoke, _, sub_path = key.partition("/")
     return labels[spoke].same_package_label(sub_path + "/" + target if sub_path else target)
 
+def _cross_repo_label(repository_ctx, package, target):
+    # A file/target in a dependency's spoke, reached through the `files`
+    # filegroup label the extension provides for that dependency.
+    return str(_spoke_label(repository_ctx.attr.dep_files, package, target))
+
+def _spoke_files(repository_ctx, package):
+    # The `files` of a dependency's whole spoke, including any sub-tree package.
+    return str(repository_ctx.attr.dep_files[package.partition("/")[0]])
+
+def _render_cross_include(repository_ctx, name, inc):
+    # The directory is relative to the spoke root, under which a sub-tree
+    # package (`<hash>/<sub-path>`) lies at its sub-path.
+    spoke_sub_path = inc["package"].partition("/")[2]
+    return _CC_CROSS_INCLUDE.format(
+        name = name,
+        files = _spoke_files(repository_ctx, inc["package"]),
+        directory = "/".join([path for path in (spoke_sub_path, inc["path"]) if path]) or ".",
+    )
+
 def _literal_copts(flags):
     # Rendered `copts` undergo Make-variable expansion, but the package's flags
     # are literal.
     return json.encode([flag.replace("$", "$$") for flag in flags])
 
-def _render_c_library(url, module, packages, owner):
+def _render_c_library(repository_ctx, module, packages, owner):
     """Render the `cc_library` targets for a module's vendored C sources.
 
     Returns:
-      `(chunks, dep)`: the `cc_library` text chunks and the label the owning
-      module links against, or `([], None)` when the module has no C sources.
+      `(chunks, dep)`: the target text chunks and the label the owning module
+      links against, or `([], None)` when the module has no C sources.
     """
+    url = repository_ctx.attr.url
     prefix = (packages[owner]["path"] + "/") if owner else ""
 
     c_sources = []
@@ -200,48 +246,67 @@ def _render_c_library(url, module, packages, owner):
                 module["name"],
                 csrc["language"],
             ))
-        c_sources.append((prefix + csrc["path"], csrc["flags"]))
+        if csrc.get("package"):
+            src = _cross_repo_label(repository_ctx, csrc["package"], csrc["path"])
+            files = _spoke_files(repository_ctx, csrc["package"])
+        else:
+            src = prefix + csrc["path"]
+            files = ":files"
+        c_sources.append((src, csrc["flags"], files))
     if not c_sources:
         return [], None
 
-    includes = [prefix + inc["path"] for inc in module.get("include_dirs", [])]
+    name = _target_name(packages, owner, module["name"]) + ".cinc"
 
-    # Headers can live in an include directory or beside the C sources.
-    header_dirs = {inc: None for inc in includes}
-    for path, _flags in c_sources:
-        header_dirs[path.rpartition("/")[0]] = None
+    local_includes = []
+    cross_include_labels = []
+    cross_include_chunks = []
+    for index, inc in enumerate(module.get("include_dirs", [])):
+        if inc.get("package"):
+            inc_name = "{}.inc.{}".format(name, index)
+            cross_include_labels.append(":" + inc_name)
+            cross_include_chunks.append(_render_cross_include(repository_ctx, inc_name, inc))
+        else:
+            local_includes.append(prefix + inc["path"])
+
+    # Local headers live in an include directory or beside a local C source.
+    header_dirs = {inc: None for inc in local_includes}
+    for src, _flags, _files in c_sources:
+        if not src.startswith("@"):
+            header_dirs[src.rpartition("/")[0]] = None
     header_globs = [
         (directory + "/" if directory else "") + "**/*." + ext
         for directory in sorted(header_dirs)
         for ext in _HEADER_EXTENSIONS
     ]
 
-    name = _target_name(packages, owner, module["name"]) + ".cinc"
     headers = name + ".hdrs"
-    chunks = [_CC_HEADERS.format(
+    chunks = cross_include_chunks + [_CC_HEADERS.format(
         name = headers,
         hdrs = json.encode(header_globs),
-        includes = json.encode(includes),
+        includes = json.encode(local_includes),
     )]
 
     # `copts` apply to every source in a `cc_library`, so partition by flags.
     groups = []
-    for path, flags in c_sources:
-        if groups and groups[-1][0] == flags:
-            groups[-1][1].append(path)
-        else:
-            groups.append((flags, [path]))
+    for path, flags, files in c_sources:
+        if not groups or groups[-1][0] != flags:
+            groups.append((flags, [], {}))
+        groups[-1][1].append(path)
+        groups[-1][2][files] = None
 
+    group_deps = [":" + headers] + cross_include_labels
     group_labels = []
     for index in range(len(groups)):
-        flags, paths = groups[index]
+        flags, paths, compile_inputs = groups[index]
         group_name = "{}.{}".format(name, index)
         group_labels.append(":" + group_name)
         chunks.append(_CC_LIBRARY.format(
             name = group_name,
             srcs = json.encode(paths),
             copts = _literal_copts(flags),
-            deps = json.encode([":" + headers]),
+            compile_inputs = json.encode(list(compile_inputs)),
+            deps = json.encode(group_deps),
         ))
     chunks.append(_CC_LIBRARY_GROUP.format(name = name, deps = json.encode(group_labels)))
     return chunks, ":" + name
@@ -393,7 +458,7 @@ def _render_libraries(repository_ctx, modules, cells, packages):
         else:
             root_source = module["root_source"]
 
-        chunks, cc_dep = _render_c_library(repository_ctx.attr.url, module, packages, owner)
+        chunks, cc_dep = _render_c_library(repository_ctx, module, packages, owner)
         cc_chunks.extend(chunks)
 
         deps_by_cell = {}
@@ -514,9 +579,17 @@ def _dependencies_source(repository_ctx, deps, available):
             lines.append("        pub const available = false;")
             lines.append("    };")
             continue
-        build_zig = _dep_build_zig(repository_ctx, key, package)
-        lines.append("        pub const build_root = {};".format(_zig_string(str(build_zig.dirname))))
-        lines.append("        pub const build_zig = @import(\"{}\");".format(key))
+        if package.get("naked"):
+            # A files-only dependency has no `build.zig`; `b.dependency` still
+            # opens its build root, so provide an empty placeholder directory.
+            # `dep.path(...)` records a sub-path without reading the file.
+            naked_root = repository_ctx.path("_configure/naked/" + key)
+            repository_ctx.file(str(naked_root) + "/.keep", "")
+            lines.append("        pub const build_root = {};".format(_zig_string(str(naked_root))))
+        else:
+            build_zig = _dep_build_zig(repository_ctx, key, package)
+            lines.append("        pub const build_root = {};".format(_zig_string(str(build_zig.dirname))))
+            lines.append("        pub const build_zig = @import(\"{}\");".format(key))
         lines.append("        pub const deps: []const struct { []const u8, []const u8 } = &.{")
         lines.extend(_edge_lines(package["deps"], "            "))
         lines.append("        };")
@@ -553,7 +626,9 @@ def _run_configurer(repository_ctx, zig, build_zig, cache, deps, available):
 
     repository_ctx.file("_configure/deps.zig", _dependencies_source(repository_ctx, deps, available))
 
-    keys = sorted(available)
+    # A naked dependency contributes no `build.zig` module to compile against;
+    # its `@dependencies` entry is files-only.
+    keys = [key for key in sorted(available) if not deps["packages"][key].get("naked")]
 
     args = [zig, "build-exe", "--dep", "pkg", "--dep", "deps", "-Mroot=" + str(configurer), "-Mpkg=" + str(build_zig)]
     for key in keys:
@@ -659,7 +734,8 @@ def _zig_package_impl(repository_ctx):
     for patch in repository_ctx.attr.patches:
         repository_ctx.patch(patch, strip = repository_ctx.attr.patch_strip)
 
-    build = _BUILD
+    loads = ""
+    body = _BUILD
     if repository_ctx.path("build.zig").exists:
         manifest = _configure(repository_ctx, zig, repository_ctx.path("build.zig"), cache)
         repository_ctx.delete("_configure")
@@ -668,9 +744,10 @@ def _zig_package_impl(repository_ctx):
         decoded = json.decode(manifest)
         packages = json.decode(repository_ctx.attr.deps)["packages"]
         libraries, has_cc = _render_libraries(repository_ctx, decoded["modules"], _cells(repository_ctx, decoded), packages)
-        loads = _LIBRARY_LOAD + (_CC_LOAD if has_cc else "")
-        build = loads + build + libraries + _main_module_alias(repository_ctx.attr.package_name, decoded["modules"]) + _EXPORT_MANIFEST
+        loads += _LIBRARY_LOAD + (_CC_LOAD if has_cc else "")
+        body += libraries + _main_module_alias(repository_ctx.attr.package_name, decoded["modules"]) + _EXPORT_MANIFEST
 
+    build = loads + body + _EXPORTS
     repository_ctx.file("BUILD.bazel", build)
 
     if not repository_ctx.attr.zig_hash:

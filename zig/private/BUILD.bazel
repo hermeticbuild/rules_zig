@@ -145,6 +145,16 @@ bzl_library(
 )
 
 bzl_library(
+    name = "package_headers",
+    srcs = ["package_headers.bzl"],
+    visibility = ["//zig:__subpackages__"],
+    deps = [
+        "@bazel_skylib//lib:paths",
+        "@rules_cc//cc/common",
+    ],
+)
+
+bzl_library(
     name = "platforms",
     srcs = ["platforms.bzl"],
     visibility = ["//zig:__subpackages__"],
@@ -175,6 +185,7 @@ filegroup(
         ":BUILD.bazel",
         ":cc_helper.bzl",
         ":cc_linkopts.bzl",
+        ":package_headers.bzl",
         ":platforms.bzl",
         ":resolved_target_toolchain.bzl",
         ":resolved_toolchain.bzl",

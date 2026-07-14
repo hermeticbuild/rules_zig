@@ -1,5 +1,8 @@
 """Tables and lookups of the `@zig_deps` hub, shared by its rule and `defs.bzl`."""
 
+# The name and version Zig assigns every package without a `build.zig.zon`.
+_NAKED_NAME_VERSION = ("N", "V")
+
 def index_packages(graph, package_files):
     """Build the hub's package tables.
 
@@ -24,6 +27,10 @@ def index_packages(graph, package_files):
         versions.setdefault(info["name"], {}).setdefault(info["version"], []).append(key)
     return packages, versions
 
+def has_modules(package):
+    """Whether a `packages` entry of `index_packages` has Zig modules, which a package without a `build.zig.zon` lacks."""
+    return (package["name"], package["version"]) != _NAKED_NAME_VERSION
+
 def resolve_version(versions, name, version):
     """Find the single package with the given name and version.
 
@@ -38,6 +45,8 @@ def resolve_version(versions, name, version):
     Returns:
       `(error, key)`, `key` the package's Zig hash key.
     """
+    if (name, version) == _NAKED_NAME_VERSION:
+        return ("Zig packages without a `build.zig.zon` all share the name '{}' and version '{}'; reference one through a manifest dependency instead".format(name, version), None)
     by_version = versions.get(name)
     if by_version == None:
         return ("unknown Zig package '{}'; available: {}".format(name, sorted(versions)), None)

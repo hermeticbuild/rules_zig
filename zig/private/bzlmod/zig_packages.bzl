@@ -491,6 +491,7 @@ def _deps_data(graph, key, reached):
         packages[dep] = {
             "deps": _dep_edges(package),
             "path": path,
+            "naked": package.get("naked", False),
         }
     return {
         "root_deps": _dep_edges(graph["packages"][key]),
@@ -594,6 +595,19 @@ def _zig_packages_impl(module_ctx):
 
         hub_graph[key] = {"name": name, "version": version}
 
+        url_deps = [dep for dep in reached if graph["packages"][dep]["url"] != None]
+        dep_files = {dep: "@{}//:files".format(dep) for dep in url_deps}
+
+        # A naked (manifest-less) package exposes only its files; it is not
+        # configured.
+        if package.get("naked", False):
+            zig_package(
+                name = key,
+                url = package["url"],
+                zig_hash = key,
+            )
+            continue
+
         error, cells = package_cells(key, matrix.cells_by_name, matrix.global_configure, matrix.per_package_configure)
         if error != None:
             fail("Invalid Zig package configuration: {}.".format(error.message), error.tag)
@@ -616,14 +630,15 @@ def _zig_packages_impl(module_ctx):
             if pkg_key in patch_entries:
                 used_patches[pkg_key] = True
 
-        url_deps = [dep for dep in reached if graph["packages"][dep]["url"] != None]
+        build_deps = [dep for dep in url_deps if not graph["packages"][dep].get("naked", False)]
         zig_package(
             name = key,
             url = package["url"],
             zig_hash = key,
             package_name = name,
             deps = json.encode(_deps_data(graph, key, reached)),
-            dep_build_files = {dep: "@{}//:build.zig".format(dep) for dep in url_deps},
+            dep_build_files = {dep: "@{}//:build.zig".format(dep) for dep in build_deps},
+            dep_files = dep_files,
             system_libraries = system_libraries,
             system_integrations = system_integrations,
             configs = json.encode(configs),
@@ -700,7 +715,8 @@ via `from_file` tags and generates two kinds of repositories:
 - The `@zig_deps` *hub*, the only repository consumers use. Its `defs.bzl`
   provides functions that address the spokes. `zig_dep` resolves a dependency
   declared by the `from_file` manifest of the calling Bazel package or its
-  nearest ancestor, `zig_deps` resolves all of them, and `zig_import_names`
+  nearest ancestor, `zig_deps` resolves all of them that have Zig modules
+  (packages without a `build.zig.zon` have none), and `zig_import_names`
   imports each under its declared name. `zig_package_target` names the
   `zig_library` generated for a module of a package, `zig_package_files` and
   `zig_package_file` name its files. Each takes a package `name` and an

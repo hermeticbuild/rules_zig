@@ -30,7 +30,8 @@ via `from_file` tags and generates two kinds of repositories:
 - The `@zig_deps` *hub*, the only repository consumers use. Its `defs.bzl`
   provides functions that address the spokes. `zig_dep` resolves a dependency
   declared by the `from_file` manifest of the calling Bazel package or its
-  nearest ancestor, `zig_deps` resolves all of them, and `zig_import_names`
+  nearest ancestor, `zig_deps` resolves all of them that have Zig modules
+  (packages without a `build.zig.zon` have none), and `zig_import_names`
   imports each under its declared name. `zig_package_target` names the
   `zig_library` generated for a module of a package, `zig_package_files` and
   `zig_package_file` name its files. Each takes a package `name` and an
