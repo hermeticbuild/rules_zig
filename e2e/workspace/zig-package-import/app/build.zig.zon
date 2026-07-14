@@ -16,6 +16,10 @@
             .url = "https://github.com/karlseguin/http.zig/archive/8aeb4e522b122fd2d9ba6731480b5d3878d2845f.tar.gz",
             .hash = "httpz-0.0.0-PNVzrPoWCQDh-mpVLlE6Ryjobya3u-oDwOTq0aoQHdms",
         },
+        .sqlite = .{
+            .url = "https://github.com/vrischmann/zig-sqlite/archive/946d77c526258760b52836187af32d1a192c5d36.tar.gz",
+            .hash = "sqlite-3.48.0-F2R_azCQDgBGaWDIX4g2vxKpuqzYEQOOfAeJGMNocPu0",
+        },
     },
     .paths = .{
         "build.zig.zon",

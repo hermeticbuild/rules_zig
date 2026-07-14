@@ -2,6 +2,7 @@ const std = @import("std");
 const clap = @import("clap");
 const xev = @import("xev");
 const httpz = @import("httpz");
+const sqlite = @import("sqlite");
 
 // Parameters declared with the imported `clap` package, resolved at comptime.
 const params = clap.parseParamsComptime(
@@ -23,5 +24,9 @@ pub fn main(init: std.process.Init) !void {
     const methods = @typeInfo(httpz.Method).@"enum".field_names.len;
     try out.print("httpz methods: {d}\n", .{methods});
     try out.print("httpz blocking: {}\n", .{httpz.blockingMode()});
+    // `sqlite` links the SQLite C amalgamation from a source-only dependency
+    // and reaches it through a translate-c module it imports as `c`; the
+    // version number comes from `sqlite3.h`, exercising the C include path.
+    try out.print("sqlite version: {d}\n", .{sqlite.c.SQLITE_VERSION_NUMBER});
     try out.flush();
 }

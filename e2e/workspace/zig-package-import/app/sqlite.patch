@@ -1,0 +1,110 @@
+diff --git a/build.zig b/build.zig
+--- a/build.zig
++++ b/build.zig
+@@ -157,23 +157,7 @@ pub fn build(b: *std.Build) !void {
+ 
+     // Define C flags to use
+ 
+-    var flags: std.ArrayList([]const u8) = .empty;
+-    defer flags.deinit(b.allocator);
+-    try flags.append(b.allocator, "-std=c99");
+-
+-    inline for (std.meta.fields(EnableOptions)) |field| {
+-        const opt = b.option(bool, field.name, "Enable " ++ field.name) orelse field.defaultValue().?;
+-
+-        if (opt) {
+-            var buf: [field.name.len]u8 = undefined;
+-            const name = std.ascii.upperString(&buf, field.name);
+-            const flag = try std.fmt.allocPrint(b.allocator, "-DSQLITE_ENABLE_{s}", .{name});
+-
+-            try flags.append(b.allocator, flag);
+-        }
+-    }
+-
+-    const c_flags = flags.items;
++    const c_flags: []const []const u8 = &.{"-std=c99"};
+ 
+     //
+     // Main library and module
+@@ -191,10 +175,25 @@ pub fn build(b: *std.Build) !void {
+         mod.addIncludePath(sqlite_dep.path("."));
+         mod.linkLibrary(lib);
+ 
++        const translate_c = b.addTranslateC(.{
++            .root_source_file = b.path("c/workaround.h"),
++            .target = target,
++            .optimize = optimize,
++        });
++        translate_c.addIncludePath(b.path("c"));
++        translate_c.addIncludePath(sqlite_dep.path("."));
++        mod.addImport("c", translate_c.createModule());
++
+         break :blk .{ lib, mod };
+     };
+     b.installArtifact(sqlite_lib);
+ 
++    // The importer only needs the public `sqlite` module and its linked C
++    // library. Pruning the rest avoids configuring a second `lib-sqlite`
++    // module (a duplicate name) and build steps that use APIs unavailable in
++    // the configurer SDK.
++    if (true) return;
++
+     // const sqliteext_mod = blk: {
+     _ = blk: {
+         const lib = makeSQLiteLib(b, sqlite_dep, c_flags, target, optimize, .without);
+diff --git a/c.zig b/c.zig
+--- a/c.zig
++++ b/c.zig
+@@ -1,12 +1,4 @@
+-const root = @import("root");
+-
+-pub const c = if (@hasDecl(root, "loadable_extension"))
+-    @import("c/loadable_extension.zig")
+-else
+-    @cImport({
+-        @cInclude("sqlite3.h");
+-        @cInclude("workaround.h");
+-    });
++pub const c = @import("c");
+ 
+ // versionGreaterThanOrEqualTo returns true if the SQLite version is >= to the major.minor.patch provided.
+ pub fn versionGreaterThanOrEqualTo(major: u8, minor: u8, patch: u8) bool {
+diff --git a/c/workaround.h b/c/workaround.h
+--- a/c/workaround.h
++++ b/c/workaround.h
+@@ -1,3 +1,5 @@
++#include "sqlite3.h"
++
+ typedef void (*my_sqlite3_destructor_type)(void *);
+ 
+ my_sqlite3_destructor_type sqliteTransientAsDestructor();
+diff --git a/sqlite.zig b/sqlite.zig
+--- a/sqlite.zig
++++ b/sqlite.zig
+@@ -3109,7 +3109,7 @@ test "sqlite: blob open, reopen" {
+ 
+         const data = try blob.read_from_db(&read_buff);
+ 
+-        try testing.expectEqualSlices(u8, blob_data1 ** 2, data);
++        try testing.expectEqualSlices(u8, blob_data1 ++ blob_data1, data);
+     }
+ 
+     // Reopen the blob in the second row
+@@ -3126,7 +3126,7 @@ test "sqlite: blob open, reopen" {
+ 
+         const data = try blob.read_from_db(&read_buff);
+ 
+-        try testing.expectEqualSlices(u8, blob_data2 ** 2, data);
++        try testing.expectEqualSlices(u8, blob_data2 ++ blob_data2, data);
+     }
+ 
+     try blob.close();
+@@ -3377,7 +3377,7 @@ const MyData = struct {
+     pub fn readField(alloc: mem.Allocator, value: BaseType) !MyData {
+         _ = alloc;
+ 
+-        var result = [_]u8{0} ** 16;
++        var result: [16]u8 = @splat(0);
+         var i: usize = 0;
+         while (i < result.len) : (i += 1) {
+             const j = i * 2;
