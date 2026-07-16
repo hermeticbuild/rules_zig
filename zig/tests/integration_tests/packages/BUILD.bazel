@@ -29,6 +29,14 @@ diff_test(
     file2 = zig_package_file("multi", "module_manifest.json"),
 )
 
+# The translate step's C flags, in order: `defineCMacro`'s separate `-D` and
+# `addCFlags`' joined `-DNAME=VALUE`.
+diff_test(
+    name = "translatec_manifest_test",
+    file1 = "translatec_manifest.expected.json",
+    file2 = zig_package_file("translatec", "module_manifest.json"),
+)
+
 # Provides the `mymath` system library the `syslibdep` package links; the
 # package's targets are generated in its own repository, so it must be public.
 cc_library(
@@ -66,6 +74,14 @@ diff_test(
     name = "cfgdep_manifest_test",
     file1 = "cfgdep_manifest.expected.json",
     file2 = zig_package_file("cfgdep", "module_manifest.json"),
+)
+
+# Provides the `boxlib` system library the `translatec` package's translation
+# links.
+cc_library(
+    name = "boxlib_impl",
+    srcs = ["boxlib.c"],
+    visibility = ["//visibility:public"],
 )
 
 # Provide the system libraries the `tgtdep` package links under each cell of

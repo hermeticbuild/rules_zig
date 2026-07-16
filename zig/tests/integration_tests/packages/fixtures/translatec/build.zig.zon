@@ -1,0 +1,11 @@
+.{
+    .name = .translatec,
+    .version = "0.0.0",
+    .fingerprint = 0xc8922b936355dc89,
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "c",
+    },
+}

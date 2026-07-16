@@ -25,6 +25,7 @@ const patchdep = @import("patchdep");
 const core = @import("core");
 const linklib = @import("linklib");
 const linkamalg = @import("linkamalg");
+const translatec = @import("translatec");
 
 pub fn main() void {
     std.debug.assert(leaf.value == 7);
@@ -97,4 +98,12 @@ pub fn main() void {
     // header, which in turn includes a `.inc` file beside it and a header
     // outside its include directory.
     std.debug.assert(linkamalg.scaled() == 42);
+    // `translatec` imports a module whose Zig source `zig_c_library` generates
+    // by running `translate-c` on `c/box.h`; the translated `box_value` is
+    // implemented by the C source the module links.
+    std.debug.assert(translatec.value() == 42);
+    // `boxlib_value` is provided only by the `boxlib` system library the
+    // translation links.
+    std.debug.assert(translatec.libValue() == 24);
+    std.debug.assert(std.mem.eql(u8, translatec.tag, "box$tag"));
 }

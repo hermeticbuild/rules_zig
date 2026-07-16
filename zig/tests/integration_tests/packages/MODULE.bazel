@@ -50,6 +50,10 @@ zig_packages.system_library(
     lib = "//:relonly_impl",
 )
 zig_packages.system_library(
+    name = "boxlib",
+    lib = "//:boxlib_impl",
+)
+zig_packages.system_library(
     name = "posixonly",
     lib = "//:posixonly_impl",
 )
