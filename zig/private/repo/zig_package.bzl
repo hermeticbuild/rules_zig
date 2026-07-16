@@ -183,7 +183,8 @@ cc_library(
 
 # The header a translated-C module (`b.addTranslateC`) translates, exposed as a
 # `cc_library` the `zig_c_library` translates. Only this header is public, so it
-# alone is translated; the include directories let its own `#include`s resolve.
+# alone is translated; its own `#include`s resolve to the headers and include
+# directories provided by `deps` (see `_CC_HEADERS` and `_CC_CROSS_INCLUDE`).
 # The header is valid only under the translate step's C flags, which this
 # library does not carry, so it opts out of `parse_headers`.
 _CC_TRANSLATE_HEADERS = """
@@ -191,7 +192,6 @@ cc_library(
     name = "{name}",
     hdrs = {hdrs},
     features = ["-parse_headers"],
-    includes = {includes},
     deps = {deps},
 )
 """
@@ -360,23 +360,39 @@ def _render_translate_c_library(repository_ctx, module, packages, owner, cells):
         header = prefix + translate["header"]
 
     local_includes = []
-    cross_include_labels = []
-    cross_include_chunks = []
+    header_deps = []
+    dep_chunks = []
     for index, inc in enumerate(module.get("include_dirs", [])):
         if inc.get("package"):
             inc_name = "{}.inc.{}".format(headers, index)
-            cross_include_labels.append(":" + inc_name)
-            cross_include_chunks.append(_render_cross_include(repository_ctx, inc_name, inc))
+            header_deps.append(":" + inc_name)
+            dep_chunks.append(_render_cross_include(repository_ctx, inc_name, inc))
         else:
             local_includes.append(prefix + inc["path"])
 
-    return cross_include_chunks + [
+    # The headers reachable from the translated header's own `#include`s: those
+    # in its include directories, provided (with their search path) so the
+    # translation finds them. Only the translated header itself is public.
+    if local_includes:
+        include_headers = headers + ".hdrs"
+        header_deps.append(":" + include_headers)
+        header_globs = [
+            (directory + "/" if directory else "") + "**/*." + ext
+            for directory in sorted(local_includes)
+            for ext in _HEADER_EXTENSIONS
+        ]
+        dep_chunks.append(_CC_HEADERS.format(
+            name = include_headers,
+            hdrs = json.encode(header_globs),
+            includes = json.encode(local_includes),
+        ))
+
+    return dep_chunks + [
         _CC_TRANSLATE_HEADERS.format(
             name = headers,
             hdrs = json.encode([header]),
-            includes = json.encode(local_includes),
             deps = _render_select(cells, repository_ctx.attr.config_settings, {
-                cell.name: cross_include_labels + _link_deps(repository_ctx, module, cell.name)
+                cell.name: header_deps + _link_deps(repository_ctx, module, cell.name)
                 for cell in cells
             }),
         ),

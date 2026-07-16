@@ -234,7 +234,7 @@ fn translateCStep(builder: *Build, lazy_path: ?LazyPath) ?*Build.Step.TranslateC
 /// `collectCInto`; only its include directories, root header, and C flags live
 /// solely on the step.
 fn foldTranslateC(arena: Allocator, builder: *Build, acc: *CAccum, translate: *Build.Step.TranslateC) !struct { TranslateC, []const []const u8 } {
-    for (translate.include_dirs.items) |include_dir| try foldIncludeDir(arena, acc, include_dir);
+    for (translate.include_dirs.items) |include_dir| try foldIncludeDir(arena, builder, acc, include_dir);
 
     const argv = try arena.alloc([]const u8, translate.cc_argv.items.len);
     for (argv, translate.cc_argv.items) |*arg, string| arg.* = builder.graph.wip_configuration.stringSlice(string);
@@ -472,8 +472,69 @@ fn appendUniqueCSource(arena: Allocator, csrcs: *std.StringArrayHashMapUnmanaged
     }
     try csrcs.put(arena, key.items, c);
 }
+
+/// The source directory that, placed on the include path, makes a header
+/// installed as `dest` resolve to the source file at `source`. A header
+/// installed under its own name from a directory (`<dir>/<dest>` -> `<dest>`) is
+/// found by adding `<dir>`; one installed at the tree root from the package root
+/// (`<dest>` -> `<dest>`) by adding the root. A rename or re-nesting the include
+/// path cannot express returns null.
+fn includeDirForInstall(source: []const u8, dest: []const u8) ?[]const u8 {
+    if (mem.eql(u8, source, dest)) return "";
+    if (source.len > dest.len + 1 and
+        source[source.len - dest.len - 1] == '/' and
+        mem.eql(u8, source[source.len - dest.len ..], dest))
+    {
+        return source[0 .. source.len - dest.len - 1];
+    }
+    return null;
+}
+
+/// The source directories that reproduce, on an include path, the emitted
+/// include tree (`getEmittedIncludeTree`) at `lazy_path`; null when `lazy_path`
+/// is not one or its layout cannot be reproduced (a renamed or re-nested
+/// header, a generated or absolute source).
+fn emittedIncludeDirs(arena: Allocator, builder: *Build, lazy_path: LazyPath) !?[]const ResolvedPath {
+    const generated = switch (lazy_path) {
+        .generated => |generated| generated,
+        else => return null,
+    };
+    if (generated.up != 0 or generated.sub_path.len != 0) return null;
+    const step = builder.graph.generated_files.items[@backingInt(generated.index)];
+    if (step.tag != .write_file) return null;
+    const write_file: *Build.Step.WriteFile = @fieldParentPtr("step", step);
+
+    var dirs: std.StringArrayHashMapUnmanaged(ResolvedPath) = .empty;
+    for (write_file.copies.items) |copy| {
+        const source = (resolvePath(arena, copy.src_file) catch |err| switch (err) {
+            error.AbsolutePath => return null,
+            else => |e| return e,
+        }) orelse return null;
+        const dest = builder.graph.wip_configuration.stringSlice(copy.sub_path);
+        const dir = includeDirForInstall(source.sub_path, dest) orelse return null;
+        try dirs.put(arena, try resolvedPathKey(arena, source.package, dir), .{ .package = source.package, .sub_path = dir });
+    }
+    for (write_file.directories.items) |directory| {
+        const source = (resolvePath(arena, directory.src_path) catch |err| switch (err) {
+            error.AbsolutePath => return null,
+            else => |e| return e,
+        }) orelse return null;
+        // Only a directory installed at the tree root maps to a plain include
+        // path (its own source directory).
+        if (builder.graph.wip_configuration.stringSlice(directory.sub_path).len != 0) return null;
+        try dirs.put(arena, try resolvedPathKey(arena, source.package, source.sub_path), .{ .package = source.package, .sub_path = source.sub_path });
+    }
+    if (dirs.values().len == 0) return null;
+    return dirs.values();
+}
+
+fn resolvedPathKey(arena: Allocator, package: []const u8, sub_path: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(arena, "{s}\x00{s}", .{ package, sub_path });
+}
+
 fn appendIncludeDir(
     arena: Allocator,
+    builder: *Build,
     include_dirs: *std.StringArrayHashMapUnmanaged(IncludeDir),
     unsupported: *std.StringArrayHashMapUnmanaged(void),
     kind: []const u8,
@@ -482,6 +543,8 @@ fn appendIncludeDir(
     const resolved_path = resolvePath(arena, lazy_path) catch |err| return reportPath(arena, unsupported, lazy_path, err);
     if (resolved_path) |resolved| {
         try appendUniqueIncludeDir(arena, include_dirs, .{ .kind = kind, .package = resolved.package, .path = resolved.sub_path });
+    } else if (try emittedIncludeDirs(arena, builder, lazy_path)) |dirs| {
+        for (dirs) |dir| try appendUniqueIncludeDir(arena, include_dirs, .{ .kind = kind, .package = dir.package, .path = dir.sub_path });
     } else {
         try unsupported.put(arena, "an include path with a generated location", {});
     }
@@ -494,11 +557,11 @@ fn appendUniqueIncludeDir(arena: Allocator, include_dirs: *std.StringArrayHashMa
 
 /// Fold one include directory into `acc`, recording constructs the importer
 /// cannot represent as `unsupported`.
-fn foldIncludeDir(arena: Allocator, acc: *CAccum, include_dir: Build.Module.IncludeDir) !void {
+fn foldIncludeDir(arena: Allocator, builder: *Build, acc: *CAccum, include_dir: Build.Module.IncludeDir) !void {
     switch (include_dir) {
-        .path => |lp| try appendIncludeDir(arena, &acc.include_dirs, &acc.unsupported, "path", lp),
-        .path_system => |lp| try appendIncludeDir(arena, &acc.include_dirs, &acc.unsupported, "path_system", lp),
-        .path_after => |lp| try appendIncludeDir(arena, &acc.include_dirs, &acc.unsupported, "path_after", lp),
+        .path => |lp| try appendIncludeDir(arena, builder, &acc.include_dirs, &acc.unsupported, "path", lp),
+        .path_system => |lp| try appendIncludeDir(arena, builder, &acc.include_dirs, &acc.unsupported, "path_system", lp),
+        .path_after => |lp| try appendIncludeDir(arena, builder, &acc.include_dirs, &acc.unsupported, "path_after", lp),
         .embed_path => try acc.unsupported.put(arena, "an embed include path (`addEmbedPath`)", {}),
         .framework_path, .framework_path_system => try acc.unsupported.put(arena, "a framework include path", {}),
         .config_header_step => try acc.unsupported.put(arena, "a generated config header (`addConfigHeader`)", {}),
@@ -511,7 +574,7 @@ fn foldIncludeDir(arena: Allocator, acc: *CAccum, include_dir: Build.Module.Incl
 /// Accumulate `module`'s C into `acc`, recursing into the C libraries it links
 /// (`linkLibrary`, `addObject`): a package compiles vendored C as such a
 /// library and links it into its Zig module.
-fn collectCInto(arena: Allocator, acc: *CAccum, module: *Build.Module) !void {
+fn collectCInto(arena: Allocator, builder: *Build, acc: *CAccum, module: *Build.Module) !void {
     if (module.link_libc == true) acc.link_libc = true;
     if (module.link_libcpp == true) acc.link_libcpp = true;
 
@@ -549,12 +612,12 @@ fn collectCInto(arena: Allocator, acc: *CAccum, module: *Build.Module) !void {
             if (compile.root_module.root_source_file != null) {
                 try acc.unsupported.put(arena, "a linked compile step with its own Zig root source (`linkLibrary` of a Zig library)", {});
             } else {
-                try collectCInto(arena, acc, compile.root_module);
+                try collectCInto(arena, builder, acc, compile.root_module);
             }
         },
     };
 
-    for (module.include_dirs.items) |include_dir| try foldIncludeDir(arena, acc, include_dir);
+    for (module.include_dirs.items) |include_dir| try foldIncludeDir(arena, builder, acc, include_dir);
 }
 
 /// A module's collected C information.
@@ -577,7 +640,7 @@ fn collectC(
 ) !Collected {
     var acc: CAccum = .{};
     if (root_source_error) |err| try reportPath(arena, &acc.unsupported, module.root_source_file.?, err);
-    try collectCInto(arena, &acc, module);
+    try collectCInto(arena, builder, &acc, module);
     // A path option enters the options source only when the step runs.
     if (optionsStep(builder, module.root_source_file)) |options| {
         if (options.files.items.len + options.directories.items.len + options.untracked_paths.items.len > 0) {
@@ -1899,6 +1962,55 @@ test "reports a translated-C module's absolute root header as unsupported" {
     const unsupported = entry.get("unsupported").?.array.items;
     try std.testing.expectEqual(1, unsupported.len);
     try std.testing.expectEqualStrings("an absolute path (`/usr/include/box.h`)", unsupported[0].string);
+}
+
+test "expands a compile step's emitted include tree to source include directories" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const build_root = try std.fmt.allocPrint(arena, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+
+    const b = try createBuilder(arena, std.testing.io, .{ .array_hash_map = .empty, .allocator = arena }, "unused-zig", build_root, &.{});
+
+    // A C library that installs a header; its emitted include tree copies the
+    // header from `include/box.h` to `box.h`.
+    const carrier = b.addModule("carrier", .{ .target = b.graph.host, .link_libc = true });
+    carrier.addCSourceFile(.{ .file = b.path("c/box.c") });
+    const lib = b.addLibrary(.{ .name = "box", .linkage = .static, .root_module = carrier });
+    lib.installHeader(b.path("include/box.h"), "box.h");
+
+    // The translate step reaches the header through the emitted include tree,
+    // which the importer maps back to the header's source directory.
+    const translate = b.addTranslateC(.{
+        .root_source_file = b.path("umbrella/box_all.h"),
+        .target = b.graph.host,
+        .optimize = .debug,
+    });
+    translate.addIncludePath(lib.getEmittedIncludeTree());
+    const box_c = translate.addModule("boxc");
+
+    const box = b.addModule("box", .{ .root_source_file = b.path("src/box.zig") });
+    box.addImport("c", box_c);
+
+    var out: std.Io.Writer.Allocating = .init(arena);
+    try emit(arena, &out.writer, b);
+
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, out.written(), .{});
+    const modules = parsed.object.get("modules").?.array.items;
+
+    const boxc_entry = for (modules) |m| {
+        if (std.mem.eql(u8, m.object.get("name").?.string, "boxc")) break m.object;
+    } else unreachable;
+
+    // `installHeader(include/box.h, "box.h")` resolves by adding `include` to the
+    // include path.
+    const incs = boxc_entry.get("include_dirs").?.array.items;
+    try std.testing.expectEqual(1, incs.len);
+    try std.testing.expectEqualStrings("include", incs[0].object.get("path").?.string);
+    try std.testing.expectEqual(null, boxc_entry.get("unsupported"));
 }
 
 fn testModule(name: []const u8, root: []const u8, link_libc: bool, imports: []const Import) Module {
