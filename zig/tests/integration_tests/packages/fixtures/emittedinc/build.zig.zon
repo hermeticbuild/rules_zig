@@ -1,0 +1,13 @@
+.{
+    .name = .emittedinc,
+    .version = "0.0.0",
+    .fingerprint = 0xb30ddfc33c633d48,
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "c",
+        "include",
+        "umbrella",
+    },
+}

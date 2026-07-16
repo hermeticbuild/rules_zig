@@ -26,6 +26,7 @@ const core = @import("core");
 const linklib = @import("linklib");
 const linkamalg = @import("linkamalg");
 const translatec = @import("translatec");
+const emittedinc = @import("emittedinc");
 
 pub fn main() void {
     std.debug.assert(leaf.value == 7);
@@ -106,4 +107,8 @@ pub fn main() void {
     // translation links.
     std.debug.assert(translatec.libValue() == 24);
     std.debug.assert(std.mem.eql(u8, translatec.tag, "box$tag"));
+    // `emittedinc` translates an umbrella header that resolves its include
+    // through a C library's `getEmittedIncludeTree()`, which the importer maps
+    // back to the installed header's source directory.
+    std.debug.assert(emittedinc.value() == 99);
 }
