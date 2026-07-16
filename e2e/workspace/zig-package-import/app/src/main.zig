@@ -3,6 +3,7 @@ const clap = @import("clap");
 const xev = @import("xev");
 const httpz = @import("httpz");
 const sqlite = @import("sqlite");
+const zlua = @import("zlua");
 
 // Parameters declared with the imported `clap` package, resolved at comptime.
 const params = clap.parseParamsComptime(
@@ -28,5 +29,15 @@ pub fn main(init: std.process.Init) !void {
     // and reaches it through a translate-c module it imports as `c`; the
     // version number comes from `sqlite3.h`, exercising the C include path.
     try out.print("sqlite version: {d}\n", .{sqlite.c.SQLITE_VERSION_NUMBER});
+    // `zlua` links the Lua 5.4 C library built from a lazy source-only
+    // dependency and translates its headers through the library's emitted
+    // include tree; running a script exercises both the translated bindings and
+    // the linked C runtime.
+    var lua = try zlua.Lua.init(std.heap.page_allocator);
+    defer lua.deinit();
+    lua.openLibs();
+    try lua.doString("result = 6 * 7");
+    _ = try lua.getGlobal("result");
+    try out.print("ziglua computes: {d}\n", .{try lua.toInteger(-1)});
     try out.flush();
 }

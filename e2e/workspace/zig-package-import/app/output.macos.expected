@@ -3,3 +3,4 @@ libxev backend: kqueue
 httpz methods: 9
 httpz blocking: false
 sqlite version: 3049002
+ziglua computes: 42

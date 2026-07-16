@@ -1,0 +1,113 @@
+diff --git a/build.zig b/build.zig
+--- a/build.zig
++++ b/build.zig
+@@ -46,16 +46,12 @@ pub fn build(b: *Build) void {
+     }
+ 
+     if (b.lazyDependency(@tagName(lang), .{})) |upstream| {
+-        const lib = switch (lang) {
+-            .luajit => luajit_setup.configure(b, target, optimize, upstream, shared),
+-            .luau => luau_setup.configure(b, target, optimize, upstream, luau_use_4_vector),
+-            else => lua_setup.configure(b, target, optimize, upstream, .{
+-                .lang = lang,
+-                .shared = shared,
+-                .library_name = library_name,
+-                .lua_user_h = lua_user_h,
+-            }),
+-        };
++        const lib = lua_setup.configure(b, target, optimize, upstream, .{
++            .lang = lang,
++            .shared = shared,
++            .library_name = library_name,
++            .lua_user_h = lua_user_h,
++        });
+ 
+         // Expose the Lua artifact, and get an install step that header translation can refer to
+         const install_lib = b.addInstallArtifact(lib, .{});
+@@ -88,11 +84,16 @@ pub fn build(b: *Build) void {
+         c_headers.step.dependOn(&install_lib.step);
+ 
+         const ziglua_c = c_headers.createModule();
+-        b.modules.put("ziglua-c", ziglua_c) catch @panic("OOM");
++        b.modules.put(b.allocator, "ziglua-c", ziglua_c) catch @panic("OOM");
+ 
+         zlua.addImport("c", ziglua_c);
+     }
+ 
++    // The importer needs only the public `zlua` module and its translated C
++    // headers; prune the tests, examples, and docs that follow (they use build
++    // APIs the configurer SDK does not provide).
++    if (true) return;
++
+     // Tests
+     const tests = b.addTest(.{
+         .root_module = b.createModule(.{
+diff --git a/build/lua.zig b/build/lua.zig
+--- a/build/lua.zig
++++ b/build/lua.zig
+@@ -69,7 +69,7 @@ pub fn configure(
+         },
+ 
+         // Enable api check
+-        if (optimize == .Debug) "-DLUA_USE_APICHECK" else "",
++        if (optimize == .debug) "-DLUA_USE_APICHECK" else "",
+ 
+         // Build as DLL for windows if shared
+         if (target.result.os.tag == .windows and shared) "-DLUA_BUILD_AS_DLL" else "",
+@@ -103,7 +103,7 @@ pub fn configure(
+         lib.addCSourceFile(.{ .file = patched.output, .flags = &flags });
+     }
+ 
+-    library.linkLibC();
++    lib.link_libc = true;
+ 
+     library.installHeader(upstream.path("src/lua.h"), "lua.h");
+     library.installHeader(upstream.path("src/lualib.h"), "lualib.h");
+@@ -111,7 +111,7 @@ pub fn configure(
+     library.installHeader(upstream.path("src/luaconf.h"), "luaconf.h");
+ 
+     if (lua_user_h) |user_h| {
+-        library.addIncludePath(user_h.dirname());
++        lib.addIncludePath(user_h.dirname());
+         library.installHeader(user_h, user_header);
+     }
+ 
+diff --git a/src/lib.zig b/src/lib.zig
+--- a/src/lib.zig
++++ b/src/lib.zig
+@@ -128,7 +128,7 @@ pub const DebugInfo51 = struct {
+         L: bool = false,
+ 
+         fn toString(options: Options) [10:0]u8 {
+-            var str = [_:0]u8{0} ** 10;
++            var str: [10:0]u8 = @splat(0);
+             var index: u8 = 0;
+ 
+             inline for (std.meta.fields(Options)) |field| {
+@@ -180,7 +180,7 @@ const DebugInfo52 = struct {
+         L: bool = false,
+ 
+         fn toString(options: Options) [10:0]u8 {
+-            var str = [_:0]u8{0} ** 10;
++            var str: [10:0]u8 = @splat(0);
+             var index: u8 = 0;
+ 
+             inline for (std.meta.fields(Options)) |field| {
+@@ -237,7 +237,7 @@ const DebugInfo54 = struct {
+         L: bool = false,
+ 
+         fn toString(options: Options) [10:0]u8 {
+-            var str = [_:0]u8{0} ** 10;
++            var str: [10:0]u8 = @splat(0);
+             var index: u8 = 0;
+ 
+             inline for (std.meta.fields(Options)) |field| {
+@@ -279,7 +279,7 @@ pub const DebugInfoLuau = struct {
+         L: bool = false,
+ 
+         fn toString(options: Options) [10:0]u8 {
+-            var str = [_:0]u8{0} ** 10;
++            var str: [10:0]u8 = @splat(0);
+             var index: u8 = 0;
+ 
+             inline for (std.meta.fields(Options)) |field| {

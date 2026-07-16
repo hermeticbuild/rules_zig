@@ -41,6 +41,10 @@ zig_packages.patch(
     name = "sqlite",
     patches = ["//zig-package-import/app:sqlite.patch"],
 )
+zig_packages.patch(
+    name = "zlua",
+    patches = ["//zig-package-import/app:zlua.patch"],
+)
 use_repo(zig_packages, "zig_deps")
 
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")

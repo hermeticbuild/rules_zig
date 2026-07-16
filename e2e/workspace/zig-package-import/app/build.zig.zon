@@ -20,6 +20,10 @@
             .url = "https://github.com/vrischmann/zig-sqlite/archive/946d77c526258760b52836187af32d1a192c5d36.tar.gz",
             .hash = "sqlite-3.48.0-F2R_azCQDgBGaWDIX4g2vxKpuqzYEQOOfAeJGMNocPu0",
         },
+        .zlua = .{
+            .url = "https://github.com/natecraddock/ziglua/archive/refs/tags/0.6.0.tar.gz",
+            .hash = "zlua-0.1.0-hGRpCww-BQCx3cX6zbKWfTgOx6B7Peo4P17RK2hm7-xV",
+        },
     },
     .paths = .{
         "build.zig.zon",
