@@ -1,0 +1,51 @@
+load("@bazel_skylib//rules:diff_test.bzl", "diff_test")
+load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_c_library", "zig_library")
+
+cc_library(
+    name = "some_c",
+    srcs = ["some.c"],
+    hdrs = ["some.h"],
+)
+
+zig_c_library(
+    name = "some_zig",
+    cdeps = [":some_c"],
+)
+
+cc_library(
+    name = "other_c",
+    srcs = ["other.c"],
+    hdrs = ["other.h"],
+)
+
+zig_library(
+    name = "lib",
+    import_names = {":some_zig": "c"},
+    main = "lib.zig",
+    deps = [
+        ":some_zig",
+        # Triggers the automatic `c` module, which must not shadow `some_zig` as `c`.
+        ":other_c",
+    ],
+)
+
+zig_binary(
+    name = "binary",
+    main = "main.zig",
+    deps = [":lib"],
+)
+
+genrule(
+    name = "output",
+    outs = ["output.actual"],
+    cmd = "$(execpath :binary) > $(OUTS)",
+    tools = [":binary"],
+)
+
+diff_test(
+    name = "output_test",
+    size = "small",
+    file1 = ":output.expected",
+    file2 = ":output.actual",
+)

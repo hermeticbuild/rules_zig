@@ -1,0 +1,1 @@
+char some_value();
