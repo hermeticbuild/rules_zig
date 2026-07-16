@@ -101,11 +101,6 @@ alias(
 )
 """
 
-_LIBRARY_LOAD = """\
-load("@rules_zig//zig:defs.bzl", "zig_library")
-
-"""
-
 _ZIG_LIBRARY = """
 zig_library(
     name = "{name}",
@@ -183,6 +178,35 @@ _CC_LIBRARY_GROUP = """
 cc_library(
     name = "{name}",
     deps = {deps},
+)
+"""
+
+# The header a translated-C module (`b.addTranslateC`) translates, exposed as a
+# `cc_library` the `zig_c_library` translates. Only this header is public, so it
+# alone is translated; the include directories let its own `#include`s resolve.
+# The header is valid only under the translate step's C flags, which this
+# library does not carry, so it opts out of `parse_headers`.
+_CC_TRANSLATE_HEADERS = """
+cc_library(
+    name = "{name}",
+    hdrs = {hdrs},
+    features = ["-parse_headers"],
+    includes = {includes},
+    deps = {deps},
+)
+"""
+
+# A translated-C module: `zig_c_library` runs `translate-c` on the header library
+# under the build toolchain, exposing the result under the module's import name.
+# The translate step's C flags (`addCFlags`, `defineCMacro`) reach it as `copts`.
+# The importing module binds it to `@import("c")` through `import_names`, taking
+# precedence over `rules_zig`'s automatic `c` module.
+_ZIG_C_LIBRARY = """
+zig_c_library(
+    name = "{name}",
+    import_name = "{import_name}",
+    cdeps = {cdeps},
+    copts = {copts},
 )
 """
 
@@ -311,6 +335,59 @@ def _render_c_library(repository_ctx, module, packages, owner):
     chunks.append(_CC_LIBRARY_GROUP.format(name = name, deps = json.encode(group_labels)))
     return chunks, ":" + name
 
+def _render_translate_c_library(repository_ctx, module, packages, owner, cells):
+    """Render the `zig_c_library` (and its header `cc_library`) for a `b.addTranslateC` module.
+
+    A translated-C module's root is generated at build time from its header, so
+    it becomes a `zig_c_library` that translates the header under the build
+    toolchain. The header and each include directory are resolved like vendored
+    C sources: an in-package path is referenced locally, an out-of-package one
+    (`package` set) across repositories. The libraries the module links are
+    linked through the header `cc_library`.
+
+    Returns:
+      the target text chunks: any cross-repo include directory, the header
+      `cc_library`, and the `zig_c_library`.
+    """
+    prefix = (packages[owner]["path"] + "/") if owner else ""
+    translate = module["translate_c"]
+    name = _target_name(packages, owner, module["name"])
+    headers = name + ".chdr"
+
+    if translate.get("package"):
+        header = _cross_repo_label(repository_ctx, translate["package"], translate["header"])
+    else:
+        header = prefix + translate["header"]
+
+    local_includes = []
+    cross_include_labels = []
+    cross_include_chunks = []
+    for index, inc in enumerate(module.get("include_dirs", [])):
+        if inc.get("package"):
+            inc_name = "{}.inc.{}".format(headers, index)
+            cross_include_labels.append(":" + inc_name)
+            cross_include_chunks.append(_render_cross_include(repository_ctx, inc_name, inc))
+        else:
+            local_includes.append(prefix + inc["path"])
+
+    return cross_include_chunks + [
+        _CC_TRANSLATE_HEADERS.format(
+            name = headers,
+            hdrs = json.encode([header]),
+            includes = json.encode(local_includes),
+            deps = _render_select(cells, repository_ctx.attr.config_settings, {
+                cell.name: cross_include_labels + _link_deps(repository_ctx, module, cell.name)
+                for cell in cells
+            }),
+        ),
+        _ZIG_C_LIBRARY.format(
+            name = name,
+            import_name = module["name"],
+            cdeps = json.encode([":" + headers]),
+            copts = _literal_copts(module.get("translate_c_flags", [])),
+        ),
+    ]
+
 def _module_dep_label(repository_ctx, imported, packages):
     # A same-package or in-tree sub-tree import resolves to a sibling target
     # here; any other import resolves to the module's target in its spoke.
@@ -378,7 +455,14 @@ def _module_deps(repository_ctx, module, cell, cc_dep, packages):
         deps.append("@rules_zig//zig/lib:libc")
     if _field(module, "link_libcpp", False, cell):
         deps.append("@rules_zig//zig/lib:libc++")
+    deps.extend(_link_deps(repository_ctx, module, cell))
+    if cc_dep:
+        deps.append(cc_dep)
+    return deps, import_names
 
+def _link_deps(repository_ctx, module, cell):
+    """The labels of the libraries a module links in one cell: its system libraries' `cc_library` annotations."""
+    deps = []
     for name in _field(module, "system_libs", [], cell):
         lib = repository_ctx.attr.system_libraries.get(name)
         if lib == None:
@@ -391,28 +475,54 @@ def _module_deps(repository_ctx, module, cell, cc_dep, packages):
                 name,
             ))
         deps.append(str(lib))
-
-    if cc_dep:
-        deps.append(cc_dep)
-    return deps, import_names
+    return deps
 
 # Fields that reshape the module's own targets, not its dependencies. Varying
 # them across configurations — e.g. platform-specific C sources — requires
 # pushing the differing source globs into each `select()` branch and selecting
 # which `cc_library` siblings a branch includes, which this renderer does not
 # do, so the importer requires these to agree across cells.
-# `generated_source` is materialized to one file shared by every cell.
-_INVARIANT_FIELDS = ["root_source", "generated_source", "csrcs", "include_dirs"]
+# `generated_source` is materialized to one file shared by every cell, and a
+# translated-C module (`translate_c`, `translate_c_flags`) renders one
+# `zig_c_library`.
+_INVARIANT_FIELDS = ["root_source", "generated_source", "translate_c", "translate_c_flags", "csrcs", "include_dirs"]
+
+def _check_module_supported(repository_ctx, module, cells):
+    """Fail if a module cannot be rendered.
+
+    A module cannot be rendered if it uses constructs the importer cannot
+    represent, or varies a field the importer renders invariantly across the
+    configuration matrix.
+    """
+    for cell in cells:
+        unsupported = _field(module, "unsupported", [], cell.name)
+        if unsupported:
+            fail("The Zig package '{}' module '{}' uses unsupported constructs: {}.".format(
+                repository_ctx.attr.url,
+                module["name"],
+                "; ".join(unsupported),
+            ))
+
+    select = module.get("select", {})
+    for field in _INVARIANT_FIELDS:
+        if field in select:
+            fail("The Zig package '{}' module '{}' varies its '{}' across configurations, which the importer does not support.".format(
+                repository_ctx.attr.url,
+                module["name"],
+                field,
+            ))
 
 def _render_libraries(repository_ctx, modules, cells, packages):
     """Render a `zig_library` for each module this package owns.
 
     A dependency is imported under its own name by default; an import under a
     different name is remapped through `import_names`. Vendored C sources become
-    sibling `cc_library` targets the module links against. Root-package modules
-    become top-level libraries; a module owned by an in-tree sub-tree path
-    dependency becomes a library scoped to its sub-path; a module owned by a URL
-    dependency lives in that dependency's own spoke and is skipped here.
+    sibling `cc_library` targets the module links against. A translated-C module
+    (`b.addTranslateC`) becomes a `zig_c_library` importers reach by name. Root-
+    package modules become top-level libraries; a module owned by an in-tree
+    sub-tree path dependency becomes a library scoped to its sub-path; a module
+    owned by a URL dependency lives in that dependency's own spoke and is skipped
+    here.
 
     A module's dependencies, libc linkage and system libraries may vary across
     the configuration matrix, rendering as a `select()` on the cells'
@@ -420,34 +530,27 @@ def _render_libraries(repository_ctx, modules, cells, packages):
     must agree across cells (see `_INVARIANT_FIELDS`).
 
     Returns:
-      `(text, has_cc)`, the rendered targets and whether any `cc_library` was
-      generated (so the caller loads the `cc_library` rule).
+      `(text, has_cc, has_translate_c)`: the rendered targets, whether any
+      `cc_library` was generated (so the caller loads the `cc_library` rule), and
+      whether any `zig_c_library` was generated (so the caller loads it too).
     """
     config_settings = repository_ctx.attr.config_settings
     cc_chunks = []
     library_chunks = []
+    has_translate_c = False
     for module in modules:
         owner = module["package"]
         if owner != "" and not _is_subtree(packages, owner):
             continue
+        _check_module_supported(repository_ctx, module, cells)
 
-        for cell in cells:
-            unsupported = _field(module, "unsupported", [], cell.name)
-            if unsupported:
-                fail("The Zig package '{}' module '{}' uses unsupported constructs: {}.".format(
-                    repository_ctx.attr.url,
-                    module["name"],
-                    "; ".join(unsupported),
-                ))
-
-        select = module.get("select", {})
-        for field in _INVARIANT_FIELDS:
-            if field in select:
-                fail("The Zig package '{}' module '{}' varies its '{}' across configurations, which the importer does not support.".format(
-                    repository_ctx.attr.url,
-                    module["name"],
-                    field,
-                ))
+        # A translated-C module (`b.addTranslateC`) becomes a `zig_c_library`
+        # that runs `translate-c` at build time; its importers reach it by name
+        # like any other module.
+        if module.get("translate_c") != None:
+            cc_chunks.extend(_render_translate_c_library(repository_ctx, module, packages, owner, cells))
+            has_translate_c = True
+            continue
 
         # A `b.addOptions()` module has no file in the package tree; materialize
         # its source into the spoke and treat it as the module's root.
@@ -487,7 +590,7 @@ def _render_libraries(repository_ctx, modules, cells, packages):
                 deps = deps,
                 import_names = import_names,
             ))
-    return "".join(cc_chunks + library_chunks), len(cc_chunks) > 0
+    return "".join(cc_chunks + library_chunks), len(cc_chunks) > 0, has_translate_c
 
 # Directories the rule creates in the repository root for its own use.
 _SCRATCH_DIRS = ["_fetch", "_configure", "_zig_generated"]
@@ -743,8 +846,10 @@ def _zig_package_impl(repository_ctx):
 
         decoded = json.decode(manifest)
         packages = json.decode(repository_ctx.attr.deps)["packages"]
-        libraries, has_cc = _render_libraries(repository_ctx, decoded["modules"], _cells(repository_ctx, decoded), packages)
-        loads += _LIBRARY_LOAD + (_CC_LOAD if has_cc else "")
+        libraries, has_cc, has_translate_c = _render_libraries(repository_ctx, decoded["modules"], _cells(repository_ctx, decoded), packages)
+        zig_rules = ["zig_library"] + (["zig_c_library"] if has_translate_c else [])
+        loads += "load(\"@rules_zig//zig:defs.bzl\", {})\n\n".format(", ".join([_zig_string(rule) for rule in zig_rules]))
+        loads += _CC_LOAD if has_cc else ""
         body += libraries + _main_module_alias(repository_ctx.attr.package_name, decoded["modules"]) + _EXPORT_MANIFEST
 
     build = loads + body + _EXPORTS

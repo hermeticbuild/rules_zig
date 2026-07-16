@@ -140,6 +140,20 @@ pub const Import = struct {
     package: []const u8,
 };
 
+/// A module whose root source is produced by `b.addTranslateC`: its Zig code is
+/// the translation of a C header, generated at build time and absent from the
+/// package tree. The header and the search path needed to translate it are
+/// emitted so the importer can render a `zig_c_library`, which runs `translate-c`
+/// under the build toolchain. The step's include directories, `link_libc`, and
+/// linked system libraries fold into the module's ordinary `include_dirs`,
+/// `link_libc`, and `system_libs` fields.
+pub const TranslateC = struct {
+    /// The package owning the translated header, as for `CSource.package`.
+    header_package: []const u8,
+    /// The translated header's path within `header_package`.
+    header: []const u8,
+};
+
 /// A package module's extracted, configuration-independent shape.
 pub const Module = struct {
     /// The module's name in its owning package (see `nameModules`).
@@ -153,6 +167,12 @@ pub const Module = struct {
     /// The source of a module whose root is produced by `b.addOptions()`, which
     /// has no file in the package tree; null for a file-backed module.
     generated_source: ?[]const u8,
+    /// Present when the module's root is produced by `b.addTranslateC`; null
+    /// otherwise. Mutually exclusive with a file-backed `root_source`.
+    translate_c: ?TranslateC,
+    /// A translated-C module's raw C flags (`addCFlags`, `defineCMacro`) in
+    /// order, less the include paths folded into its `include_dirs`.
+    translate_c_flags: []const []const u8,
     /// Whether the module links the C standard library, by its own setting
     /// (`.link_libc = true`, `linkSystemLibrary("c", .{})`) or through a C
     /// library it links (`linkLibrary`).
@@ -192,6 +212,210 @@ fn optionsStep(builder: *Build, lazy_path: ?LazyPath) ?*Build.Step.Options {
 fn generatedOptionsSource(builder: *Build, lazy_path: ?LazyPath) ?[]const u8 {
     const options = optionsStep(builder, lazy_path) orelse return null;
     return options.contents.items;
+}
+
+/// If `lazy_path` is the generated output of a `b.addTranslateC` step, return
+/// that step; the module it roots is a translated-C module. Other paths return
+/// null.
+fn translateCStep(builder: *Build, lazy_path: ?LazyPath) ?*Build.Step.TranslateC {
+    const generated = switch (lazy_path orelse return null) {
+        .generated => |generated| generated,
+        else => return null,
+    };
+    if (generated.up != 0 or generated.sub_path.len != 0) return null;
+    const step = builder.graph.generated_files.items[@backingInt(generated.index)];
+    if (step.tag != .translate_c) return null;
+    return @fieldParentPtr("step", step);
+}
+
+/// Fold a `b.addTranslateC` step's include directories into `acc` and return the
+/// translate-c marker and C flags. The step's `link_libc` and any
+/// `linkSystemLibrary` are mirrored onto the created module and captured by
+/// `collectCInto`; only its include directories, root header, and C flags live
+/// solely on the step.
+fn foldTranslateC(arena: Allocator, builder: *Build, acc: *CAccum, translate: *Build.Step.TranslateC) !struct { TranslateC, []const []const u8 } {
+    for (translate.include_dirs.items) |include_dir| try foldIncludeDir(arena, acc, include_dir);
+
+    const argv = try arena.alloc([]const u8, translate.cc_argv.items.len);
+    for (argv, translate.cc_argv.items) |*arg, string| arg.* = builder.graph.wip_configuration.stringSlice(string);
+    const c_flags = try foldTranslateCFlags(arena, acc, try packageRoots(arena, builder), try nonEmptyFlags(arena, argv));
+
+    const resolved_header = resolvePath(arena, translate.source) catch |err| {
+        try reportPath(arena, &acc.unsupported, translate.source, err);
+        return .{ .{ .header_package = "", .header = "" }, c_flags };
+    };
+    const header = resolved_header orelse {
+        try acc.unsupported.put(arena, "a translate-c root header with a generated path", {});
+        return .{ .{ .header_package = "", .header = "" }, c_flags };
+    };
+    return .{ .{ .header_package = header.package, .header = header.sub_path }, c_flags };
+}
+
+/// A package's absolute root directory.
+const PackageRoot = struct {
+    package: []const u8,
+    path: []const u8,
+};
+
+/// The roots of the configured package and of every dependency it instantiated.
+fn packageRoots(arena: Allocator, builder: *Build) ![]const PackageRoot {
+    var roots: std.ArrayList(PackageRoot) = .empty;
+    try roots.append(arena, .{ .package = builder.pkg_hash, .path = try builder.root.root_dir.join(arena, &.{builder.root.sub_path}) });
+    for (builder.graph.dependency_cache.values()) |dep| {
+        const root = dep.builder.root;
+        try roots.append(arena, .{ .package = dep.builder.pkg_hash, .path = try root.root_dir.join(arena, &.{root.sub_path}) });
+    }
+    return roots.items;
+}
+
+/// Resolve an absolute `path` to the package with the innermost root containing
+/// it; null when no package root contains it.
+fn resolveAbsolutePath(roots: []const PackageRoot, path: []const u8) ?ResolvedPath {
+    var best: ?ResolvedPath = null;
+    var best_len: usize = 0;
+    for (roots) |root| {
+        if (!mem.startsWith(u8, path, root.path)) continue;
+        const rest = path[root.path.len..];
+        if (rest.len != 0 and rest[0] != '/') continue;
+        if (best != null and root.path.len <= best_len) continue;
+        best = .{ .package = root.package, .sub_path = mem.trimStart(u8, rest, "/") };
+        best_len = root.path.len;
+    }
+    return best;
+}
+
+/// The value of `flag` at `argv[i.*]`, either joined (`-Ipath`, `--flag=value`)
+/// or as the following argument (`-I path`), in which case `i.*` advances past
+/// it. Null when `argv[i.*]` is not `flag`.
+fn flagValue(argv: []const []const u8, i: *usize, flag: []const u8) error{MissingFlagValue}!?[]const u8 {
+    const arg = argv[i.*];
+    if (!mem.startsWith(u8, arg, flag)) return null;
+    if (arg.len > flag.len) {
+        const joined = arg[flag.len..];
+        if (mem.startsWith(u8, flag, "--")) {
+            return if (joined[0] == '=') joined[1..] else null;
+        }
+        return joined;
+    }
+    if (i.* + 1 >= argv.len) return error.MissingFlagValue;
+    i.* += 1;
+    return argv[i.*];
+}
+
+/// Include-path flags and the `IncludeDir.kind` each folds into. A quote include
+/// folds as `path`, since `translate_c.bzl` passes quote includes as `-I`.
+const include_path_flags = [_]struct { []const u8, []const u8 }{
+    .{ "-isystem", "path_system" },
+    .{ "-idirafter", "path_after" },
+    .{ "-iquote", "path" },
+    .{ "-I", "path" },
+};
+
+/// Flags taking a value that `translate-c` under the build toolchain cannot
+/// honor: the toolchain sets target, CPU, sysroot, and library search paths;
+/// framework and embed directories have no `cc_library` counterpart; and a
+/// forced include names a file outside the translated header's library.
+const unsupported_value_flags = [_][]const u8{
+    "-target",
+    "--target",
+    "-mcpu",
+    "--sysroot",
+    "-isysroot",
+    "-iframework",
+    "-F",
+    "-framework",
+    "--embed-dir",
+    "-L",
+    "-l",
+    "-include",
+    "-imacros",
+};
+
+/// Value-less flag prefixes unsupported for the same reason.
+const unsupported_flag_prefixes = [_][]const u8{ "-O", "-Wl," };
+
+/// Passed-through flags that may take their value as the following argument,
+/// which then belongs to the flag (`-D -O3` defines `-O3`).
+const separate_value_flags = [_][]const u8{ "-D", "-U", "-x", "-Xclang" };
+
+/// Whether a passed-through argument names a location on the configuring
+/// machine, which generated targets cannot reference: an absolute path, alone
+/// or after a `=`, or any path under a package root.
+fn namesMachinePath(roots: []const PackageRoot, arg: []const u8) bool {
+    const value = if (mem.indexOfScalar(u8, arg, '=')) |eq| arg[eq + 1 ..] else arg;
+    if (std.fs.path.isAbsolute(arg) or std.fs.path.isAbsolute(value)) return true;
+    for (roots) |root| {
+        if (mem.indexOf(u8, arg, root.path) != null) return true;
+    }
+    return false;
+}
+
+fn reportFlag(arena: Allocator, acc: *CAccum, comptime format: []const u8, text: []const u8) !void {
+    try acc.unsupported.put(arena, try std.fmt.allocPrint(arena, format, .{text}), {});
+}
+
+/// Split a translate step's raw C flags: include paths under a package root fold
+/// into `acc.include_dirs`, flags the importer cannot represent are recorded as
+/// `unsupported`, and the remaining flags are returned in order.
+fn foldTranslateCFlags(arena: Allocator, acc: *CAccum, roots: []const PackageRoot, argv: []const []const u8) ![]const []const u8 {
+    const missing_value = "a translate-c C flag missing its argument (`{s}`)";
+    var c_flags: std.ArrayList([]const u8) = .empty;
+    var i: usize = 0;
+    args: while (i < argv.len) : (i += 1) {
+        const start = i;
+        const arg = argv[i];
+        if (mem.eql(u8, arg, "-cflags")) {
+            try acc.unsupported.put(arena, "a translate-c `-cflags … --` group", {});
+            while (i < argv.len and !mem.eql(u8, argv[i], "--")) i += 1;
+            continue;
+        }
+        for (include_path_flags) |entry| {
+            const flag, const kind = entry;
+            const path = (flagValue(argv, &i, flag) catch {
+                try reportFlag(arena, acc, missing_value, arg);
+                continue :args;
+            }) orelse continue;
+            const text = try mem.join(arena, " ", argv[start .. i + 1]);
+            if (!std.fs.path.isAbsolute(path)) {
+                try reportFlag(arena, acc, "a relative translate-c include path (`{s}`)", text);
+            } else if (resolveAbsolutePath(roots, try std.fs.path.resolveAllocPosix(arena, &.{path}))) |resolved| {
+                try appendUniqueIncludeDir(arena, &acc.include_dirs, .{ .kind = kind, .package = resolved.package, .path = try normalizePath(arena, resolved.sub_path) });
+            } else {
+                try reportFlag(arena, acc, "a translate-c include path outside the package tree (`{s}`)", text);
+            }
+            continue :args;
+        }
+        for (unsupported_value_flags) |flag| {
+            _ = (flagValue(argv, &i, flag) catch {
+                try reportFlag(arena, acc, missing_value, arg);
+                continue :args;
+            }) orelse continue;
+            try reportFlag(arena, acc, "a translate-c C flag (`{s}`)", try mem.join(arena, " ", argv[start .. i + 1]));
+            continue :args;
+        }
+        for (unsupported_flag_prefixes) |prefix| {
+            if (!mem.startsWith(u8, arg, prefix)) continue;
+            try reportFlag(arena, acc, "a translate-c C flag (`{s}`)", arg);
+            continue :args;
+        }
+        for (separate_value_flags) |flag| {
+            if (!mem.eql(u8, arg, flag)) continue;
+            if (i + 1 >= argv.len) {
+                try reportFlag(arena, acc, missing_value, arg);
+                continue :args;
+            }
+            i += 1;
+            break;
+        }
+        const flag = argv[start .. i + 1];
+        for (flag) |part| {
+            if (!namesMachinePath(roots, part)) continue;
+            try reportFlag(arena, acc, "a translate-c C flag naming an absolute path (`{s}`)", try mem.join(arena, " ", flag));
+            continue :args;
+        }
+        try c_flags.appendSlice(arena, flag);
+    }
+    return c_flags.items;
 }
 
 /// The C fields of a `Module`.
@@ -268,6 +492,22 @@ fn appendUniqueIncludeDir(arena: Allocator, include_dirs: *std.StringArrayHashMa
     try include_dirs.put(arena, key, dir);
 }
 
+/// Fold one include directory into `acc`, recording constructs the importer
+/// cannot represent as `unsupported`.
+fn foldIncludeDir(arena: Allocator, acc: *CAccum, include_dir: Build.Module.IncludeDir) !void {
+    switch (include_dir) {
+        .path => |lp| try appendIncludeDir(arena, &acc.include_dirs, &acc.unsupported, "path", lp),
+        .path_system => |lp| try appendIncludeDir(arena, &acc.include_dirs, &acc.unsupported, "path_system", lp),
+        .path_after => |lp| try appendIncludeDir(arena, &acc.include_dirs, &acc.unsupported, "path_after", lp),
+        .embed_path => try acc.unsupported.put(arena, "an embed include path (`addEmbedPath`)", {}),
+        .framework_path, .framework_path_system => try acc.unsupported.put(arena, "a framework include path", {}),
+        .config_header_step => try acc.unsupported.put(arena, "a generated config header (`addConfigHeader`)", {}),
+        // `linkLibrary` pairs this with a `.other_step` link object above, which
+        // folds the linked library's own include directories; nothing to add.
+        .other_step => {},
+    }
+}
+
 /// Accumulate `module`'s C into `acc`, recursing into the C libraries it links
 /// (`linkLibrary`, `addObject`): a package compiles vendored C as such a
 /// library and links it into its Zig module.
@@ -314,22 +554,27 @@ fn collectCInto(arena: Allocator, acc: *CAccum, module: *Build.Module) !void {
         },
     };
 
-    for (module.include_dirs.items) |include_dir| switch (include_dir) {
-        .path => |lp| try appendIncludeDir(arena, &acc.include_dirs, &acc.unsupported, "path", lp),
-        .path_system => |lp| try appendIncludeDir(arena, &acc.include_dirs, &acc.unsupported, "path_system", lp),
-        .path_after => |lp| try appendIncludeDir(arena, &acc.include_dirs, &acc.unsupported, "path_after", lp),
-        .embed_path => try acc.unsupported.put(arena, "an embed include path (`addEmbedPath`)", {}),
-        .framework_path, .framework_path_system => try acc.unsupported.put(arena, "a framework include path", {}),
-        .config_header_step => try acc.unsupported.put(arena, "a generated config header (`addConfigHeader`)", {}),
-        // `linkLibrary` pairs this with a `.other_step` link object above, which
-        // folds the linked library's own include directories; nothing to add.
-        .other_step => {},
-    };
+    for (module.include_dirs.items) |include_dir| try foldIncludeDir(arena, acc, include_dir);
 }
 
-/// Collect `module`'s C information; `root_source_error` is how `resolvePath`
-/// rejected its root source, if it did.
-fn collectC(arena: Allocator, builder: *Build, module: *Build.Module, root_source_error: ?ResolvePathError) !CInfo {
+/// A module's collected C information.
+const Collected = struct {
+    cinfo: CInfo,
+    /// Null unless the module's root is a `b.addTranslateC` step.
+    translate_c: ?TranslateC,
+    translate_c_flags: []const []const u8,
+};
+
+/// Collect `module`'s C information; `translate` is the `b.addTranslateC` step
+/// rooting it, if any, and `root_source_error` is how `resolvePath` rejected its
+/// root source, if it did.
+fn collectC(
+    arena: Allocator,
+    builder: *Build,
+    module: *Build.Module,
+    translate: ?*Build.Step.TranslateC,
+    root_source_error: ?ResolvePathError,
+) !Collected {
     var acc: CAccum = .{};
     if (root_source_error) |err| try reportPath(arena, &acc.unsupported, module.root_source_file.?, err);
     try collectCInto(arena, &acc, module);
@@ -339,13 +584,20 @@ fn collectC(arena: Allocator, builder: *Build, module: *Build.Module, root_sourc
             try acc.unsupported.put(arena, "a path option (`addOptionPath`, `addOptionPathDirectory`, or `addOptionPathUntracked`)", {});
         }
     }
+    var translate_c: ?TranslateC = null;
+    var translate_c_flags: []const []const u8 = &.{};
+    if (translate) |t| translate_c, translate_c_flags = try foldTranslateC(arena, builder, &acc, t);
     return .{
-        .csrcs = acc.csrcs.values(),
-        .include_dirs = acc.include_dirs.values(),
-        .system_libs = acc.system_libs.keys(),
-        .unsupported = acc.unsupported.keys(),
-        .link_libc = acc.link_libc,
-        .link_libcpp = acc.link_libcpp,
+        .cinfo = .{
+            .csrcs = acc.csrcs.values(),
+            .include_dirs = acc.include_dirs.values(),
+            .system_libs = acc.system_libs.keys(),
+            .unsupported = acc.unsupported.keys(),
+            .link_libc = acc.link_libc,
+            .link_libcpp = acc.link_libcpp,
+        },
+        .translate_c = translate_c,
+        .translate_c_flags = translate_c_flags,
     };
 }
 
@@ -367,13 +619,15 @@ pub fn collectModules(arena: Allocator, builder: *Build) ![]const Module {
             error.OutOfMemory => |e| return e,
         };
         const generated_source = generatedOptionsSource(builder, module.root_source_file);
-        // A module with neither a Zig root source nor a generated source is a
-        // pure C-library carrier (`b.addLibrary` over C sources only); it is
-        // never a `zig_library` and reaches the graph only by being linked, so
-        // it is not emitted here: its C folds into the linking module. So is a
-        // module rooted in another step's output (e.g. aro's `generateDef`); a
-        // dep on it is undeclared, harmless while only a build.zig imports it.
-        if (root_source == null and root_source_error == null and generated_source == null) continue;
+        const translate = translateCStep(builder, module.root_source_file);
+        // A module with neither a Zig root source nor a generated one (options or
+        // a translated-C header) is a pure C-library carrier (`b.addLibrary` over
+        // C sources only); it is never a `zig_library` and reaches the graph only
+        // by being linked, so it is not emitted here: its C folds into the
+        // linking module. So is a module rooted in another step's output (e.g.
+        // aro's `generateDef`); a dep on it is undeclared, harmless while only a
+        // build.zig imports it.
+        if (root_source == null and root_source_error == null and generated_source == null and translate == null) continue;
 
         var imports: std.ArrayList(Import) = .empty;
         for (module.import_table.keys(), module.import_table.values()) |import_name, imported| {
@@ -383,12 +637,15 @@ pub fn collectModules(arena: Allocator, builder: *Build) ![]const Module {
                 .package = imported.owner.pkg_hash,
             });
         }
-        const c = try collectC(arena, builder, module, root_source_error);
+        const collected = try collectC(arena, builder, module, translate, root_source_error);
+        const c = collected.cinfo;
         try result.append(arena, .{
             .name = names.get(module).?,
             .package = module.owner.pkg_hash,
             .root_source = root_source,
             .generated_source = generated_source,
+            .translate_c = collected.translate_c,
+            .translate_c_flags = collected.translate_c_flags,
             .link_libc = c.link_libc,
             .link_libcpp = c.link_libcpp,
             .imports = imports.items,
@@ -413,6 +670,14 @@ fn writeModuleFields(json: *std.json.Stringify, module: Module) !void {
     if (module.generated_source) |generated| {
         try json.objectField("generated_source");
         try json.write(generated);
+    }
+    if (module.translate_c) |translate| {
+        try json.objectField("translate_c");
+        try writeTranslateC(json, translate);
+    }
+    if (module.translate_c_flags.len > 0) {
+        try json.objectField("translate_c_flags");
+        try json.write(module.translate_c_flags);
     }
     if (module.link_libc) {
         try json.objectField("link_libc");
@@ -477,7 +742,7 @@ pub const Cell = struct {
 
 /// A configuration-dependent module field, merged across cells into a
 /// `select()` when its value varies.
-const Field = enum { root_source, generated_source, link_libc, link_libcpp, imports, csrcs, include_dirs, system_libs, unsupported };
+const Field = enum { root_source, generated_source, translate_c, translate_c_flags, link_libc, link_libcpp, imports, csrcs, include_dirs, system_libs, unsupported };
 
 fn eqlOptStr(a: ?[]const u8, b: ?[]const u8) bool {
     if (a == null or b == null) return (a == null) == (b == null);
@@ -488,6 +753,12 @@ fn eqlStrList(a: []const []const u8, b: []const []const u8) bool {
     if (a.len != b.len) return false;
     for (a, b) |x, y| if (!mem.eql(u8, x, y)) return false;
     return true;
+}
+
+fn eqlTranslateC(a: ?TranslateC, b: ?TranslateC) bool {
+    if (a == null or b == null) return (a == null) == (b == null);
+    return mem.eql(u8, a.?.header_package, b.?.header_package) and
+        mem.eql(u8, a.?.header, b.?.header);
 }
 
 fn eqlImports(a: []const Import, b: []const Import) bool {
@@ -532,6 +803,18 @@ fn writeCSources(json: *std.json.Stringify, csrcs: []const CSource) !void {
     try json.endArray();
 }
 
+/// Omits an empty `package`, as `writeCSources` does.
+fn writeTranslateC(json: *std.json.Stringify, translate: TranslateC) !void {
+    try json.beginObject();
+    if (translate.header_package.len > 0) {
+        try json.objectField("package");
+        try json.write(translate.header_package);
+    }
+    try json.objectField("header");
+    try json.write(translate.header);
+    try json.endObject();
+}
+
 fn writeIncludeDirs(json: *std.json.Stringify, include_dirs: []const IncludeDir) !void {
     try json.beginArray();
     for (include_dirs) |d| {
@@ -553,6 +836,8 @@ fn fieldEqual(field: Field, a: Module, b: Module) bool {
     return switch (field) {
         .root_source => eqlOptStr(a.root_source, b.root_source),
         .generated_source => eqlOptStr(a.generated_source, b.generated_source),
+        .translate_c => eqlTranslateC(a.translate_c, b.translate_c),
+        .translate_c_flags => eqlStrList(a.translate_c_flags, b.translate_c_flags),
         .link_libc => a.link_libc == b.link_libc,
         .link_libcpp => a.link_libcpp == b.link_libcpp,
         .imports => eqlImports(a.imports, b.imports),
@@ -567,6 +852,8 @@ fn writeField(json: *std.json.Stringify, field: Field, module: Module) !void {
     switch (field) {
         .root_source => try json.write(module.root_source),
         .generated_source => try json.write(module.generated_source),
+        .translate_c => if (module.translate_c) |translate| try writeTranslateC(json, translate) else try json.write(null),
+        .translate_c_flags => try json.write(module.translate_c_flags),
         .link_libc => try json.write(module.link_libc),
         .link_libcpp => try json.write(module.link_libcpp),
         .imports => try json.write(module.imports),
@@ -1241,12 +1528,387 @@ test "reports path options of a generated option module as unsupported" {
     try std.testing.expect(std.mem.indexOf(u8, unsupported[0].string, "addOptionPath") != null);
 }
 
+test "emits a translated-C module's header and include directories" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const build_root = try std.fmt.allocPrint(arena, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+
+    const b = try createBuilder(arena, std.testing.io, .{ .array_hash_map = .empty, .allocator = arena }, "unused-zig", build_root, &.{});
+
+    const translate = b.addTranslateC(.{
+        .root_source_file = b.path("c/box.h"),
+        .target = b.graph.host,
+        .optimize = .debug,
+    });
+    translate.addIncludePath(b.path("c"));
+    translate.defineCMacro("BOX_ENABLED", null);
+    const box_c = translate.addModule("boxc");
+
+    const box = b.addModule("box", .{ .root_source_file = b.path("src/box.zig") });
+    box.addImport("c", box_c);
+
+    var out: std.Io.Writer.Allocating = .init(arena);
+    try emit(arena, &out.writer, b);
+
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, out.written(), .{});
+    const modules = parsed.object.get("modules").?.array.items;
+
+    const boxc_entry = for (modules) |m| {
+        if (std.mem.eql(u8, m.object.get("name").?.string, "boxc")) break m.object;
+    } else unreachable;
+
+    // The translated-C module has no file-backed root source; its header and the
+    // include directory needed to translate it are emitted.
+    try std.testing.expectEqual(std.json.Value.null, boxc_entry.get("root_source").?);
+    const translate_c = boxc_entry.get("translate_c").?.object;
+    try std.testing.expectEqualStrings("c/box.h", translate_c.get("header").?.string);
+    const c_flags = boxc_entry.get("translate_c_flags").?.array.items;
+    try std.testing.expectEqual(2, c_flags.len);
+    // `defineCMacro(name, null)` defaults the value to 1.
+    try std.testing.expectEqualStrings("-D", c_flags[0].string);
+    try std.testing.expectEqualStrings("BOX_ENABLED=1", c_flags[1].string);
+    try std.testing.expectEqual(null, translate_c.get("package"));
+
+    const incs = boxc_entry.get("include_dirs").?.array.items;
+    try std.testing.expectEqual(1, incs.len);
+    try std.testing.expectEqualStrings("path", incs[0].object.get("kind").?.string);
+    try std.testing.expectEqualStrings("c", incs[0].object.get("path").?.string);
+    // `b.addTranslateC` links libc by default.
+    try std.testing.expectEqual(true, boxc_entry.get("link_libc").?.bool);
+    try std.testing.expectEqual(null, boxc_entry.get("unsupported"));
+}
+
+/// Configure a translated-C module `boxc` from `c/box.h` with `cc_argv` as its
+/// raw C flags in a package rooted at an absolute `build_root`, and return its
+/// emitted entry.
+fn emitTranslateCFlags(arena: Allocator, build_root: []const u8, cc_argv: []const []const u8) !std.json.ObjectMap {
+    const b = try createBuilder(arena, std.testing.io, .{ .array_hash_map = .empty, .allocator = arena }, "unused-zig", build_root, &.{});
+
+    const translate = b.addTranslateC(.{
+        .root_source_file = b.path("c/box.h"),
+        .target = b.graph.host,
+        .optimize = .debug,
+    });
+    translate.addCFlags(cc_argv);
+    _ = translate.addModule("boxc");
+
+    var out: std.Io.Writer.Allocating = .init(arena);
+    try emit(arena, &out.writer, b);
+
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, out.written(), .{});
+    for (parsed.object.get("modules").?.array.items) |m| {
+        if (std.mem.eql(u8, m.object.get("name").?.string, "boxc")) return m.object;
+    }
+    return error.TestUnexpectedResult;
+}
+
+fn absoluteTmpRoot(arena: Allocator, tmp: std.testing.TmpDir) ![]const u8 {
+    return std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, try std.fmt.allocPrint(arena, ".zig-cache/tmp/{s}", .{tmp.sub_path}), arena);
+}
+
+test "keeps a translated-C module's C flags in order" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const entry = try emitTranslateCFlags(arena, try absoluteTmpRoot(arena, tmp), &.{ "-DBOX_SIZE=4", "-U", "BOX_DEBUG", "-std=c99" });
+
+    const c_flags = entry.get("translate_c_flags").?.array.items;
+    try std.testing.expectEqual(4, c_flags.len);
+    try std.testing.expectEqualStrings("-DBOX_SIZE=4", c_flags[0].string);
+    try std.testing.expectEqualStrings("-U", c_flags[1].string);
+    try std.testing.expectEqualStrings("BOX_DEBUG", c_flags[2].string);
+    try std.testing.expectEqualStrings("-std=c99", c_flags[3].string);
+    try std.testing.expectEqual(null, entry.get("unsupported"));
+}
+
+test "drops a translated-C module's empty C flags" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const entry = try emitTranslateCFlags(arena, try absoluteTmpRoot(arena, tmp), &.{ "", "-DBOX_SIZE=4", "" });
+
+    const c_flags = entry.get("translate_c_flags").?.array.items;
+    try std.testing.expectEqual(1, c_flags.len);
+    try std.testing.expectEqualStrings("-DBOX_SIZE=4", c_flags[0].string);
+    try std.testing.expectEqual(null, entry.get("unsupported"));
+}
+
+test "folds a translated-C module's include path flags under the package root" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try absoluteTmpRoot(arena, tmp);
+
+    const entry = try emitTranslateCFlags(arena, root, &.{
+        try std.fmt.allocPrint(arena, "-I{s}/c/.", .{root}),
+        "-isystem",
+        try std.fmt.allocPrint(arena, "{s}/sys", .{root}),
+        "-DBOX=1",
+        "-idirafter",
+        try std.fmt.allocPrint(arena, "{s}/after", .{root}),
+    });
+
+    const c_flags = entry.get("translate_c_flags").?.array.items;
+    try std.testing.expectEqual(1, c_flags.len);
+    try std.testing.expectEqualStrings("-DBOX=1", c_flags[0].string);
+
+    const incs = entry.get("include_dirs").?.array.items;
+    try std.testing.expectEqual(3, incs.len);
+    const expected = [_]struct { []const u8, []const u8 }{
+        .{ "path", "c" },
+        .{ "path_system", "sys" },
+        .{ "path_after", "after" },
+    };
+    for (incs, expected) |inc, want| {
+        try std.testing.expectEqualStrings(want[0], inc.object.get("kind").?.string);
+        try std.testing.expectEqualStrings(want[1], inc.object.get("path").?.string);
+        try std.testing.expectEqual(null, inc.object.get("package"));
+    }
+    try std.testing.expectEqual(null, entry.get("unsupported"));
+}
+
+test "reports a translated-C module's unsupported C flags" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const entry = try emitTranslateCFlags(arena, try absoluteTmpRoot(arena, tmp), &.{
+        "-Iinclude",
+        "-isystem",
+        "/outside/include",
+        "-cflags",
+        "-DINSIDE=1",
+        "--",
+        "-target",
+        "x86_64-linux",
+        "-mcpu=native",
+        "-O2",
+        "-lm",
+        "-L",
+        "/lib",
+        "-Wl,--as-needed",
+        "-iframework",
+        "/Frameworks",
+        "--embed-dir=/embed",
+        "--sysroot",
+        "/sysroot",
+        "-DKEPT=1",
+    });
+
+    const c_flags = entry.get("translate_c_flags").?.array.items;
+    try std.testing.expectEqual(1, c_flags.len);
+    try std.testing.expectEqualStrings("-DKEPT=1", c_flags[0].string);
+    try std.testing.expectEqual(null, entry.get("include_dirs"));
+
+    const unsupported = entry.get("unsupported").?.array.items;
+    const expected = [_][]const u8{
+        "a relative translate-c include path (`-Iinclude`)",
+        "a translate-c include path outside the package tree (`-isystem /outside/include`)",
+        "a translate-c `-cflags … --` group",
+        "a translate-c C flag (`-target x86_64-linux`)",
+        "a translate-c C flag (`-mcpu=native`)",
+        "a translate-c C flag (`-O2`)",
+        "a translate-c C flag (`-lm`)",
+        "a translate-c C flag (`-L /lib`)",
+        "a translate-c C flag (`-Wl,--as-needed`)",
+        "a translate-c C flag (`-iframework /Frameworks`)",
+        "a translate-c C flag (`--embed-dir=/embed`)",
+        "a translate-c C flag (`--sysroot /sysroot`)",
+    };
+    try std.testing.expectEqual(expected.len, unsupported.len);
+    for (unsupported, expected) |actual, want| try std.testing.expectEqualStrings(want, actual.string);
+}
+
+test "folds a translated-C module's quote include paths as plain include paths" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try absoluteTmpRoot(arena, tmp);
+
+    const entry = try emitTranslateCFlags(arena, root, &.{
+        "-iquote",
+        try std.fmt.allocPrint(arena, "{s}/quote", .{root}),
+        try std.fmt.allocPrint(arena, "-iquote{s}/joined", .{root}),
+    });
+
+    try std.testing.expectEqual(null, entry.get("translate_c_flags"));
+    const incs = entry.get("include_dirs").?.array.items;
+    try std.testing.expectEqual(2, incs.len);
+    for (incs, [_][]const u8{ "quote", "joined" }) |inc, want| {
+        try std.testing.expectEqualStrings("path", inc.object.get("kind").?.string);
+        try std.testing.expectEqualStrings(want, inc.object.get("path").?.string);
+    }
+    try std.testing.expectEqual(null, entry.get("unsupported"));
+}
+
+test "resolves `..` in a translated-C module's include path before matching the package root" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try absoluteTmpRoot(arena, tmp);
+    const escape = try std.fmt.allocPrint(arena, "-I{s}/c/../../escape", .{root});
+
+    const entry = try emitTranslateCFlags(arena, root, &.{
+        try std.fmt.allocPrint(arena, "-I{s}/c/../inc", .{root}),
+        escape,
+    });
+
+    const incs = entry.get("include_dirs").?.array.items;
+    try std.testing.expectEqual(1, incs.len);
+    try std.testing.expectEqualStrings("inc", incs[0].object.get("path").?.string);
+    const unsupported = entry.get("unsupported").?.array.items;
+    try std.testing.expectEqual(1, unsupported.len);
+    try std.testing.expectEqualStrings(
+        try std.fmt.allocPrint(arena, "a translate-c include path outside the package tree (`{s}`)", .{escape}),
+        unsupported[0].string,
+    );
+}
+
+test "keeps a translated-C flag's separate value with the flag" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const argv: []const []const u8 = &.{ "-D", "-O3", "-U", "-target", "-x", "c", "-Xclang", "-fno-builtin" };
+    const entry = try emitTranslateCFlags(arena, try absoluteTmpRoot(arena, tmp), argv);
+
+    const c_flags = entry.get("translate_c_flags").?.array.items;
+    try std.testing.expectEqual(argv.len, c_flags.len);
+    for (c_flags, argv) |actual, want| try std.testing.expectEqualStrings(want, actual.string);
+    try std.testing.expectEqual(null, entry.get("unsupported"));
+}
+
+test "reports a translated-C module's C flags naming absolute paths" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try absoluteTmpRoot(arena, tmp);
+    const define = try std.fmt.allocPrint(arena, "DATA={s}/data", .{root});
+    const prefix_map = try std.fmt.allocPrint(arena, "-fmacro-prefix-map={s}=.", .{root});
+    const dep_file = try std.fmt.allocPrint(arena, "-Wp,-MD,{s}/box.d", .{root});
+
+    const entry = try emitTranslateCFlags(arena, root, &.{
+        "-include",
+        "force.h",
+        "-imacros/macros.h",
+        "-DCONF=/etc/box.conf",
+        "-D",
+        define,
+        prefix_map,
+        dep_file,
+        "/box/extra.h",
+        "-DKEPT=1",
+    });
+
+    const c_flags = entry.get("translate_c_flags").?.array.items;
+    try std.testing.expectEqual(1, c_flags.len);
+    try std.testing.expectEqualStrings("-DKEPT=1", c_flags[0].string);
+
+    const unsupported = entry.get("unsupported").?.array.items;
+    const expected = [_][]const u8{
+        "a translate-c C flag (`-include force.h`)",
+        "a translate-c C flag (`-imacros/macros.h`)",
+        "a translate-c C flag naming an absolute path (`-DCONF=/etc/box.conf`)",
+        try std.fmt.allocPrint(arena, "a translate-c C flag naming an absolute path (`-D {s}`)", .{define}),
+        try std.fmt.allocPrint(arena, "a translate-c C flag naming an absolute path (`{s}`)", .{prefix_map}),
+        try std.fmt.allocPrint(arena, "a translate-c C flag naming an absolute path (`{s}`)", .{dep_file}),
+        "a translate-c C flag naming an absolute path (`/box/extra.h`)",
+    };
+    try std.testing.expectEqual(expected.len, unsupported.len);
+    for (unsupported, expected) |actual, want| try std.testing.expectEqualStrings(want, actual.string);
+}
+
+test "reports a translated-C flag missing its argument" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try absoluteTmpRoot(arena, tmp);
+
+    for ([_][]const u8{ "-I", "-include", "-D" }) |flag| {
+        const entry = try emitTranslateCFlags(arena, root, &.{ "-DKEPT=1", flag });
+
+        const c_flags = entry.get("translate_c_flags").?.array.items;
+        try std.testing.expectEqual(1, c_flags.len);
+        try std.testing.expectEqualStrings("-DKEPT=1", c_flags[0].string);
+        const unsupported = entry.get("unsupported").?.array.items;
+        try std.testing.expectEqual(1, unsupported.len);
+        try std.testing.expectEqualStrings(
+            try std.fmt.allocPrint(arena, "a translate-c C flag missing its argument (`{s}`)", .{flag}),
+            unsupported[0].string,
+        );
+    }
+}
+
+test "reports a translated-C module's absolute root header as unsupported" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const build_root = try std.fmt.allocPrint(arena, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+
+    const b = try createBuilder(arena, std.testing.io, .{ .array_hash_map = .empty, .allocator = arena }, "unused-zig", build_root, &.{});
+
+    const translate = b.addTranslateC(.{
+        .root_source_file = .{ .cwd_relative = "/usr/include/box.h" },
+        .target = b.graph.host,
+        .optimize = .debug,
+    });
+    _ = translate.addModule("boxc");
+
+    var out: std.Io.Writer.Allocating = .init(arena);
+    try emit(arena, &out.writer, b);
+
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, out.written(), .{});
+    const entry = parsed.object.get("modules").?.array.items[0].object;
+    try std.testing.expectEqualStrings("boxc", entry.get("name").?.string);
+    const unsupported = entry.get("unsupported").?.array.items;
+    try std.testing.expectEqual(1, unsupported.len);
+    try std.testing.expectEqualStrings("an absolute path (`/usr/include/box.h`)", unsupported[0].string);
+}
+
 fn testModule(name: []const u8, root: []const u8, link_libc: bool, imports: []const Import) Module {
     return .{
         .name = name,
         .package = "",
         .root_source = root,
         .generated_source = null,
+        .translate_c = null,
+        .translate_c_flags = &.{},
         .link_libc = link_libc,
         .link_libcpp = false,
         .imports = imports,
