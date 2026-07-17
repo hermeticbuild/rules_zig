@@ -228,6 +228,25 @@ def _spoke_label(labels, key, target):
     spoke, _, sub_path = key.partition("/")
     return labels[spoke].same_package_label(sub_path + "/" + target if sub_path else target)
 
+def _local_include(prefix, sub_path):
+    # A sub-tree module's include directory, prefixed by its sub-path. The
+    # configurer renders the package root as the empty string, so a root include
+    # leaves a bare prefix whose trailing slash would make an invalid glob.
+    path = prefix + sub_path
+    return path[:-1] if path.endswith("/") else path
+
+def _local_prefix(packages, owner, package):
+    # The directory of this spoke a C source or include directory of `package`
+    # lies under, or None when another spoke owns it (`dep.path`, referenced
+    # across repositories). A file reports its owning package: the root package
+    # as the empty string, a sub-tree by its key, which is the module's owner for
+    # a sub-tree module's own files and another key for a `dep.path` into a
+    # sub-tree dependency of this spoke.
+    key = package or owner
+    if not key:
+        return ""
+    return packages[key]["path"] + "/" if _is_subtree(packages, key) else None
+
 def _cross_repo_label(repository_ctx, package, target):
     # A file/target in a dependency's spoke, reached through the `files`
     # filegroup label the extension provides for that dependency.
@@ -260,7 +279,6 @@ def _render_c_library(repository_ctx, module, packages, owner):
       links against, or `([], None)` when the module has no C sources.
     """
     url = repository_ctx.attr.url
-    prefix = (packages[owner]["path"] + "/") if owner else ""
 
     c_sources = []
     for csrc in module.get("csrcs", []):
@@ -270,7 +288,8 @@ def _render_c_library(repository_ctx, module, packages, owner):
                 module["name"],
                 csrc["language"],
             ))
-        if csrc.get("package"):
+        prefix = _local_prefix(packages, owner, csrc.get("package"))
+        if prefix == None:
             src = _cross_repo_label(repository_ctx, csrc["package"], csrc["path"])
             files = _spoke_files(repository_ctx, csrc["package"])
         else:
@@ -286,12 +305,13 @@ def _render_c_library(repository_ctx, module, packages, owner):
     cross_include_labels = []
     cross_include_chunks = []
     for index, inc in enumerate(module.get("include_dirs", [])):
-        if inc.get("package"):
+        prefix = _local_prefix(packages, owner, inc.get("package"))
+        if prefix == None:
             inc_name = "{}.inc.{}".format(name, index)
             cross_include_labels.append(":" + inc_name)
             cross_include_chunks.append(_render_cross_include(repository_ctx, inc_name, inc))
         else:
-            local_includes.append(prefix + inc["path"])
+            local_includes.append(_local_include(prefix, inc["path"]))
 
     # Local headers live in an include directory or beside a local C source.
     header_dirs = {inc: None for inc in local_includes}
@@ -349,12 +369,12 @@ def _render_translate_c_library(repository_ctx, module, packages, owner, cells):
       the target text chunks: any cross-repo include directory, the header
       `cc_library`, and the `zig_c_library`.
     """
-    prefix = (packages[owner]["path"] + "/") if owner else ""
     translate = module["translate_c"]
     name = _target_name(packages, owner, module["name"])
     headers = name + ".chdr"
 
-    if translate.get("package"):
+    prefix = _local_prefix(packages, owner, translate.get("package"))
+    if prefix == None:
         header = _cross_repo_label(repository_ctx, translate["package"], translate["header"])
     else:
         header = prefix + translate["header"]
@@ -363,12 +383,13 @@ def _render_translate_c_library(repository_ctx, module, packages, owner, cells):
     header_deps = []
     dep_chunks = []
     for index, inc in enumerate(module.get("include_dirs", [])):
-        if inc.get("package"):
+        prefix = _local_prefix(packages, owner, inc.get("package"))
+        if prefix == None:
             inc_name = "{}.inc.{}".format(headers, index)
             header_deps.append(":" + inc_name)
             dep_chunks.append(_render_cross_include(repository_ctx, inc_name, inc))
         else:
-            local_includes.append(prefix + inc["path"])
+            local_includes.append(_local_include(prefix, inc["path"]))
 
     # The headers reachable from the translated header's own `#include`s: those
     # in its include directories, provided (with their search path) so the
