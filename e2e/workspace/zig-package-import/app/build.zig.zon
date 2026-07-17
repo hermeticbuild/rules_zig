@@ -24,6 +24,10 @@
             .url = "https://github.com/natecraddock/ziglua/archive/refs/tags/0.6.0.tar.gz",
             .hash = "zlua-0.1.0-hGRpCww-BQCx3cX6zbKWfTgOx6B7Peo4P17RK2hm7-xV",
         },
+        .zap = .{
+            .url = "https://github.com/zigzap/zap/archive/refs/tags/v0.10.6.tar.gz",
+            .hash = "zap-0.10.6-GoeB89aDJAAUufiqV7sUCudCoSSCle0E2fbw388bO1Ug",
+        },
     },
     .paths = .{
         "build.zig.zon",

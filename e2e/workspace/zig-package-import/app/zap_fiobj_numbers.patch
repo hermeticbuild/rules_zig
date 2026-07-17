@@ -1,0 +1,11 @@
+--- a/facil.io/lib/facil/fiobj/fiobj_numbers.c
++++ b/facil.io/lib/facil/fiobj/fiobj_numbers.c
+@@ -182,8 +182,6 @@
+ Numbers to Strings - Buffered
+ ***************************************************************************** */
+ 
+-static __thread char num_buffer[512];
+-
+ fio_str_info_s fio_ltocstr(long i) {
+   return (fio_str_info_s){.data = num_buffer,
+                           .len = fio_ltoa(num_buffer, i, 10)};

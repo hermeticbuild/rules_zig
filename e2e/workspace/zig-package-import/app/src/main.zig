@@ -4,6 +4,7 @@ const xev = @import("xev");
 const httpz = @import("httpz");
 const sqlite = @import("sqlite");
 const zlua = @import("zlua");
+const zap = @import("zap");
 
 // Parameters declared with the imported `clap` package, resolved at comptime.
 const params = clap.parseParamsComptime(
@@ -39,5 +40,10 @@ pub fn main(init: std.process.Init) !void {
     try lua.doString("result = 6 * 7");
     _ = try lua.getGlobal("result");
     try out.print("ziglua computes: {d}\n", .{try lua.toInteger(-1)});
+    // `zap` links the in-tree facil.io C library into its module through
+    // `linkLibrary`; calling the C URL parser exercises the linked C runtime.
+    const url = "http://example.com:8080/path";
+    const parsed = zap.fio.fio_url_parse(url, url.len);
+    try out.print("zap parsed host length: {d}\n", .{parsed.host.len});
     try out.flush();
 }
