@@ -14,5 +14,7 @@
         "build.zig.zon",
         "src",
         "libs",
+        "csrc",
+        "offset.h",
     },
 }
