@@ -104,9 +104,9 @@ alias(
 _ZIG_LIBRARY = """
 zig_library(
     name = "{name}",
-    main = "{main}",
+    main = {main},
     import_name = "{name}",
-    srcs = glob(["**/*.zig"], exclude = ["{main}"]),
+    srcs = {srcs},
     deps = {deps},
     import_names = {import_names},
 )
@@ -118,9 +118,9 @@ zig_library(
 _ZIG_LIBRARY_SUBTREE = """
 zig_library(
     name = "{name}",
-    main = "{main}",
+    main = {main},
     import_name = "{import_name}",
-    srcs = glob(["{subpath}/**/*.zig"], exclude = ["{main}"]),
+    srcs = {srcs},
     deps = {deps},
     import_names = {import_names},
 )
@@ -271,7 +271,7 @@ def _literal_copts(flags):
     # are literal.
     return json.encode([flag.replace("$", "$$") for flag in flags])
 
-def _render_c_library(repository_ctx, module, packages, owner):
+def _render_c_shape(repository_ctx, module, packages, owner, csrcs, include_dirs, name):
     """Render the `cc_library` targets for a module's vendored C sources.
 
     Returns:
@@ -281,7 +281,7 @@ def _render_c_library(repository_ctx, module, packages, owner):
     url = repository_ctx.attr.url
 
     c_sources = []
-    for csrc in module.get("csrcs", []):
+    for csrc in csrcs:
         if csrc["language"] not in (None, "c", "cpp"):
             fail("The Zig package '{}' module '{}' declares the unsupported C source language '{}'.".format(
                 url,
@@ -299,12 +299,10 @@ def _render_c_library(repository_ctx, module, packages, owner):
     if not c_sources:
         return [], None
 
-    name = _target_name(packages, owner, module["name"]) + ".cinc"
-
     local_includes = []
     cross_include_labels = []
     cross_include_chunks = []
-    for index, inc in enumerate(module.get("include_dirs", [])):
+    for index, inc in enumerate(include_dirs):
         prefix = _local_prefix(packages, owner, inc.get("package"))
         if prefix == None:
             inc_name = "{}.inc.{}".format(name, index)
@@ -354,6 +352,35 @@ def _render_c_library(repository_ctx, module, packages, owner):
         ))
     chunks.append(_CC_LIBRARY_GROUP.format(name = name, deps = json.encode(group_labels)))
     return chunks, ":" + name
+
+def _render_c_library(repository_ctx, module, packages, owner, cells):
+    """Render each distinct C shape the module presents across the cells.
+
+    A module's C sources and include directories may differ across the
+    configuration matrix; cells sharing a shape share one rendered `cc_library`
+    tree. The fallback cell's shape keeps the bare `<module>.cinc` name so a
+    package with a single C shape renders identically to an unconfigured one;
+    each additional distinct shape is namespaced by a representative cell.
+
+    Returns:
+      `(chunks, cc_dep_by_cell)`: the target text chunks and, per cell, the label
+      the owning module links against (or `None` when that cell has no C).
+    """
+    base = _target_name(packages, owner, module["name"])
+    chunks = []
+    shapes = {}
+    cc_dep_by_cell = {}
+    for cell in cells:
+        csrcs = _field(module, "csrcs", [], cell.name)
+        include_dirs = _field(module, "include_dirs", [], cell.name)
+        key = json.encode([csrcs, include_dirs])
+        if key not in shapes:
+            name = base + ".cinc" if len(shapes) == 0 else "{}.{}.cinc".format(base, cell.name)
+            shape_chunks, cc_dep = _render_c_shape(repository_ctx, module, packages, owner, csrcs, include_dirs, name)
+            chunks.extend(shape_chunks)
+            shapes[key] = cc_dep
+        cc_dep_by_cell[cell.name] = shapes[key]
+    return chunks, cc_dep_by_cell
 
 def _render_translate_c_library(repository_ctx, module, packages, owner, cells):
     """Render the `zig_c_library` (and its header `cc_library`) for a `b.addTranslateC` module.
@@ -455,29 +482,41 @@ def _field(module, field, default, cell):
         return select[field][cell]
     return module.get(field, default)
 
-def _render_select(cells, config_settings, by_cell):
-    """Render a per-cell attribute value as a literal or a `select()`.
+def _select_expr(cells, config_settings, expr_by_cell):
+    """Render a per-cell attribute as a literal or a `select()`.
+
+    Each cell's value is given as an already-rendered Starlark expression string.
 
     Args:
-      cells: the ordered cells, the `//conditions:default` fallback first.
+      cells: the ordered cells, the `//conditions:default` fallback (`cells[0]`) first.
       config_settings: map from a non-fallback cell name to its
         `config_setting_group` label.
-      by_cell: map from cell name to the attribute's value in that cell.
+      expr_by_cell: map from cell name to that cell's rendered Starlark expression.
 
     Returns:
       the attribute's Starlark code.
     """
-    fallback = by_cell[cells[0].name]
-    if all([by_cell[cell.name] == fallback for cell in cells]):
-        return json.encode(fallback)
+    fallback = expr_by_cell[cells[0].name]
+    if all([expr_by_cell[cell.name] == fallback for cell in cells]):
+        return fallback
 
     lines = ["select({"]
     for cell in cells:
         if cell.config_setting != "":
-            lines.append("    {}: {},".format(json.encode(str(config_settings[cell.name])), json.encode(by_cell[cell.name])))
-    lines.append("    \"//conditions:default\": {},".format(json.encode(fallback)))
+            lines.append("    {}: {},".format(json.encode(str(config_settings[cell.name])), expr_by_cell[cell.name]))
+    lines.append("    \"//conditions:default\": {},".format(fallback))
     lines.append("})")
     return "\n".join(lines)
+
+def _render_select(cells, config_settings, by_cell):
+    """Render a per-cell attribute value (a JSON-encodable value per cell)."""
+    return _select_expr(cells, config_settings, {cell.name: json.encode(by_cell[cell.name]) for cell in cells})
+
+def _glob_srcs(pattern, exclude_main):
+    # A module's non-root Zig sources: every `.zig` under `pattern` except the
+    # cell's root source (supplied as `main`). Rendered per cell so a varying
+    # root source becomes a `select()` of globs.
+    return "glob([{}], exclude = {})".format(json.encode(pattern), json.encode([exclude_main]))
 
 def _module_deps(repository_ctx, module, cell, cc_dep, packages):
     """The `deps` and `import_names` of a module's `zig_library` in one cell."""
@@ -514,15 +553,14 @@ def _link_deps(repository_ctx, module, cell):
         deps.append(str(lib))
     return deps
 
-# Fields that reshape the module's own targets, not its dependencies. Varying
-# them across configurations — e.g. platform-specific C sources — requires
-# pushing the differing source globs into each `select()` branch and selecting
-# which `cc_library` siblings a branch includes, which this renderer does not
-# do, so the importer requires these to agree across cells.
-# `generated_source` is materialized to one file shared by every cell, and a
-# translated-C module (`translate_c`, `translate_c_flags`) renders one
-# `zig_c_library`.
-_INVARIANT_FIELDS = ["root_source", "generated_source", "translate_c", "translate_c_flags", "csrcs", "include_dirs"]
+# Fields that reshape the module's own root and that the importer renders once
+# for every configuration, so they must agree across cells: a
+# `generated_source` is materialized to a single file shared by every cell, and
+# a `translate_c` module becomes one `zig_c_library`. The root source, C sources
+# and include directories may vary: they render as a `select()` over the cells'
+# `config_setting_group`s. Translated-C modules keep their C sources, include
+# directories and C flags invariant (see `_check_module_supported`).
+_INVARIANT_FIELDS = ["generated_source", "translate_c"]
 
 def _check_module_supported(repository_ctx, module, cells):
     """Fail if a module cannot be rendered.
@@ -541,7 +579,13 @@ def _check_module_supported(repository_ctx, module, cells):
             ))
 
     select = module.get("select", {})
-    for field in _INVARIANT_FIELDS:
+    invariant = _INVARIANT_FIELDS
+    if module.get("translate_c") != None:
+        # A translated-C module renders one `zig_c_library` and header
+        # `cc_library` from the fallback cell's header, include directories and
+        # C flags, none of which it selects per cell.
+        invariant = invariant + ["csrcs", "include_dirs", "translate_c_flags"]
+    for field in invariant:
         if field in select:
             fail("The Zig package '{}' module '{}' varies its '{}' across configurations, which the importer does not support.".format(
                 repository_ctx.attr.url,
@@ -561,10 +605,10 @@ def _render_libraries(repository_ctx, modules, cells, packages):
     owned by a URL dependency lives in that dependency's own spoke and is skipped
     here.
 
-    A module's dependencies, libc linkage and system libraries may vary across
-    the configuration matrix, rendering as a `select()` on the cells'
-    `config_setting_group`s. Its root source, C sources and include directories
-    must agree across cells (see `_INVARIANT_FIELDS`).
+    A module's root source, C sources, include directories, dependencies, libc
+    linkage and system libraries may vary across the configuration matrix,
+    rendering as a `select()` on the cells' `config_setting_group`s (see
+    `_INVARIANT_FIELDS` for the fields that may not).
 
     Returns:
       `(text, has_cc, has_translate_c)`: the rendered targets, whether any
@@ -595,35 +639,43 @@ def _render_libraries(repository_ctx, modules, cells, packages):
         if generated != None:
             root_source = "_zig_generated/" + module["name"] + ".zig"
             repository_ctx.file((packages[owner]["path"] + "/" if owner else "") + root_source, generated)
+            root_by_cell = {cell.name: root_source for cell in cells}
         else:
-            root_source = module["root_source"]
+            root_by_cell = {cell.name: _field(module, "root_source", None, cell.name) for cell in cells}
 
-        chunks, cc_dep = _render_c_library(repository_ctx, module, packages, owner)
+        chunks, cc_dep_by_cell = _render_c_library(repository_ctx, module, packages, owner, cells)
         cc_chunks.extend(chunks)
 
         deps_by_cell = {}
         names_by_cell = {}
         for cell in cells:
-            deps, import_names = _module_deps(repository_ctx, module, cell.name, cc_dep, packages)
+            deps, import_names = _module_deps(repository_ctx, module, cell.name, cc_dep_by_cell[cell.name], packages)
             deps_by_cell[cell.name] = deps
             names_by_cell[cell.name] = import_names
 
         deps = _render_select(cells, config_settings, deps_by_cell)
         import_names = _render_select(cells, config_settings, names_by_cell)
+
         if owner == "":
+            main = _select_expr(cells, config_settings, {cell.name: json.encode(root_by_cell[cell.name]) for cell in cells})
+            srcs = _select_expr(cells, config_settings, {cell.name: _glob_srcs("**/*.zig", root_by_cell[cell.name]) for cell in cells})
             library_chunks.append(_ZIG_LIBRARY.format(
                 name = module["name"],
-                main = root_source,
+                main = main,
+                srcs = srcs,
                 deps = deps,
                 import_names = import_names,
             ))
         else:
             subpath = packages[owner]["path"]
+            mains = {cell.name: subpath + "/" + root_by_cell[cell.name] for cell in cells}
+            main = _select_expr(cells, config_settings, {cell.name: json.encode(mains[cell.name]) for cell in cells})
+            srcs = _select_expr(cells, config_settings, {cell.name: _glob_srcs(subpath + "/**/*.zig", mains[cell.name]) for cell in cells})
             library_chunks.append(_ZIG_LIBRARY_SUBTREE.format(
                 name = _target_name(packages, owner, module["name"]),
                 import_name = module["name"],
-                main = subpath + "/" + root_source,
-                subpath = subpath,
+                main = main,
+                srcs = srcs,
                 deps = deps,
                 import_names = import_names,
             ))
