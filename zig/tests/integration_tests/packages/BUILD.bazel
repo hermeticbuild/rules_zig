@@ -84,6 +84,15 @@ cc_library(
     visibility = ["//visibility:public"],
 )
 
+# The configuration matrix drives `cvardep`'s root source, C source, and
+# include directory per optimize mode, pushing each into a `select` overlay on
+# its extracted module graph.
+diff_test(
+    name = "cvardep_manifest_test",
+    file1 = "cvardep_manifest.expected.json",
+    file2 = zig_package_file("cvardep", "module_manifest.json"),
+)
+
 # Provide the system libraries the `tgtdep` package links under each cell of
 # its target `configure` matrix: `posixonly` for the fallback `linux` cell,
 # `winonly` for the `windows` cell, `maconly` for the `macos` cell.

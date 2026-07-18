@@ -41,6 +41,7 @@ const packages = [_]Package{
     .{ .name = "syslibdep" },
     .{ .name = "optdep" },
     .{ .name = "cfgdep" },
+    .{ .name = "cvardep" },
     .{ .name = "host", .patches = &.{.{ .manifest = "libs/foo/build.zig.zon", .deps = &.{"leaf"} }} },
     .{ .name = "hostuser", .patches = &.{.{ .deps = &.{"host"} }} },
     .{ .name = "srconly" },
@@ -62,7 +63,7 @@ const Consumer = struct {
 
 // Manifests that resolve dependencies via `zig_packages.from_file`.
 const consumers = [_]Consumer{
-    .{ .manifest = "build.zig.zon", .deps = &.{ "leaf", "bottom", "top", "libv1", "libfork", "libv2", "multi", "pruned", "symlinked", "lazyhost", "lazydirect", "usec", "cdep", "cppdep", "syslibdep", "optdep", "cfgdep", "host", "srconly", "genopts", "tgtdep", "patchdep", "aliasmod", "linklib", "linkamalg", "translatec", "emittedinc" } },
+    .{ .manifest = "build.zig.zon", .deps = &.{ "leaf", "bottom", "top", "libv1", "libfork", "libv2", "multi", "pruned", "symlinked", "lazyhost", "lazydirect", "usec", "cdep", "cppdep", "syslibdep", "optdep", "cfgdep", "cvardep", "host", "srconly", "genopts", "tgtdep", "patchdep", "aliasmod", "linklib", "linkamalg", "translatec", "emittedinc" } },
     .{ .manifest = "child/build.zig.zon", .deps = &.{ "leaf", "libv2", "hostuser" } },
 };
 
@@ -126,7 +127,7 @@ test "Zig packages are imported from file:// tarballs" {
     // The extracted module graph is exposed per package; assert it against the
     // golden manifests.
     const manifest_result = try ctx.exec_bazel(.{
-        .argv = &[_][]const u8{ "test", "//:multi_manifest_test", "//:translatec_manifest_test", "//:cfgdep_manifest_test", "//:tgtdep_manifest_test" },
+        .argv = &[_][]const u8{ "test", "//:multi_manifest_test", "//:translatec_manifest_test", "//:cfgdep_manifest_test", "//:cvardep_manifest_test", "//:tgtdep_manifest_test" },
     });
     defer manifest_result.deinit();
     try std.testing.expect(manifest_result.success);

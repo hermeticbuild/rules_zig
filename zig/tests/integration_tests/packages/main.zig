@@ -17,6 +17,7 @@ const cppdep = @import("cppdep");
 const syslibdep = @import("syslibdep");
 const optdep = @import("optdep");
 const cfgdep = @import("cfgdep");
+const cvardep = @import("cvardep");
 const host = @import("host");
 const greeter = @import("greeter");
 const genopts = @import("genopts");
@@ -67,6 +68,10 @@ pub fn main() void {
     // cell and `relonly` (returns 2) in the `rel` cell; the build's optimize
     // mode selects the cell, matching the mode `cfgdep` itself compiles under.
     std.debug.assert(cfgdep.value() == @as(c_int, if (builtin.mode == .debug) 1 else 2));
+    // The `configure` matrix drives `cvardep`'s root source, C source, and
+    // include directory per optimize mode: `debug` yields 11+100, `fast`
+    // 22+200, each rendered as a `select()` branch.
+    std.debug.assert(cvardep.value() == @as(c_int, if (builtin.mode == .debug) 111 else 222));
     // (5 + 7 + 42) + 9: `host` has sub-tree path dependencies `foo` and `bar`;
     // `foo` pulls its own nested `bar` (5) and the URL `leaf` (7), while `host`
     // links a distinct `bar` (9) — the two `bar`s stay separate by sub-path.
