@@ -115,7 +115,7 @@ Declare a build-configuration matrix cell that a `configure` tag can apply to Zi
 | <a id="zig_packages.config-name"></a>name |  Module-local name of this configuration cell.   | <a href="https://bazel.build/concepts/labels#target-names">Name</a> | required |  |
 | <a id="zig_packages.config-optimize"></a>optimize |  Zig optimize mode: `debug`, `release_safe`, `release_small` or `release_fast`.   | String | optional |  `""`  |
 | <a id="zig_packages.config-select_on"></a>select_on |  Extra Bazel condition labels ANDed into this cell's `select()` branch.   | List of strings | optional |  `[]`  |
-| <a id="zig_packages.config-target"></a>target |  Zig target triple (e.g. `x86_64-linux-gnu`) to configure the package for, passed as `-Dtarget=<triple>`. The package's `build.zig` must accept it, typically via `b.standardTargetOptions`.   | String | optional |  `""`  |
+| <a id="zig_packages.config-target"></a>target |  Zig target triple (e.g. `x86_64-linux-gnu`) to configure the package for, passed as `-Dtarget=<triple>`. The package's `build.zig` must accept it, typically via `b.standardTargetOptions`. A package that does not accept a target option fails to configure under a target-bearing matrix; exempt it with a per-package `configure` of a single target-less config.   | String | optional |  `""`  |
 | <a id="zig_packages.config-zig_flags"></a>zig_flags |  Extra Zig build options as `NAME=VALUE`, each passed as `-DNAME=VALUE`.   | List of strings | optional |  `[]`  |
 
 <a id="zig_packages.configure"></a>
@@ -126,8 +126,9 @@ Apply a build-configuration matrix to Zig packages, globally or per package.
 
 Each package is configured once per listed `config` cell; its generated
 targets select the cell whose conditions (`optimize` mode and `select_on`)
-hold, or `fallback` otherwise. Only the root module's `config` and
-`configure` tags take effect.
+hold, or `fallback` otherwise. A per-package `configure` overrides a global
+one for that package. Only the root module's `config` and `configure` tags
+take effect.
 
 **Attributes**
 

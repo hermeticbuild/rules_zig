@@ -150,7 +150,13 @@ config = tag_class(
             doc = "Zig optimize mode: `debug`, `release_safe`, `release_small` or `release_fast`.",
         ),
         "target": attr.string(
-            doc = "Zig target triple (e.g. `x86_64-linux-gnu`) to configure the package for, passed as `-Dtarget=<triple>`. The package's `build.zig` must accept it, typically via `b.standardTargetOptions`.",
+            doc = """\
+Zig target triple (e.g. `x86_64-linux-gnu`) to configure the package for,
+passed as `-Dtarget=<triple>`. The package's `build.zig` must accept it,
+typically via `b.standardTargetOptions`. A package that does not accept a
+target option fails to configure under a target-bearing matrix; exempt it
+with a per-package `configure` of a single target-less config.
+""",
         ),
         "select_on": attr.string_list(
             doc = "Extra Bazel condition labels ANDed into this cell's `select()` branch.",
@@ -167,8 +173,9 @@ Apply a build-configuration matrix to Zig packages, globally or per package.
 
 Each package is configured once per listed `config` cell; its generated
 targets select the cell whose conditions (`optimize` mode and `select_on`)
-hold, or `fallback` otherwise. Only the root module's `config` and
-`configure` tags take effect.
+hold, or `fallback` otherwise. A per-package `configure` overrides a global
+one for that package. Only the root module's `config` and `configure` tags
+take effect.
 """,
     attrs = {
         "configs": attr.string_list(
