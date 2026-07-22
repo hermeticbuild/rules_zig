@@ -287,6 +287,46 @@ def _package_cells_test_impl(ctx):
 
 _package_cells_test = unittest.make(_package_cells_test_impl)
 
+def _package_cells_target_override_test_impl(ctx):
+    env = unittest.begin(ctx)
+
+    cells_by_name = {
+        "win": resolve_cell(_config_tag(
+            "win",
+            target = "x86_64-windows-gnu",
+            select_on = ["@platforms//os:windows"],
+        ))[1],
+        "plain": resolve_cell(_config_tag("plain"))[1],
+    }
+
+    key = "notgt-0.0.0-abc"
+    global_configure = _configure_tag(["win"], "win")
+
+    # A per-package configure pointing at a target-less config exempts a package
+    # that cannot consume a target from the global target matrix: no `-Dtarget`
+    # flag reaches it.
+    error, cells = package_cells(
+        key,
+        cells_by_name,
+        global_configure,
+        {("notgt", ""): _configure_tag(["plain"], "plain")},
+    )
+    asserts.equals(env, None, error)
+    asserts.equals(env, ["plain"], [c.name for c in cells])
+    for cell in cells:
+        for option in cell.zig_options:
+            asserts.false(env, option.startswith("-Dtarget="))
+
+    # Without the per-package configure the global target matrix applies.
+    error, cells = package_cells(key, cells_by_name, global_configure, {})
+    asserts.equals(env, None, error)
+    asserts.equals(env, ["win"], [c.name for c in cells])
+    asserts.true(env, "-Dtarget=x86_64-windows-gnu" in cells[0].zig_options)
+
+    return unittest.end(env)
+
+_package_cells_target_override_test = unittest.make(_package_cells_target_override_test_impl)
+
 def _collect_configs_test_impl(ctx):
     env = unittest.begin(ctx)
 
@@ -343,5 +383,6 @@ def zig_packages_test_suite(name):
         partial.make(_resolve_cell_test),
         partial.make(_check_cells_test),
         partial.make(_package_cells_test),
+        partial.make(_package_cells_target_override_test),
         partial.make(_collect_configs_test),
     )
