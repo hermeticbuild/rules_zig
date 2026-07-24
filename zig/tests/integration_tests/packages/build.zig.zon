@@ -134,6 +134,9 @@
         // Uncommented by the negative test to assert that a package with a
         // source-only dependency is rejected.
         // .srconly = .{ .url = "__SRCONLY_URL__", .hash = "__SRCONLY_HASH__" },
+        // Uncommented by the negative test to assert that linking a system
+        // library on a target-less module is rejected with guidance.
+        // .syslibnotarget = .{ .url = "__SYSLIBNOTARGET_URL__", .hash = "__SYSLIBNOTARGET_HASH__" },
     },
     .paths = .{
         "build.zig.zon",

@@ -39,6 +39,7 @@ const packages = [_]Package{
     .{ .name = "cdep" },
     .{ .name = "cppdep" },
     .{ .name = "syslibdep" },
+    .{ .name = "syslibnotarget" },
     .{ .name = "clasha" },
     .{ .name = "clashb" },
     .{ .name = "optdep" },
@@ -69,7 +70,7 @@ const Consumer = struct {
 
 // Manifests that resolve dependencies via `zig_packages.from_file`.
 const consumers = [_]Consumer{
-    .{ .manifest = "build.zig.zon", .deps = &.{ "leaf", "bottom", "top", "libv1", "libfork", "libv2", "multi", "pruned", "symlinked", "lazyhost", "lazydirect", "usec", "cdep", "cppdep", "syslibdep", "clasha", "clashb", "optdep", "weakdep", "cfgdep", "cvardep", "tcvardep", "tcpkg", "host", "srconly", "genopts", "tgtdep", "patchdep", "aliasmod", "linklib", "linkamalg", "translatec", "emittedinc" } },
+    .{ .manifest = "build.zig.zon", .deps = &.{ "leaf", "bottom", "top", "libv1", "libfork", "libv2", "multi", "pruned", "symlinked", "lazyhost", "lazydirect", "usec", "cdep", "cppdep", "syslibdep", "syslibnotarget", "clasha", "clashb", "optdep", "weakdep", "cfgdep", "cvardep", "tcvardep", "tcpkg", "host", "srconly", "genopts", "tgtdep", "patchdep", "aliasmod", "linklib", "linkamalg", "translatec", "emittedinc" } },
     .{ .manifest = "child/build.zig.zon", .deps = &.{ "leaf", "libv2", "hostuser" } },
 };
 
@@ -185,6 +186,12 @@ test "the importer rejects invalid package configurations" {
     try ctx.patchWorkspaceFile("build.zig.zon", &.{.{ "// .srconly", ".srconly" }});
     try expectBuildFailure(ctx, "source-only");
     try ctx.patchWorkspaceFile("build.zig.zon", &.{.{ ".srconly", "// .srconly" }});
+
+    // A package linking a system library on a module with no resolved target
+    // panics the configurer; its message reaches the configure failure.
+    try ctx.patchWorkspaceFile("build.zig.zon", &.{.{ "// .syslibnotarget", ".syslibnotarget" }});
+    try expectBuildFailure(ctx, "known 'target' field");
+    try ctx.patchWorkspaceFile("build.zig.zon", &.{.{ ".syslibnotarget", "// .syslibnotarget" }});
 
     // A required system library with no matching annotation.
     try ctx.patchWorkspaceFile("MODULE.bazel", &.{.{ "name = \"mymath\"", "name = \"mymath-unprovided\"" }});
