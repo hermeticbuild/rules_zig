@@ -1,0 +1,22 @@
+--- a/build.zig
++++ b/build.zig
+@@ -8,7 +8,7 @@
+     // set a preferred release mode, allowing the user to decide how to optimize.
+     const optimize = b.standardOptimizeOption(.{});
+ 
+-    const lib_mod = b.createModule(.{
++    const lib_mod = b.addModule("hiae", .{
+         .root_source_file = b.path("src/lib.zig"),
+         .target = target,
+         .optimize = optimize,
+@@ -30,6 +30,10 @@
+ 
+     b.installArtifact(lib);
+ 
++    // Bazel imports the public module graph and installed artifacts; skip the
++    // rest of build (an executable named like the library, its run step, tests).
++    if (true) return;
++
+     const exe = b.addExecutable(.{
+         .name = "hiae",
+         .root_module = exe_mod,

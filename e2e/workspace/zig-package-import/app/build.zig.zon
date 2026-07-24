@@ -32,6 +32,10 @@
             .url = "https://github.com/bdwgc/bdwgc-zig/archive/a172686a2da78ad30f21f4ff1f11e9576a3ecf5f.tar.gz",
             .hash = "bdwgc_zig-0.1.0-ffcEgYp7AABR90M8sophVIu5c4eoaaJIdP3nnWOkoJa2",
         },
+        .hiae = .{
+            .url = "https://github.com/hiae-aead/zig-hiae/archive/53042d72e270fd8064f4c0aa5bd6e6ad6d8da2f5.tar.gz",
+            .hash = "hiae-0.1.1-9LSeWku5AAAph_YLOJtwElwQK74DcET2Aai3W472FHkF",
+        },
     },
     .paths = .{
         "build.zig.zon",

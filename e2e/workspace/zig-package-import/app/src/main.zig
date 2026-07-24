@@ -6,6 +6,7 @@ const sqlite = @import("sqlite");
 const zlua = @import("zlua");
 const zap = @import("zap");
 const bdwgc = @import("bdwgc");
+const hiae = @import("hiae");
 
 // Parameters declared with the imported `clap` package, resolved at comptime.
 const params = clap.parseParamsComptime(
@@ -52,5 +53,12 @@ pub fn main(init: std.process.Init) !void {
     bdwgc.init();
     const copy = try bdwgc.strdup("rules_zig");
     try out.print("bdwgc collects: {s} {}\n", .{ copy, bdwgc.isHeapPointer(copy) });
+    // `hiae` exposes a pure-Zig HiAE AEAD; computing a MAC over a fixed input
+    // exercises the imported module, whose compiled form the importer also
+    // emits as the `hiae.artifact` static library.
+    const key: [hiae.Hiae.key_length]u8 = @splat(0);
+    const nonce: [hiae.Hiae.nonce_length]u8 = @splat(0);
+    const tag = hiae.Hiae.mac("rules_zig", key, nonce);
+    try out.print("hiae mac: {s}\n", .{std.fmt.bytesToHex(tag, .lower)});
     try out.flush();
 }

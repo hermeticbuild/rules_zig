@@ -1,18 +1,20 @@
 load("@bazel_skylib//rules:build_test.bzl", "build_test")
 load("@bazel_skylib//rules:diff_test.bzl", "diff_test")
 load("@rules_zig//zig:defs.bzl", "zig_binary")
-load("@zig_deps//:defs.bzl", "zig_deps")
+load("@zig_deps//:defs.bzl", "zig_deps", "zig_package_artifact")
+
+# The imported packages require Zig 0.17+.
+_REQUIRES_ZIG_0_17 = select({
+    "@zig_toolchains//:0.16.0": ["@platforms//:incompatible"],
+    "//conditions:default": [],
+})
 
 # The binary imports the fetched Zig packages resolved through `zig_deps()`;
 # `src/main.zig` documents what each one exercises.
 zig_binary(
     name = "app",
     main = "src/main.zig",
-    # The imported packages require Zig 0.17+.
-    target_compatible_with = select({
-        "@zig_toolchains//:0.16.0": ["@platforms//:incompatible"],
-        "//conditions:default": [],
-    }),
+    target_compatible_with = _REQUIRES_ZIG_0_17,
     deps = zig_deps(),
 )
 
@@ -38,4 +40,14 @@ build_test(
     name = "build_test",
     size = "small",
     targets = [":app"],
+)
+
+# `hiae` installs a Zig-root static library; the importer emits it as a
+# `zig_static_library` artifact target. Building it proves the importer renders
+# a real package's installed artifact into a compilable target.
+build_test(
+    name = "hiae_artifact_build_test",
+    size = "small",
+    target_compatible_with = _REQUIRES_ZIG_0_17,
+    targets = [zig_package_artifact("hiae")],
 )

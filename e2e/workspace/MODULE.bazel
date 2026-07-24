@@ -53,6 +53,10 @@ zig_packages.patch(
         "//zig-package-import/app:zap_fiobj_numbers.patch",
     ],
 )
+zig_packages.patch(
+    name = "hiae",
+    patches = ["//zig-package-import/app:hiae_build_zig.patch"],
+)
 use_repo(zig_packages, "zig_deps")
 
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
