@@ -157,6 +157,7 @@ pub fn main(init: process.Init) !void {
 
     const merged = module_graph.merge(arena, cells.items) catch |err| switch (err) {
         error.CellModuleMismatch => fatal("the package exposes a different set of modules across configurations", .{}),
+        error.CellArtifactMismatch => fatal("the package installs a different set of artifacts across configurations", .{}),
         error.EmptyMatrix => unreachable,
         else => |e| return e,
     };
@@ -199,9 +200,10 @@ fn configureCell(
     markUndeclaredOptions(builder);
     if (builder.invalid_user_input) fatal("the package's build.zig rejected the build options of config '{s}'", .{config.name});
 
+    const graph = try module_graph.collectGraph(arena, builder);
     return .{
         .needed_lazy_dependencies = &.{},
-        .cell = .{ .name = config.name, .modules = try module_graph.collectModules(arena, builder) },
+        .cell = .{ .name = config.name, .modules = graph.modules, .artifacts = graph.artifacts },
     };
 }
 

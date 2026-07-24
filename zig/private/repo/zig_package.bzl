@@ -112,6 +112,27 @@ zig_library(
 )
 """
 
+# An installed artifact (`b.installArtifact`): a compiled library or executable
+# a Bazel consumer depends on. It is built from its root module's fields — the
+# same `main`, `srcs`, `deps`, and `import_names` the module's `zig_library`
+# renders — under the rule matching its kind.
+_ARTIFACT = """
+{rule}(
+    name = "{name}.artifact",
+    main = {main},
+    srcs = {srcs},
+    deps = {deps},
+    import_names = {import_names},
+)
+"""
+
+# The rules_zig rule that builds each installed-artifact kind.
+_ARTIFACT_RULES = {
+    "static_library": "zig_static_library",
+    "shared_library": "zig_shared_library",
+    "executable": "zig_binary",
+}
+
 # A module owned by an in-tree sub-tree path dependency: its target is
 # namespaced by the sub-path so identically named modules in different sub-trees
 # do not collide, while its `import_name` stays the module's own name.
@@ -621,8 +642,11 @@ def _check_module_supported(repository_ctx, module, cells):
                 field,
             ))
 
-def _render_libraries(repository_ctx, modules, cells, packages):
-    """Render a `zig_library` for each module this package owns.
+def _render_libraries(repository_ctx, modules, artifacts, cells, packages):
+    """Render a `zig_library` for each module this package owns, plus an artifact target for each installed artifact.
+
+    A module's artifact target (`b.installArtifact`) builds from the same fields
+    as the module's own library, under the rule matching the artifact's kind.
 
     A dependency is imported under its own name by default; an import under a
     different name is remapped through `import_names`. Vendored C sources become
@@ -639,14 +663,35 @@ def _render_libraries(repository_ctx, modules, cells, packages):
     not).
 
     Returns:
-      `(text, has_cc, has_translate_c)`: the rendered targets, whether any
-      `cc_library` was generated (so the caller loads the `cc_library` rule), and
-      whether any `zig_c_library` was generated (so the caller loads it too).
+      `(text, has_cc, has_translate_c, artifact_rules)`: the rendered targets,
+      whether any `cc_library` was generated (so the caller loads the
+      `cc_library` rule), whether any `zig_c_library` was generated (so the
+      caller loads it too), and the distinct rules the installed-artifact targets
+      use (so the caller loads them).
     """
     config_settings = repository_ctx.attr.config_settings
+
+    # Installed artifacts keyed by their root module (`<package>\x00<name>`), so
+    # each module renders its artifact target from the same fields as its library.
+    artifacts_by_root = {}
+    for artifact in artifacts:
+        artifacts_by_root.setdefault(artifact["package"] + "\\x00" + artifact["root_module"], []).append(artifact)
+
     cc_chunks = []
     library_chunks = []
     has_translate_c = False
+    artifact_rules = {}
+
+    # An installed-artifact target name (`<name>.artifact`) reached twice is
+    # either the same compile installed twice (identical kind and root module),
+    # rendered once, or a genuine clash of distinct artifacts sharing a name,
+    # which Zig's own `dep.artifact("<name>")` cannot disambiguate either.
+    seen_artifacts = {}
+
+    # Root modules whose library target was emitted here; an installed artifact
+    # rooted elsewhere (a translate-C, or dependency-owned root) would render no
+    # target and silently vanish, so it is rejected below.
+    emitted_roots = {}
     for module in modules:
         owner = module["package"]
         if owner != "" and not _is_subtree(packages, owner):
@@ -704,7 +749,41 @@ def _render_libraries(repository_ctx, modules, cells, packages):
                 deps = deps,
                 import_names = import_names,
             ))
-    return "".join(cc_chunks + library_chunks), len(cc_chunks) > 0, has_translate_c
+
+        emitted_roots[owner + "\\x00" + module["name"]] = None
+
+        # An installed artifact rooted at this module builds from the same
+        # `main`, `srcs`, `deps`, and `import_names` as the module's library.
+        for artifact in artifacts_by_root.get(owner + "\\x00" + module["name"], []):
+            identity = (artifact["kind"], owner, module["name"])
+            previous = seen_artifacts.get(artifact["name"])
+            if previous != None:
+                if previous != identity:
+                    fail("The Zig package '{}' installs multiple distinct artifacts named '{}'; importing multiple same-named artifacts is not supported.".format(
+                        repository_ctx.attr.url,
+                        artifact["name"],
+                    ))
+                continue
+            seen_artifacts[artifact["name"]] = identity
+            rule = _ARTIFACT_RULES[artifact["kind"]]
+            artifact_rules[rule] = None
+            library_chunks.append(_ARTIFACT.format(
+                rule = rule,
+                name = artifact["name"],
+                main = main,
+                srcs = srcs,
+                deps = deps,
+                import_names = import_names,
+            ))
+    for artifact in artifacts:
+        if artifact["package"] + "\\x00" + artifact["root_module"] not in emitted_roots:
+            fail("The Zig package '{}' installs an artifact '{}' whose root module '{}' is not a supported importable module (the importer does not support generated, translate-c, or dependency-owned artifact roots).".format(
+                repository_ctx.attr.url,
+                artifact["name"],
+                artifact["root_module"],
+            ))
+
+    return "".join(cc_chunks + library_chunks), len(cc_chunks) > 0, has_translate_c, sorted(artifact_rules)
 
 # Directories the rule creates in the repository root for its own use.
 _SCRATCH_DIRS = ["_fetch", "_configure", "_zig_generated"]
@@ -968,8 +1047,14 @@ def _zig_package_impl(repository_ctx):
 
         decoded = json.decode(manifest)
         packages = json.decode(repository_ctx.attr.deps)["packages"]
-        libraries, has_cc, has_translate_c = _render_libraries(repository_ctx, decoded["modules"], _cells(repository_ctx, decoded), packages)
-        zig_rules = ["zig_library"] + (["zig_c_library"] if has_translate_c else [])
+        libraries, has_cc, has_translate_c, artifact_rules = _render_libraries(
+            repository_ctx,
+            decoded["modules"],
+            decoded.get("artifacts", []),
+            _cells(repository_ctx, decoded),
+            packages,
+        )
+        zig_rules = ["zig_library"] + artifact_rules + (["zig_c_library"] if has_translate_c else [])
         loads += "load(\"@rules_zig//zig:defs.bzl\", {})\n\n".format(", ".join([_zig_string(rule) for rule in zig_rules]))
         loads += _CC_LOAD if has_cc else ""
         body += libraries + _main_module_alias(repository_ctx.attr.package_name, decoded["modules"]) + _EXPORT_MANIFEST

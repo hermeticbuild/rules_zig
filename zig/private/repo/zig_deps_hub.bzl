@@ -98,7 +98,7 @@ def _package(name, version):
 def _module_package(name, version):
     package = _package(name, version)
     if not has_modules(package):
-        fail("Zig package '%s' has no `build.zig.zon`, so no Zig modules; reference its files with `zig_package_files` or `zig_package_file`" % name)
+        fail("Zig package '%s' has no `build.zig.zon`, so no Zig modules or artifacts; reference its files with `zig_package_files` or `zig_package_file`" % name)
     return package
 
 def _entry_has_modules(entry):
@@ -124,6 +124,15 @@ def zig_package_target(name, module = None, version = None):
     """
     package = _module_package(name, version)
     return Label(package["files"]).same_package_label(module or package["name"])
+
+def zig_package_artifact(name, artifact = None, version = None):
+    """The label of an installed artifact target of a Zig package, see `zig_package_files`.
+
+    Defaults to the artifact of the same name as the package; pass `artifact` to
+    select another artifact the package installs.
+    """
+    package = _module_package(name, version)
+    return Label(package["files"]).same_package_label((artifact or package["name"]) + ".artifact")
 
 def zig_dep(name, module = None):
     """The label of the dependency `name` declared by the enclosing manifest.

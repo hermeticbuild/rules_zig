@@ -1,6 +1,7 @@
-//! Walk a configured `std.Build` instance's module import graph and emit the
-//! public module set as JSON, for translation into Bazel `zig_library`
-//! targets.
+//! Walk a configured `std.Build` instance's module import graph and installed
+//! artifacts and emit them as JSON, for translation into Bazel `zig_library`
+//! targets and per-artifact `zig_static_library` / `zig_shared_library` /
+//! `zig_binary` targets.
 //!
 //! The emitted JSON has the shape:
 //!
@@ -9,7 +10,9 @@
 //!         "link_libc": true, "link_libcpp": true,  // each present only when set
 //!         "csrcs": [...], "include_dirs": [...], "system_libs": [...],
 //!         "weak_system_libs": [...], "unsupported": [...],  // each only when non-empty
-//!         "imports": [{"name": ..., "module": ..., "package": <hash>}]}]}
+//!         "imports": [{"name": ..., "module": ..., "package": <hash>}]}],
+//!      "artifacts": [{"name": ..., "kind": ..., "root_module": ...,
+//!         "package": <hash>}]}  // omitted when the package installs none
 //!
 //! Each JSON object renders the like-named fields of a record type below, which
 //! documents them.
@@ -216,6 +219,25 @@ pub const Module = struct {
     /// (assembly, prebuilt objects, generated config headers, linked compile
     /// steps, path options, ...).
     unsupported: []const []const u8,
+};
+
+/// An installed compile artifact (`b.installArtifact`): a compiled library or
+/// executable a Bazel consumer can depend on.
+pub const Artifact = struct {
+    name: []const u8,
+    /// `static_library`, `shared_library`, or `executable`.
+    kind: []const u8,
+    /// The name of the artifact's root module, emitted as an ordinary `Module`
+    /// record from which its `main`, `srcs`, `deps`, and vendored C are read.
+    root_module: []const u8,
+    /// The owning package, as for `Module.package`.
+    package: []const u8,
+};
+
+/// The public module graph together with the package's installed artifacts.
+pub const Graph = struct {
+    modules: []const Module,
+    artifacts: []const Artifact,
 };
 
 /// The step generating the file at `lazy_path`; null for a source path or a
@@ -877,12 +899,38 @@ fn collectC(
     };
 }
 
-/// Extract the public module graph seeded by the modules registered via
-/// `b.addModule`, as configuration-independent `Module` records.
-pub fn collectModules(arena: Allocator, builder: *Build) ![]const Module {
+/// The kind string for an installed artifact the importer emits, or null for a
+/// kind it ignores (`.obj`, `.@"test"`, `.test_obj`).
+fn artifactKind(compile: *Build.Step.Compile) ?[]const u8 {
+    return switch (compile.kind) {
+        .exe => "executable",
+        .lib => if (compile.linkage == .dynamic) "shared_library" else "static_library",
+        .obj, .@"test", .test_obj => null,
+    };
+}
+
+/// Extract the package's public module graph and installed artifacts. The graph
+/// is seeded by the modules registered via `b.addModule` and by each installed
+/// artifact's root module, so an anonymous root module (`b.createModule`) still
+/// surfaces as a `Module` record.
+pub fn collectGraph(arena: Allocator, builder: *Build) !Graph {
     var set: ModuleSet = .empty;
     var adopted: PackageMap = .empty;
     for (builder.modules.values()) |module| try collect(arena, builder, &set, &adopted, builder.pkg_hash, module);
+
+    // The installed artifacts are the `InstallArtifact` dependencies of the
+    // install step; a rootless C carrier (its C folds into a linking module) and
+    // the `.obj`/`.@"test"` kinds are skipped.
+    var installed: std.ArrayList(*Build.Step.Compile) = .empty;
+    for (builder.install_tls.step.dependencies.items) |dep_step| {
+        const inst = dep_step.cast(Build.Step.InstallArtifact) orelse continue;
+        const compile = inst.artifact;
+        if (artifactKind(compile) == null) continue;
+        if (compile.root_module.root_source_file == null) continue;
+        try collect(arena, builder, &set, &adopted, builder.pkg_hash, compile.root_module);
+        try installed.append(arena, compile);
+    }
+
     var names = try nameModules(arena, &set);
 
     var result: std.ArrayList(Module) = .empty;
@@ -933,7 +981,18 @@ pub fn collectModules(arena: Allocator, builder: *Build) ![]const Module {
             .unsupported = c.unsupported,
         });
     }
-    return result.items;
+
+    var artifacts: std.ArrayList(Artifact) = .empty;
+    for (installed.items) |compile| {
+        try artifacts.append(arena, .{
+            .name = compile.name,
+            .kind = artifactKind(compile).?,
+            .root_module = names.get(compile.root_module).?,
+            .package = compile.root_module.owner.pkg_hash,
+        });
+    }
+
+    return .{ .modules = result.items, .artifacts = artifacts.items };
 }
 
 /// Write a module's fields into an already-open JSON object. Fields with a
@@ -995,24 +1054,41 @@ pub fn writeModule(json: *std.json.Stringify, module: Module) !void {
     try json.endObject();
 }
 
-/// Emit `{"modules": [...]}` for the module graph seeded by the modules
-/// registered via `b.addModule`.
+fn writeArtifact(json: *std.json.Stringify, artifact: Artifact) !void {
+    try json.beginObject();
+    try json.objectField("name");
+    try json.write(artifact.name);
+    try json.objectField("kind");
+    try json.write(artifact.kind);
+    try json.objectField("root_module");
+    try json.write(artifact.root_module);
+    try json.objectField("package");
+    try json.write(artifact.package);
+    try json.endObject();
+}
+
+fn writeArtifacts(json: *std.json.Stringify, artifacts: []const Artifact) !void {
+    try json.beginArray();
+    for (artifacts) |artifact| try writeArtifact(json, artifact);
+    try json.endArray();
+}
+
+/// Write the package's module graph and installed artifacts as the JSON this
+/// file's doc comment describes.
 pub fn emit(arena: Allocator, writer: *std.Io.Writer, builder: *Build) !void {
+    const graph = try collectGraph(arena, builder);
     var json: std.json.Stringify = .{ .writer = writer };
     try json.beginObject();
     try json.objectField("modules");
-    try emitModules(arena, &json, builder);
+    try json.beginArray();
+    for (graph.modules) |module| try writeModule(&json, module);
+    try json.endArray();
+    if (graph.artifacts.len > 0) {
+        try json.objectField("artifacts");
+        try writeArtifacts(&json, graph.artifacts);
+    }
     try json.endObject();
     try writer.writeByte('\n');
-}
-
-/// Emit the module graph as a JSON array of module objects into `json`. The
-/// caller writes the enclosing object field.
-pub fn emitModules(arena: Allocator, json: *std.json.Stringify, builder: *Build) !void {
-    const modules = try collectModules(arena, builder);
-    try json.beginArray();
-    for (modules) |module| try writeModule(json, module);
-    try json.endArray();
 }
 
 /// A package configured under one named build configuration.
@@ -1020,6 +1096,7 @@ pub const Cell = struct {
     /// Empty for the unnamed default configuration.
     name: []const u8,
     modules: []const Module,
+    artifacts: []const Artifact,
 };
 
 /// A configuration-dependent module field, merged across cells into a
@@ -1153,7 +1230,7 @@ fn writeField(json: *std.json.Stringify, field: Field, module: Module) !void {
     }
 }
 
-pub const MergeError = error{ CellModuleMismatch, EmptyMatrix };
+pub const MergeError = error{ CellModuleMismatch, CellArtifactMismatch, EmptyMatrix };
 
 /// The configuration matrix merged into per-module field-variance information.
 pub const Merged = struct {
@@ -1161,18 +1238,30 @@ pub const Merged = struct {
     cells: []const Cell,
     /// `varying[i]` holds the fields of module `i` that differ across `cells`.
     varying: []const std.EnumSet(Field),
+    /// The fallback cell's artifacts, which every cell shares.
+    artifacts: []const Artifact,
 };
 
+fn artifactEqual(a: Artifact, b: Artifact) bool {
+    return mem.eql(u8, a.name, b.name) and mem.eql(u8, a.kind, b.kind) and
+        mem.eql(u8, a.root_module, b.root_module);
+}
+
 /// Merge the cells' module graphs, which must expose the same modules in the
-/// same order, into per-module field variance.
+/// same order and the same installed artifacts, into per-module field variance.
 pub fn merge(arena: Allocator, cells: []const Cell) (Allocator.Error ||
     MergeError)!Merged {
     if (cells.len == 0) return error.EmptyMatrix;
     const fallback = cells[0].modules;
+    const fallback_artifacts = cells[0].artifacts;
     for (cells) |cell| {
         if (cell.modules.len != fallback.len) return error.CellModuleMismatch;
         for (cell.modules, fallback) |m, fb| {
             if (!mem.eql(u8, m.name, fb.name) or !mem.eql(u8, m.package, fb.package)) return error.CellModuleMismatch;
+        }
+        if (cell.artifacts.len != fallback_artifacts.len) return error.CellArtifactMismatch;
+        for (cell.artifacts, fallback_artifacts) |a, fb| {
+            if (!artifactEqual(a, fb)) return error.CellArtifactMismatch;
         }
     }
 
@@ -1189,7 +1278,7 @@ pub fn merge(arena: Allocator, cells: []const Cell) (Allocator.Error ||
         }
         varying[mi] = set;
     }
-    return .{ .cells = cells, .varying = varying };
+    return .{ .cells = cells, .varying = varying, .artifacts = fallback_artifacts };
 }
 
 /// Render a merged matrix as `{"cells": [names], "modules": [...]}`. Every
@@ -1231,6 +1320,10 @@ pub fn writeMerged(writer: *std.Io.Writer, merged: Merged) !void {
         try json.endObject();
     }
     try json.endArray();
+    if (merged.artifacts.len > 0) {
+        try json.objectField("artifacts");
+        try writeArtifacts(&json, merged.artifacts);
+    }
     try json.endObject();
     try writer.writeByte('\n');
 }
@@ -1313,6 +1406,96 @@ test "emits registered modules and their import edges" {
     try std.testing.expectEqual(1, imports.len);
     try std.testing.expectEqualStrings("helper", imports[0].object.get("name").?.string);
     try std.testing.expectEqualStrings("util", imports[0].object.get("module").?.string);
+}
+
+test "emits an installed artifact and its root module" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const build_root = try std.fmt.allocPrint(arena, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+
+    const b = try createBuilder(arena, std.testing.io, .{ .array_hash_map = .empty, .allocator = arena }, "unused-zig", build_root, &.{});
+
+    const mod = b.addModule("mathlib", .{ .root_source_file = b.path("src/mathlib.zig"), .target = b.graph.host });
+    const lib = b.addLibrary(.{ .name = "mathlib", .linkage = .static, .root_module = mod });
+    b.installArtifact(lib);
+
+    var out: std.Io.Writer.Allocating = .init(arena);
+    try emit(arena, &out.writer, b);
+
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, out.written(), .{});
+
+    // The artifact's root module is emitted as an ordinary module record.
+    const modules = parsed.object.get("modules").?.array.items;
+    const mod_entry = for (modules) |m| {
+        if (std.mem.eql(u8, m.object.get("name").?.string, "mathlib")) break m.object;
+    } else unreachable;
+    try std.testing.expectEqualStrings("src/mathlib.zig", mod_entry.get("root_source").?.string);
+
+    const artifacts = parsed.object.get("artifacts").?.array.items;
+    try std.testing.expectEqual(1, artifacts.len);
+    const artifact = artifacts[0].object;
+    try std.testing.expectEqualStrings("mathlib", artifact.get("name").?.string);
+    try std.testing.expectEqualStrings("static_library", artifact.get("kind").?.string);
+    try std.testing.expectEqualStrings("mathlib", artifact.get("root_module").?.string);
+    try std.testing.expectEqualStrings("", artifact.get("package").?.string);
+}
+
+test "seeds an installed artifact's anonymous root module into the graph" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const build_root = try std.fmt.allocPrint(arena, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+
+    const b = try createBuilder(arena, std.testing.io, .{ .array_hash_map = .empty, .allocator = arena }, "unused-zig", build_root, &.{});
+
+    // An artifact built over an anonymous `createModule`: it is not registered
+    // via `addModule`, so only seeding from the artifact surfaces it.
+    const anon = b.createModule(.{ .root_source_file = b.path("src/anon.zig"), .target = b.graph.host });
+    const exe = b.addExecutable(.{ .name = "tool", .root_module = anon });
+    b.installArtifact(exe);
+
+    var out: std.Io.Writer.Allocating = .init(arena);
+    try emit(arena, &out.writer, b);
+
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, out.written(), .{});
+
+    const modules = parsed.object.get("modules").?.array.items;
+    try std.testing.expectEqual(1, modules.len);
+    const root_name = modules[0].object.get("name").?.string;
+    try std.testing.expect(std.mem.startsWith(u8, root_name, "__anon_"));
+
+    const artifacts = parsed.object.get("artifacts").?.array.items;
+    try std.testing.expectEqual(1, artifacts.len);
+    try std.testing.expectEqualStrings("tool", artifacts[0].object.get("name").?.string);
+    try std.testing.expectEqualStrings("executable", artifacts[0].object.get("kind").?.string);
+    // The artifact references the same synthesized name the module carries.
+    try std.testing.expectEqualStrings(root_name, artifacts[0].object.get("root_module").?.string);
+}
+
+test "omits the artifacts key when no artifact is installed" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const build_root = try std.fmt.allocPrint(arena, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+
+    const b = try createBuilder(arena, std.testing.io, .{ .array_hash_map = .empty, .allocator = arena }, "unused-zig", build_root, &.{});
+    _ = b.addModule("lib", .{ .root_source_file = b.path("src/lib.zig") });
+
+    var out: std.Io.Writer.Allocating = .init(arena);
+    try emit(arena, &out.writer, b);
+
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, out.written(), .{});
+    try std.testing.expectEqual(null, parsed.object.get("artifacts"));
 }
 
 test "synthesizes stable names for anonymous modules" {
@@ -2531,8 +2714,8 @@ test "merge marks only the fields that vary across cells" {
     const dbg = testModule("foo", "src/foo.zig", false, imports);
     const rel = testModule("foo", "src/foo.zig", true, imports);
     const cells: []const Cell = &.{
-        .{ .name = "dbg", .modules = &.{dbg} },
-        .{ .name = "rel", .modules = &.{rel} },
+        .{ .name = "dbg", .modules = &.{dbg}, .artifacts = &.{} },
+        .{ .name = "rel", .modules = &.{rel}, .artifacts = &.{} },
     };
 
     const merged = try merge(arena, cells);
@@ -2549,7 +2732,7 @@ test "a single cell has no varying fields" {
     const arena = arena_state.allocator();
 
     const only = testModule("foo", "src/foo.zig", false, &.{});
-    const cells: []const Cell = &.{.{ .name = "", .modules = &.{only} }};
+    const cells: []const Cell = &.{.{ .name = "", .modules = &.{only}, .artifacts = &.{} }};
 
     const merged = try merge(arena, cells);
     try std.testing.expectEqual(@as(usize, 0), merged.varying[0].count());
@@ -2563,8 +2746,8 @@ test "merge rejects cells whose module sets differ" {
     const foo = testModule("foo", "src/foo.zig", false, &.{});
     const bar = testModule("bar", "src/bar.zig", false, &.{});
     const cells: []const Cell = &.{
-        .{ .name = "dbg", .modules = &.{foo} },
-        .{ .name = "rel", .modules = &.{bar} },
+        .{ .name = "dbg", .modules = &.{foo}, .artifacts = &.{} },
+        .{ .name = "rel", .modules = &.{bar}, .artifacts = &.{} },
     };
 
     try std.testing.expectError(error.CellModuleMismatch, merge(arena, cells));
@@ -2579,8 +2762,8 @@ test "writeMerged renders a select overlay for the varying fields" {
     const dbg = testModule("foo", "src/foo.zig", false, imports);
     const rel = testModule("foo", "src/foo.zig", true, imports);
     const cells: []const Cell = &.{
-        .{ .name = "dbg", .modules = &.{dbg} },
-        .{ .name = "rel", .modules = &.{rel} },
+        .{ .name = "dbg", .modules = &.{dbg}, .artifacts = &.{} },
+        .{ .name = "rel", .modules = &.{rel}, .artifacts = &.{} },
     };
 
     const merged = try merge(arena, cells);
@@ -2614,8 +2797,8 @@ test "merge varies a translated-C module's flags apart from its header" {
     var rel = dbg;
     rel.translate_c_flags = &.{"-DBOX_DEBUG=0"};
     const cells: []const Cell = &.{
-        .{ .name = "dbg", .modules = &.{dbg} },
-        .{ .name = "rel", .modules = &.{rel} },
+        .{ .name = "dbg", .modules = &.{dbg}, .artifacts = &.{} },
+        .{ .name = "rel", .modules = &.{rel}, .artifacts = &.{} },
     };
 
     const merged = try merge(arena, cells);

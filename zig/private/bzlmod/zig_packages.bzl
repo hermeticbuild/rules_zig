@@ -766,11 +766,12 @@ via `from_file` tags and generates two kinds of repositories:
   nearest ancestor, `zig_deps` resolves all of them that have Zig modules
   (packages without a `build.zig.zon` have none), and `zig_import_names`
   imports each under its declared name. `zig_package_target` names the
-  `zig_library` generated for a module of a package, `zig_package_files` and
-  `zig_package_file` name its files. Each takes a package `name` and an
-  optional `version`. Without `version`, `name` is a dependency declared by
-  the manifest, as for `zig_dep`. With `version`, `name` is a package name,
-  and the lookup fails if several packages share that name and version.
+  `zig_library` generated for a module of a package, `zig_package_artifact`
+  an artifact it installs, `zig_package_files` and `zig_package_file` its
+  files. Each takes a package `name` and an optional `version`. Without
+  `version`, `name` is a dependency declared by the manifest, as for
+  `zig_dep`. With `version`, `name` is a package name, and the lookup fails if
+  several packages share that name and version.
 
 In `MODULE.bazel`:
 
