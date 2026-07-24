@@ -16,6 +16,7 @@ const cdep = @import("cdep");
 const cppdep = @import("cppdep");
 const syslibdep = @import("syslibdep");
 const optdep = @import("optdep");
+const weakdep = @import("weakdep");
 const cfgdep = @import("cfgdep");
 const cvardep = @import("cvardep");
 const tcvardep = @import("tcvardep");
@@ -66,6 +67,9 @@ pub fn main() void {
     std.debug.assert(syslibdep.compute(21) == 42);
     // 5+100, from `optmath` linked only because its integration is enabled.
     std.debug.assert(optdep.compute(5) == 105);
+    // `weakdep` weakly links `weakmath`, which has no annotation; an unprovided
+    // weak library is omitted, so the build still succeeds.
+    std.debug.assert(weakdep.value() == 42);
     // The `configure` matrix links `dbgonly` (returns 1) in the fallback `dbg`
     // cell and `relonly` (returns 2) in the `rel` cell; the build's optimize
     // mode selects the cell, matching the mode `cfgdep` itself compiles under.

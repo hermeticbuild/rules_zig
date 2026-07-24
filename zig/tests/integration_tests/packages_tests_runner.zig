@@ -40,6 +40,7 @@ const packages = [_]Package{
     .{ .name = "cppdep" },
     .{ .name = "syslibdep" },
     .{ .name = "optdep" },
+    .{ .name = "weakdep" },
     .{ .name = "cfgdep" },
     .{ .name = "cvardep" },
     .{ .name = "tcvardep" },
@@ -66,7 +67,7 @@ const Consumer = struct {
 
 // Manifests that resolve dependencies via `zig_packages.from_file`.
 const consumers = [_]Consumer{
-    .{ .manifest = "build.zig.zon", .deps = &.{ "leaf", "bottom", "top", "libv1", "libfork", "libv2", "multi", "pruned", "symlinked", "lazyhost", "lazydirect", "usec", "cdep", "cppdep", "syslibdep", "optdep", "cfgdep", "cvardep", "tcvardep", "tcpkg", "host", "srconly", "genopts", "tgtdep", "patchdep", "aliasmod", "linklib", "linkamalg", "translatec", "emittedinc" } },
+    .{ .manifest = "build.zig.zon", .deps = &.{ "leaf", "bottom", "top", "libv1", "libfork", "libv2", "multi", "pruned", "symlinked", "lazyhost", "lazydirect", "usec", "cdep", "cppdep", "syslibdep", "optdep", "weakdep", "cfgdep", "cvardep", "tcvardep", "tcpkg", "host", "srconly", "genopts", "tgtdep", "patchdep", "aliasmod", "linklib", "linkamalg", "translatec", "emittedinc" } },
     .{ .manifest = "child/build.zig.zon", .deps = &.{ "leaf", "libv2", "hostuser" } },
 };
 

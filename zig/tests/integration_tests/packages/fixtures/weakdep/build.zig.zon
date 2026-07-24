@@ -1,0 +1,10 @@
+.{
+    .name = .weakdep,
+    .version = "0.0.0",
+    .fingerprint = 0xa3be0cef163868e3,
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
