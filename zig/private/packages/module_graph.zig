@@ -7,7 +7,8 @@
 //!     {"modules": [{"name": ..., "package": <hash>, "root_source": ...,
 //!         "generated_source": ...,  // present only for `b.addOptions()` modules
 //!         "link_libc": true, "link_libcpp": true,  // each present only when set
-//!         "csrcs": [...], "include_dirs": [...], "system_libs": [...], "unsupported": [...],  // each present only when non-empty
+//!         "csrcs": [...], "include_dirs": [...], "system_libs": [...],
+//!         "weak_system_libs": [...], "unsupported": [...],  // each only when non-empty
 //!         "imports": [{"name": ..., "module": ..., "package": <hash>}]}]}
 //!
 //! Each JSON object renders the like-named fields of a record type below, which
@@ -205,8 +206,12 @@ pub const Module = struct {
     /// The module's own include directories.
     include_dirs: []const IncludeDir,
     /// The non-libc system libraries the module links (`linkSystemLibrary`),
-    /// each of which the importer requires to be mapped to a `cc_library`.
+    /// each of which the importer requires to be mapped to a `cc_library`
+    /// unless it is in `weak_system_libs`.
     system_libs: []const []const u8,
+    /// The subset of `system_libs` linked only weakly (`.weak = true` at every
+    /// occurrence), which the importer may omit when unmapped.
+    weak_system_libs: []const []const u8,
     /// Human-readable descriptions of constructs the importer cannot represent
     /// (assembly, prebuilt objects, generated config headers, linked compile
     /// steps, path options, ...).
@@ -618,6 +623,7 @@ const CInfo = struct {
     csrcs: []const CSource,
     include_dirs: []const IncludeDir,
     system_libs: []const []const u8,
+    weak_system_libs: []const []const u8,
     unsupported: []const []const u8,
     link_libc: bool,
     link_libcpp: bool,
@@ -626,7 +632,8 @@ const CInfo = struct {
 const CAccum = struct {
     csrcs: std.StringArrayHashMapUnmanaged(CSource) = .empty,
     include_dirs: std.StringArrayHashMapUnmanaged(IncludeDir) = .empty,
-    system_libs: std.StringArrayHashMapUnmanaged(void) = .empty,
+    // Value is whether the name is so far linked only weakly.
+    system_libs: std.StringArrayHashMapUnmanaged(bool) = .empty,
     unsupported: std.StringArrayHashMapUnmanaged(void) = .empty,
     link_libc: bool = false,
     link_libcpp: bool = false,
@@ -794,7 +801,14 @@ fn collectCInto(arena: Allocator, builder: *Build, acc: *CAccum, module: *Build.
                 try acc.unsupported.put(arena, "C source files with a generated root", {});
             }
         },
-        .system_lib => |lib| try acc.system_libs.put(arena, lib.name, {}),
+        // The injected `cc_library` determines linkage under the hermetic
+        // CcInfo model, so only `name` and `weak` are captured; `needed`,
+        // `use_pkg_config`, `preferred_link_mode`, and `search_strategy` are
+        // moot. A name stays weak only while every occurrence is weak.
+        .system_lib => |lib| {
+            const gop = try acc.system_libs.getOrPut(arena, lib.name);
+            gop.value_ptr.* = lib.weak and (!gop.found_existing or gop.value_ptr.*);
+        },
         .static_path => try acc.unsupported.put(arena, "a precompiled object or static library (`addObjectFile`)", {}),
         .assembly_file => try acc.unsupported.put(arena, "an assembly source file", {}),
         .win32_resource_file => try acc.unsupported.put(arena, "a Win32 resource file", {}),
@@ -843,11 +857,17 @@ fn collectC(
         .step => |step| try foldTranslateC(arena, builder, &acc, step),
         .translator => |run| try foldTranslator(arena, builder, &acc, run),
     };
+
+    var weak_system_libs: std.ArrayList([]const u8) = .empty;
+    for (acc.system_libs.keys(), acc.system_libs.values()) |name, weak| {
+        if (weak) try weak_system_libs.append(arena, name);
+    }
     return .{
         .cinfo = .{
             .csrcs = acc.csrcs.values(),
             .include_dirs = acc.include_dirs.values(),
             .system_libs = acc.system_libs.keys(),
+            .weak_system_libs = weak_system_libs.items,
             .unsupported = acc.unsupported.keys(),
             .link_libc = acc.link_libc,
             .link_libcpp = acc.link_libcpp,
@@ -909,6 +929,7 @@ pub fn collectModules(arena: Allocator, builder: *Build) ![]const Module {
             .csrcs = c.csrcs,
             .include_dirs = c.include_dirs,
             .system_libs = c.system_libs,
+            .weak_system_libs = c.weak_system_libs,
             .unsupported = c.unsupported,
         });
     }
@@ -956,6 +977,10 @@ fn writeModuleFields(json: *std.json.Stringify, module: Module) !void {
         try json.objectField("system_libs");
         try json.write(module.system_libs);
     }
+    if (module.weak_system_libs.len > 0) {
+        try json.objectField("weak_system_libs");
+        try json.write(module.weak_system_libs);
+    }
     if (module.unsupported.len > 0) {
         try json.objectField("unsupported");
         try json.write(module.unsupported);
@@ -999,7 +1024,7 @@ pub const Cell = struct {
 
 /// A configuration-dependent module field, merged across cells into a
 /// `select()` when its value varies.
-const Field = enum { root_source, generated_source, translate_c, translate_c_flags, link_libc, link_libcpp, imports, csrcs, include_dirs, system_libs, unsupported };
+const Field = enum { root_source, generated_source, translate_c, translate_c_flags, link_libc, link_libcpp, imports, csrcs, include_dirs, system_libs, weak_system_libs, unsupported };
 
 fn eqlOptStr(a: ?[]const u8, b: ?[]const u8) bool {
     if (a == null or b == null) return (a == null) == (b == null);
@@ -1106,6 +1131,7 @@ fn fieldEqual(field: Field, a: Module, b: Module) bool {
         .csrcs => eqlCSources(a.csrcs, b.csrcs),
         .include_dirs => eqlIncludeDirs(a.include_dirs, b.include_dirs),
         .system_libs => eqlStrList(a.system_libs, b.system_libs),
+        .weak_system_libs => eqlStrList(a.weak_system_libs, b.weak_system_libs),
         .unsupported => eqlStrList(a.unsupported, b.unsupported),
     };
 }
@@ -1122,6 +1148,7 @@ fn writeField(json: *std.json.Stringify, field: Field, module: Module) !void {
         .csrcs => try writeCSources(json, module.csrcs),
         .include_dirs => try writeIncludeDirs(json, module.include_dirs),
         .system_libs => try json.write(module.system_libs),
+        .weak_system_libs => try json.write(module.weak_system_libs),
         .unsupported => try json.write(module.unsupported),
     }
 }
@@ -1754,6 +1781,42 @@ test "emits the system libraries a module links" {
     const system_libs = module.get("system_libs").?.array.items;
     try std.testing.expectEqual(1, system_libs.len);
     try std.testing.expectEqualStrings("mymath", system_libs[0].string);
+    try std.testing.expectEqual(null, module.get("weak_system_libs"));
+}
+
+test "distinguishes weak system libraries; a strict link wins over a weak one" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const build_root = try std.fmt.allocPrint(arena, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+
+    const b = try createBuilder(arena, std.testing.io, .{ .array_hash_map = .empty, .allocator = arena }, "unused-zig", build_root, &.{});
+
+    const mod = b.addModule("mod", .{ .root_source_file = b.path("src/mod.zig"), .target = b.graph.host });
+    mod.linkSystemLibrary("strict", .{});
+    mod.linkSystemLibrary("weak", .{ .weak = true });
+    // Linked both weakly and strictly: the strict link makes it strict.
+    mod.linkSystemLibrary("mixed", .{ .weak = true });
+    mod.linkSystemLibrary("mixed", .{});
+
+    var out: std.Io.Writer.Allocating = .init(arena);
+    try emit(arena, &out.writer, b);
+
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, out.written(), .{});
+    const module = parsed.object.get("modules").?.array.items[0].object;
+
+    const system_libs = module.get("system_libs").?.array.items;
+    try std.testing.expectEqual(3, system_libs.len);
+    try std.testing.expectEqualStrings("strict", system_libs[0].string);
+    try std.testing.expectEqualStrings("weak", system_libs[1].string);
+    try std.testing.expectEqualStrings("mixed", system_libs[2].string);
+
+    const weak_system_libs = module.get("weak_system_libs").?.array.items;
+    try std.testing.expectEqual(1, weak_system_libs.len);
+    try std.testing.expectEqualStrings("weak", weak_system_libs[0].string);
 }
 
 test "reports path options of a generated option module as unsupported" {
@@ -2453,6 +2516,7 @@ fn testModule(name: []const u8, root: []const u8, link_libc: bool, imports: []co
         .csrcs = &.{},
         .include_dirs = &.{},
         .system_libs = &.{},
+        .weak_system_libs = &.{},
         .unsupported = &.{},
     };
 }

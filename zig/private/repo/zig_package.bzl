@@ -561,9 +561,14 @@ def _module_deps(repository_ctx, module, cell, cc_dep, packages):
 def _link_deps(repository_ctx, module, cell):
     """The labels of the libraries a module links in one cell: its system libraries' `cc_library` annotations."""
     deps = []
+    weak = _field(module, "weak_system_libs", [], cell)
     for name in _field(module, "system_libs", [], cell):
         lib = repository_ctx.attr.system_libraries.get(name)
         if lib == None:
+            # A weakly linked library is optional: omit it when unmapped,
+            # matching a native build that links it only if present.
+            if name in weak:
+                continue
             fail(("The Zig package '{}' module '{}' requires the system library '{}', which is not " +
                   "provided. Map it to a cc_library with a " +
                   "`zig_packages.system_library(name = \"{}\", lib = ...)` annotation.").format(
