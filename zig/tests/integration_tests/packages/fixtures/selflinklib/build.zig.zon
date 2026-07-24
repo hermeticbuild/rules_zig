@@ -1,0 +1,10 @@
+.{
+    .name = .selflinklib,
+    .version = "0.0.0",
+    .fingerprint = 0x68dcb2552ba23653,
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

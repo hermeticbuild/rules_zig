@@ -33,6 +33,12 @@ const linklib = @import("linklib");
 const linkamalg = @import("linkamalg");
 const translatec = @import("translatec");
 const emittedinc = @import("emittedinc");
+// `linkartlib` links a dependency's installed Zig static library through
+// `dep.artifact("artlib")`; `selflinklib` links a Zig static library its own
+// package installs. Each imported module resolves an `extern fn` provided only
+// by the linked artifact, proving the linked-artifact wiring.
+const linkartlib = @import("linkartlib");
+const selflinklib = @import("selflinklib");
 
 // `artdep` installs a static library the importer emits as a
 // `zig_static_library` artifact; the binary links it through
@@ -151,4 +157,10 @@ pub fn main() void {
     // 7*6: `artdep_scaled` is defined only by the linked static library
     // artifact, so this resolves only if the artifact target is wired in.
     std.debug.assert(artdep_scaled(7) == 42);
+    // 8*5: `linkartlib` links the `artlib` dependency's installed static library
+    // through `dep.artifact("artlib")`, resolving `artlib_value` across repos.
+    std.debug.assert(linkartlib.value() == 40);
+    // 4*9: `selflinklib` links a static library its own package installs,
+    // resolving `self_value` through the local `<name>.artifact` target.
+    std.debug.assert(selflinklib.value() == 36);
 }

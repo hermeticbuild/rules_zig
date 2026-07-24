@@ -1,0 +1,16 @@
+.{
+    .name = .linkartlib,
+    .version = "0.0.0",
+    .fingerprint = 0x66e8aba485b75511,
+    .dependencies = .{
+        .artlib = .{
+            .url = "__ARTLIB_URL__",
+            .hash = "__ARTLIB_HASH__",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

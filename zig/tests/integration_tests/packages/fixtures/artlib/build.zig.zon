@@ -1,0 +1,10 @@
+.{
+    .name = .artlib,
+    .version = "0.0.0",
+    .fingerprint = 0x436b1be6c6cbd426,
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

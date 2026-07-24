@@ -40,6 +40,15 @@ diff_test(
     file2 = zig_package_file("artdep", "module_manifest.json"),
 )
 
+# `selflinklib` installs a Zig static library and a separate module links it, so
+# that module's manifest record carries a `linked_artifacts` entry naming the
+# installed artifact alongside the package's `artifacts` list.
+diff_test(
+    name = "selflinklib_manifest_test",
+    file1 = "selflinklib_manifest.expected.json",
+    file2 = zig_package_file("selflinklib", "module_manifest.json"),
+)
+
 # The translate step's C flags, in order: `defineCMacro`'s separate `-D` and
 # `addCFlags`' joined `-DNAME=VALUE`.
 diff_test(

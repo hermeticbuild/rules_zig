@@ -1,0 +1,1 @@
+{"cells":[""],"modules":[{"name":"selflinklib-impl","package":"","root_source":"src/impl.zig","imports":[]},{"name":"selflinklib","package":"","root_source":"src/selflinklib.zig","linked_artifacts":[{"name":"selflinklib-impl","package":""}],"imports":[]}],"artifacts":[{"name":"selflinklib-impl","kind":"static_library","root_module":"selflinklib-impl","package":""}]}

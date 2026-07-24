@@ -135,6 +135,14 @@
             .url = "__ARTDEP_URL__",
             .hash = "__ARTDEP_HASH__",
         },
+        .linkartlib = .{
+            .url = "__LINKARTLIB_URL__",
+            .hash = "__LINKARTLIB_HASH__",
+        },
+        .selflinklib = .{
+            .url = "__SELFLINKLIB_URL__",
+            .hash = "__SELFLINKLIB_HASH__",
+        },
         // Uncommented by the negative test to assert that a package with a
         // source-only dependency is rejected.
         // .srconly = .{ .url = "__SRCONLY_URL__", .hash = "__SRCONLY_HASH__" },
