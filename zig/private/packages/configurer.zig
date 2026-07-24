@@ -37,6 +37,26 @@ const module_graph = @import("module_graph.zig");
 pub const root = @import("pkg");
 pub const dependencies = @import("deps");
 
+pub const panic = std.debug.FullPanic(panicExit);
+
+/// A panic handler that exits with status 1 so `repository_ctx.execute` keeps
+/// its stderr, which it discards for a signal-killed child; the caller can then
+/// surface the trace, which names the offending build.zig API.
+fn panicExit(msg: []const u8, first_trace_addr: ?usize) noreturn {
+    @branchHint(.cold);
+    const S = struct {
+        var panicking: bool = false;
+    };
+    if (S.panicking) std.process.exit(1);
+    S.panicking = true;
+    std.debug.print("panic: {s}\n", .{msg});
+    std.debug.dumpCurrentStackTrace(.{
+        .first_address = first_trace_addr,
+        .allow_unsafe_unwind = true,
+    });
+    std.process.exit(1);
+}
+
 /// A configuration matrix cell parsed from the CLI.
 const Config = struct {
     /// Empty for the default cell.
