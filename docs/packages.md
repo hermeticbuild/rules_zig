@@ -9,7 +9,7 @@ Extension for importing Zig package dependencies.
 <pre>
 zig_packages = use_extension("@rules_zig//zig:packages.bzl", "zig_packages")
 zig_packages.from_file(<a href="#zig_packages.from_file-build_zig_zon">build_zig_zon</a>)
-zig_packages.system_library(<a href="#zig_packages.system_library-name">name</a>, <a href="#zig_packages.system_library-lib">lib</a>)
+zig_packages.system_library(<a href="#zig_packages.system_library-name">name</a>, <a href="#zig_packages.system_library-lib">lib</a>, <a href="#zig_packages.system_library-package">package</a>, <a href="#zig_packages.system_library-version">version</a>)
 zig_packages.system_integration(<a href="#zig_packages.system_integration-name">name</a>)
 zig_packages.patch(<a href="#zig_packages.patch-name">name</a>, <a href="#zig_packages.patch-patch_strip">patch_strip</a>, <a href="#zig_packages.patch-patches">patches</a>, <a href="#zig_packages.patch-version">version</a>)
 zig_packages.config(<a href="#zig_packages.config-name">name</a>, <a href="#zig_packages.config-optimize">optimize</a>, <a href="#zig_packages.config-select_on">select_on</a>, <a href="#zig_packages.config-target">target</a>, <a href="#zig_packages.config-zig_flags">zig_flags</a>)
@@ -91,6 +91,8 @@ modules' mappings apply, and must agree.
 | :------------- | :------------- | :------------- | :------------- | :------------- |
 | <a id="zig_packages.system_library-name"></a>name |  The name of the system library as passed to `linkSystemLibrary` in a package's `build.zig`.   | <a href="https://bazel.build/concepts/labels#target-names">Name</a> | required |  |
 | <a id="zig_packages.system_library-lib"></a>lib |  A `cc_library` or similar (any target providing `CcInfo`) that provides the named system library.   | <a href="https://bazel.build/concepts/labels">Label</a> | required |  |
+| <a id="zig_packages.system_library-package"></a>package |  If set, map the system library only for the named package, overriding a global mapping; otherwise map it globally.   | String | optional |  `""`  |
+| <a id="zig_packages.system_library-version"></a>version |  Disambiguate `package` by version.   | String | optional |  `""`  |
 
 <a id="zig_packages.system_integration"></a>
 

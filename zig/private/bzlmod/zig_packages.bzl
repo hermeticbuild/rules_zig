@@ -96,8 +96,11 @@ def _apply_precedence(entries, keys, tag_class_name, subject, warnings):
         )] = selected.tag
     return selected
 
-def _system_library_subject(name):
-    return "system library '{}'".format(name)
+def _system_library_subject(lib_key):
+    package, version, name = lib_key
+    if not package:
+        return "system library '{}'".format(name)
+    return "system library '{}' of {}".format(name, _package_subject((package, version)))
 
 def _package_subject(pkg_key):
     name, version = pkg_key
@@ -129,6 +132,12 @@ modules' mappings apply, and must agree.
         "lib": attr.label(
             doc = "A `cc_library` or similar (any target providing `CcInfo`) that provides the named system library.",
             mandatory = True,
+        ),
+        "package": attr.string(
+            doc = "If set, map the system library only for the named package, overriding a global mapping; otherwise map it globally.",
+        ),
+        "version": attr.string(
+            doc = "Disambiguate `package` by version.",
         ),
     },
 )
@@ -371,6 +380,24 @@ def package_cells(key, cells_by_name, global_configure, per_package_configure):
 
     return check_cells(name, cells)
 
+def system_library_keys(name, package_name, package_version):
+    """The `select_by_precedence` keys mapping a system library for a URL package.
+
+    A mapping for the package's version overrides one for any version of the
+    package, which overrides a global one.
+
+    Args:
+      name: the system library's name.
+      package_name: the package's name.
+      package_version: the package's version.
+
+    Returns:
+      `(package, version, name)` keys, most specific first, where a global
+      mapping has an empty `package` and a mapping for any version an empty
+      `version`.
+    """
+    return [(package_name, package_version, name), (package_name, "", name), ("", "", name)]
+
 def collect_configs(modules):
     """Collect the build-configuration matrix from the root module's tags.
 
@@ -533,16 +560,20 @@ def _zig_packages_impl(module_ctx):
     warnings = {}
 
     system_library_entries = {}
+    system_library_names = {}
+    per_package_system_library_tags = {}
     for mod in module_ctx.modules:
         for tag in mod.tags.system_library:
-            entries = system_library_entries.setdefault(tag.name, [])
+            lib_key = (tag.package, tag.version if tag.package else "", tag.name)
+            entries = system_library_entries.setdefault(lib_key, [])
             for other in entries:
                 if other.module == mod.name and other.value != tag.lib:
-                    fail("Conflicting `system_library` annotations for '{}': {} and {}.".format(tag.name, other.value, tag.lib), tag)
-            entries.append(_tag_entry(mod, tag.name, tag.lib, tag))
-    system_libraries = {}
-    for name in system_library_entries:
-        system_libraries[name] = _apply_precedence(system_library_entries, [name], "system_library", _system_library_subject, warnings).value
+                    fail("Conflicting `system_library` annotations for {}: {} and {}.".format(_system_library_subject(lib_key), other.value, tag.lib), tag)
+            entries.append(_tag_entry(mod, lib_key, tag.lib, tag))
+            system_library_names[tag.name] = True
+            if tag.package:
+                per_package_system_library_tags.setdefault((tag.package, tag.version), tag)
+    used_system_libraries = {}
 
     system_integrations = {}
     for mod in module_ctx.modules:
@@ -630,6 +661,16 @@ def _zig_packages_impl(module_ctx):
             if pkg_key in patch_entries:
                 used_patches[pkg_key] = True
 
+        merged_system_libraries = {}
+        for lib in system_library_names:
+            entry = _apply_precedence(system_library_entries, system_library_keys(lib, name, version), "system_library", _system_library_subject, warnings)
+            if entry != None:
+                merged_system_libraries[lib] = entry.value
+        if (name, "") in per_package_system_library_tags:
+            used_system_libraries[(name, "")] = True
+        if (name, version) in per_package_system_library_tags:
+            used_system_libraries[(name, version)] = True
+
         build_deps = [dep for dep in url_deps if not graph["packages"][dep].get("naked", False)]
         zig_package(
             name = key,
@@ -639,7 +680,7 @@ def _zig_packages_impl(module_ctx):
             deps = json.encode(_deps_data(graph, key, reached)),
             dep_build_files = {dep: "@{}//:build.zig".format(dep) for dep in build_deps},
             dep_files = dep_files,
-            system_libraries = system_libraries,
+            system_libraries = merged_system_libraries,
             system_integrations = system_integrations,
             configs = json.encode(configs),
             config_settings = config_settings,
@@ -650,6 +691,13 @@ def _zig_packages_impl(module_ctx):
     for pkg_key, entries in patch_entries.items():
         if pkg_key not in used_patches:
             fail("`patch` tag targets {}, which is not a URL package in the resolved dependency graph.".format(_package_subject(pkg_key)), entries[0].tag)
+
+    for pkg_key, tag in per_package_system_library_tags.items():
+        if pkg_key not in used_system_libraries:
+            fail("`system_library` tag targets Zig package '{}'{}, which is not a URL package in the resolved dependency graph.".format(
+                tag.package,
+                " version '{}'".format(tag.version) if tag.version else "",
+            ), tag)
 
     # Resolve each provided manifest's declared dependencies to the target that
     # satisfies them: a URL dependency to its spoke (by hash key), a consumer
