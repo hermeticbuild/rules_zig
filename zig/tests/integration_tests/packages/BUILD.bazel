@@ -45,6 +45,21 @@ cc_library(
     visibility = ["//visibility:public"],
 )
 
+# `clasha` and `clashb` both link a system library named `clash`, mapped
+# per-package to a different `cc_library` each: `clasha_impl` doubles, `clashb_impl`
+# triples. Distinct extern symbols avoid a cross-package linker collision.
+cc_library(
+    name = "clasha_impl",
+    srcs = ["clasha.c"],
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
+    name = "clashb_impl",
+    srcs = ["clashb.c"],
+    visibility = ["//visibility:public"],
+)
+
 # Provides the `optmath` system library the `optdep` package links when the
 # `optmath` system integration is enabled.
 cc_library(

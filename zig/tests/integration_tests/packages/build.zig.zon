@@ -63,6 +63,14 @@
             .url = "__SYSLIBDEP_URL__",
             .hash = "__SYSLIBDEP_HASH__",
         },
+        .clasha = .{
+            .url = "__CLASHA_URL__",
+            .hash = "__CLASHA_HASH__",
+        },
+        .clashb = .{
+            .url = "__CLASHB_URL__",
+            .hash = "__CLASHB_HASH__",
+        },
         .optdep = .{
             .url = "__OPTDEP_URL__",
             .hash = "__OPTDEP_HASH__",

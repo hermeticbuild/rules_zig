@@ -10,6 +10,7 @@ load(
     "package_name_version",
     "resolve_cell",
     "select_by_precedence",
+    "system_library_keys",
 )
 load("//zig/private/repo:zig_deps_index.bzl", "has_modules", "index_packages", "resolve_version")
 
@@ -353,6 +354,43 @@ def _package_cells_target_override_test_impl(ctx):
 
 _package_cells_target_override_test = unittest.make(_package_cells_target_override_test_impl)
 
+def _system_library_keys_test_impl(ctx):
+    env = unittest.begin(ctx)
+
+    def select(*entries):
+        by_key = {}
+        for entry in entries:
+            by_key.setdefault(entry.key, []).append(entry)
+        _, selected, _ = select_by_precedence(by_key, system_library_keys("ssl", "clap", "0.1.0"))
+        return selected.value if selected else None
+
+    global_ssl = _entry("root", ("", "", "ssl"), "//g:ssl")
+    any_version = _entry("root", ("clap", "", "ssl"), "//p:ssl")
+    this_version = _entry("root", ("clap", "0.1.0", "ssl"), "//v:ssl")
+
+    asserts.equals(env, "//g:ssl", select(global_ssl))
+
+    # A mapping for any version of the package overrides the global one.
+    asserts.equals(env, "//p:ssl", select(global_ssl, any_version))
+
+    # A mapping for the package's version overrides both.
+    asserts.equals(env, "//v:ssl", select(global_ssl, any_version, this_version))
+
+    # A mapping for another package or library does not apply.
+    asserts.equals(env, "//g:ssl", select(
+        global_ssl,
+        _entry("root", ("other", "", "ssl"), "//o:ssl"),
+        _entry("root", ("clap", "", "z"), "//p:z"),
+    ))
+
+    # A global mapping of the root module overrides a dependency module's
+    # package-specific one.
+    asserts.equals(env, "//g:ssl", select(global_ssl, _entry("dep", ("clap", "0.1.0", "ssl"), "//d:ssl")))
+
+    return unittest.end(env)
+
+_system_library_keys_test = unittest.make(_system_library_keys_test_impl)
+
 def _collect_configs_test_impl(ctx):
     env = unittest.begin(ctx)
 
@@ -411,5 +449,6 @@ def zig_packages_test_suite(name):
         partial.make(_check_cells_test),
         partial.make(_package_cells_test),
         partial.make(_package_cells_target_override_test),
+        partial.make(_system_library_keys_test),
         partial.make(_collect_configs_test),
     )

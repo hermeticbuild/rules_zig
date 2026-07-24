@@ -1,0 +1,10 @@
+.{
+    .name = .clasha,
+    .version = "0.0.0",
+    .fingerprint = 0x21dcb015b87d87b0,
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

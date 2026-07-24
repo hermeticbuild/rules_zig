@@ -36,6 +36,16 @@ zig_packages.system_library(
     name = "mymath",
     lib = "//:mymath_impl",
 )
+zig_packages.system_library(
+    name = "clash",
+    lib = "//:clasha_impl",
+    package = "clasha",
+)
+zig_packages.system_library(
+    name = "clash",
+    lib = "//:clashb_impl",
+    package = "clashb",
+)
 zig_packages.system_integration(name = "optmath")
 zig_packages.system_library(
     name = "optmath",

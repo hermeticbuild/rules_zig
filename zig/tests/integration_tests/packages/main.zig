@@ -15,6 +15,8 @@ const usec = @import("usec");
 const cdep = @import("cdep");
 const cppdep = @import("cppdep");
 const syslibdep = @import("syslibdep");
+const clasha = @import("clasha");
+const clashb = @import("clashb");
 const optdep = @import("optdep");
 const weakdep = @import("weakdep");
 const cfgdep = @import("cfgdep");
@@ -65,6 +67,10 @@ pub fn main() void {
     std.debug.assert(cppdep.value() == 3);
     // 21*2, computed by the `mymath` cc_library the annotation provides.
     std.debug.assert(syslibdep.compute(21) == 42);
+    // Both link a system library named `clash`, resolved per-package to a
+    // different `cc_library`: `clasha` doubles (21*2), `clashb` triples (21*3).
+    std.debug.assert(clasha.compute(21) == 42);
+    std.debug.assert(clashb.compute(21) == 63);
     // 5+100, from `optmath` linked only because its integration is enabled.
     std.debug.assert(optdep.compute(5) == 105);
     // `weakdep` weakly links `weakmath`, which has no annotation; an unprovided
