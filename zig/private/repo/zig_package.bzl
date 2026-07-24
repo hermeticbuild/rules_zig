@@ -480,7 +480,7 @@ def _render_translate_c_library(repository_ctx, module, packages, owner, cells):
             name = headers,
             hdrs = json.encode([header]),
             deps = _render_select(cells, repository_ctx.attr.config_settings, {
-                cell.name: header_deps + _link_deps(repository_ctx, module, cell.name)
+                cell.name: header_deps + _link_deps(repository_ctx, module, cell.name, packages)
                 for cell in cells
             }),
         ),
@@ -561,6 +561,17 @@ def _glob_srcs(pattern, exclude_main):
     # root source becomes a `select()` of globs.
     return "glob([{}], exclude = {})".format(json.encode(pattern), json.encode([exclude_main]))
 
+def _linked_artifact_label(repository_ctx, linked, owner, packages):
+    # An installed Zig-library artifact a module links (`linkLibrary` of
+    # `dep.artifact(...)`): its `<name>.artifact` target, rendered in this spoke
+    # when the owner is this package or an in-tree sub-tree, and reached across
+    # repositories through the owner's `files` filegroup otherwise.
+    target = linked["name"] + ".artifact"
+    package = linked["package"]
+    if package == "" or package == owner or _is_subtree(packages, package):
+        return ":" + target
+    return _cross_repo_label(repository_ctx, package, target)
+
 def _module_deps(repository_ctx, module, cell, cc_dep, packages):
     """The `deps` and `import_names` of a module's `zig_library` in one cell."""
     deps = []
@@ -574,14 +585,21 @@ def _module_deps(repository_ctx, module, cell, cc_dep, packages):
         deps.append("@rules_zig//zig/lib:libc")
     if _field(module, "link_libcpp", False, cell):
         deps.append("@rules_zig//zig/lib:libc++")
-    deps.extend(_link_deps(repository_ctx, module, cell))
+    deps.extend(_link_deps(repository_ctx, module, cell, packages))
     if cc_dep:
         deps.append(cc_dep)
     return deps, import_names
 
-def _link_deps(repository_ctx, module, cell):
-    """The labels of the libraries a module links in one cell: its system libraries' `cc_library` annotations."""
-    deps = []
+def _link_deps(repository_ctx, module, cell, packages):
+    """The labels of the libraries a module links in one cell.
+
+    These are the installed artifacts it links and its system libraries'
+    `cc_library` annotations.
+    """
+    deps = [
+        _linked_artifact_label(repository_ctx, linked, module["package"], packages)
+        for linked in _field(module, "linked_artifacts", [], cell)
+    ]
     weak = _field(module, "weak_system_libs", [], cell)
     for name in _field(module, "system_libs", [], cell):
         lib = repository_ctx.attr.system_libraries.get(name)

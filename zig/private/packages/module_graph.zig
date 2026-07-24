@@ -10,6 +10,7 @@
 //!         "link_libc": true, "link_libcpp": true,  // each present only when set
 //!         "csrcs": [...], "include_dirs": [...], "system_libs": [...],
 //!         "weak_system_libs": [...], "unsupported": [...],  // each only when non-empty
+//!         "linked_artifacts": [{"name": ..., "package": <hash>}],  // only when non-empty
 //!         "imports": [{"name": ..., "module": ..., "package": <hash>}]}],
 //!      "artifacts": [{"name": ..., "kind": ..., "root_module": ...,
 //!         "package": <hash>}]}  // omitted when the package installs none
@@ -158,6 +159,18 @@ pub const Import = struct {
     package: []const u8,
 };
 
+/// An installed Zig-library artifact a module links (`linkLibrary` of a Zig-root
+/// library that its owner installs via `b.installArtifact`). The importer wires
+/// the owner's `<name>.artifact` target as a link (`CcInfo`) dependency.
+pub const LinkedArtifact = struct {
+    /// The linked compile's name, matching its `Artifact.name` and its
+    /// `<name>.artifact` target.
+    name: []const u8,
+    /// The Zig hash of the package that owns and installs the artifact, or the
+    /// empty string for the package being configured.
+    package: []const u8,
+};
+
 /// A module whose root source is produced by `b.addTranslateC` or a translate-c
 /// package `Translator`: its Zig code is the translation of a C header,
 /// generated at build time and absent from the package tree. The header and the
@@ -216,9 +229,13 @@ pub const Module = struct {
     /// occurrence), which the importer may omit when unmapped.
     weak_system_libs: []const []const u8,
     /// Human-readable descriptions of constructs the importer cannot represent
-    /// (assembly, prebuilt objects, generated config headers, linked compile
-    /// steps, path options, ...).
+    /// (assembly, prebuilt objects, generated config headers, path options,
+    /// ...).
     unsupported: []const []const u8,
+    /// The installed Zig libraries the module links
+    /// (`module.linkLibrary(dep.artifact(...))`); linking a Zig library that is
+    /// not installed as an artifact is `unsupported`.
+    linked_artifacts: []const LinkedArtifact,
 };
 
 /// An installed compile artifact (`b.installArtifact`): a compiled library or
@@ -647,6 +664,7 @@ const CInfo = struct {
     system_libs: []const []const u8,
     weak_system_libs: []const []const u8,
     unsupported: []const []const u8,
+    linked_artifacts: []const LinkedArtifact,
     link_libc: bool,
     link_libcpp: bool,
 };
@@ -657,9 +675,26 @@ const CAccum = struct {
     // Value is whether the name is so far linked only weakly.
     system_libs: std.StringArrayHashMapUnmanaged(bool) = .empty,
     unsupported: std.StringArrayHashMapUnmanaged(void) = .empty,
+    // Keyed by `<package>\x00<name>` to deduplicate a library linked more than once.
+    linked_artifacts: std.StringArrayHashMapUnmanaged(LinkedArtifact) = .empty,
     link_libc: bool = false,
     link_libcpp: bool = false,
 };
+
+fn appendLinkedArtifact(arena: Allocator, map: *std.StringArrayHashMapUnmanaged(LinkedArtifact), artifact: LinkedArtifact) !void {
+    const key = try std.fmt.allocPrint(arena, "{s}\x00{s}", .{ artifact.package, artifact.name });
+    try map.put(arena, key, artifact);
+}
+
+/// Whether `compile` is installed as an artifact in its owning package's build,
+/// so it has an `<name>.artifact` target a linking module can depend on.
+fn isInstalledArtifact(compile: *Build.Step.Compile) bool {
+    for (compile.root_module.owner.install_tls.step.dependencies.items) |dep_step| {
+        const inst = dep_step.cast(Build.Step.InstallArtifact) orelse continue;
+        if (inst.artifact == compile) return true;
+    }
+    return false;
+}
 
 fn joinPath(arena: Allocator, base: []const u8, sub: []const u8) ![]const u8 {
     if (base.len == 0) return sub;
@@ -836,7 +871,14 @@ fn collectCInto(arena: Allocator, builder: *Build, acc: *CAccum, module: *Build.
         .win32_resource_file => try acc.unsupported.put(arena, "a Win32 resource file", {}),
         .other_step => |compile| {
             if (compile.root_module.root_source_file != null) {
-                try acc.unsupported.put(arena, "a linked compile step with its own Zig root source (`linkLibrary` of a Zig library)", {});
+                if (isInstalledArtifact(compile)) {
+                    try appendLinkedArtifact(arena, &acc.linked_artifacts, .{
+                        .name = compile.name,
+                        .package = compile.root_module.owner.pkg_hash,
+                    });
+                } else {
+                    try acc.unsupported.put(arena, "linkLibrary of a Zig library that is not installed as an artifact", {});
+                }
             } else {
                 try collectCInto(arena, builder, acc, compile.root_module);
             }
@@ -891,6 +933,7 @@ fn collectC(
             .system_libs = acc.system_libs.keys(),
             .weak_system_libs = weak_system_libs.items,
             .unsupported = acc.unsupported.keys(),
+            .linked_artifacts = acc.linked_artifacts.values(),
             .link_libc = acc.link_libc,
             .link_libcpp = acc.link_libcpp,
         },
@@ -979,6 +1022,7 @@ pub fn collectGraph(arena: Allocator, builder: *Build) !Graph {
             .system_libs = c.system_libs,
             .weak_system_libs = c.weak_system_libs,
             .unsupported = c.unsupported,
+            .linked_artifacts = c.linked_artifacts,
         });
     }
 
@@ -1044,8 +1088,25 @@ fn writeModuleFields(json: *std.json.Stringify, module: Module) !void {
         try json.objectField("unsupported");
         try json.write(module.unsupported);
     }
+    if (module.linked_artifacts.len > 0) {
+        try json.objectField("linked_artifacts");
+        try writeLinkedArtifacts(json, module.linked_artifacts);
+    }
     try json.objectField("imports");
     try json.write(module.imports);
+}
+
+fn writeLinkedArtifacts(json: *std.json.Stringify, linked_artifacts: []const LinkedArtifact) !void {
+    try json.beginArray();
+    for (linked_artifacts) |artifact| {
+        try json.beginObject();
+        try json.objectField("name");
+        try json.write(artifact.name);
+        try json.objectField("package");
+        try json.write(artifact.package);
+        try json.endObject();
+    }
+    try json.endArray();
 }
 
 pub fn writeModule(json: *std.json.Stringify, module: Module) !void {
@@ -1101,7 +1162,7 @@ pub const Cell = struct {
 
 /// A configuration-dependent module field, merged across cells into a
 /// `select()` when its value varies.
-const Field = enum { root_source, generated_source, translate_c, translate_c_flags, link_libc, link_libcpp, imports, csrcs, include_dirs, system_libs, weak_system_libs, unsupported };
+const Field = enum { root_source, generated_source, translate_c, translate_c_flags, link_libc, link_libcpp, imports, csrcs, include_dirs, system_libs, weak_system_libs, unsupported, linked_artifacts };
 
 fn eqlOptStr(a: ?[]const u8, b: ?[]const u8) bool {
     if (a == null or b == null) return (a == null) == (b == null);
@@ -1119,6 +1180,14 @@ fn eqlTranslateC(a: ?TranslateC, b: ?TranslateC) bool {
     return mem.eql(u8, a.?.header_package, b.?.header_package) and
         mem.eql(u8, a.?.header, b.?.header) and
         eqlOptStr(a.?.generated_header, b.?.generated_header);
+}
+
+fn eqlLinkedArtifacts(a: []const LinkedArtifact, b: []const LinkedArtifact) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |x, y| {
+        if (!mem.eql(u8, x.name, y.name) or !mem.eql(u8, x.package, y.package)) return false;
+    }
+    return true;
 }
 
 fn eqlImports(a: []const Import, b: []const Import) bool {
@@ -1210,6 +1279,7 @@ fn fieldEqual(field: Field, a: Module, b: Module) bool {
         .system_libs => eqlStrList(a.system_libs, b.system_libs),
         .weak_system_libs => eqlStrList(a.weak_system_libs, b.weak_system_libs),
         .unsupported => eqlStrList(a.unsupported, b.unsupported),
+        .linked_artifacts => eqlLinkedArtifacts(a.linked_artifacts, b.linked_artifacts),
     };
 }
 
@@ -1227,6 +1297,7 @@ fn writeField(json: *std.json.Stringify, field: Field, module: Module) !void {
         .system_libs => try json.write(module.system_libs),
         .weak_system_libs => try json.write(module.weak_system_libs),
         .unsupported => try json.write(module.unsupported),
+        .linked_artifacts => try writeLinkedArtifacts(json, module.linked_artifacts),
     }
 }
 
@@ -1909,7 +1980,7 @@ test "collapses repeated identical unsupported-construct messages" {
     try std.testing.expect(std.mem.indexOf(u8, unsupported[0].string, "assembly") != null);
 }
 
-test "rejects linking a library with its own Zig root source" {
+test "records a linked artifact when a module links an installed Zig library" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -1922,6 +1993,7 @@ test "rejects linking a library with its own Zig root source" {
 
     const zig_lib_mod = b.addModule("ziglib", .{ .root_source_file = b.path("src/ziglib.zig"), .target = b.graph.host });
     const lib = b.addLibrary(.{ .name = "ziglib", .linkage = .static, .root_module = zig_lib_mod });
+    b.installArtifact(lib);
 
     const consumer = b.addModule("consumer", .{ .root_source_file = b.path("src/consumer.zig") });
     consumer.linkLibrary(lib);
@@ -1931,14 +2003,49 @@ test "rejects linking a library with its own Zig root source" {
 
     const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, out.written(), .{});
     const modules = parsed.object.get("modules").?.array.items;
-    // `ziglib` has a Zig root, so it is emitted as its own module; the consumer
-    // reports the unsupported Zig-library link.
+    // `ziglib` has a Zig root and is installed, so the consumer links it as an
+    // artifact.
     const consumer_entry = for (modules) |m| {
         if (std.mem.eql(u8, m.object.get("name").?.string, "consumer")) break m.object;
     } else unreachable;
+    try std.testing.expectEqual(null, consumer_entry.get("unsupported"));
+    const linked = consumer_entry.get("linked_artifacts").?.array.items;
+    try std.testing.expectEqual(1, linked.len);
+    try std.testing.expectEqualStrings("ziglib", linked[0].object.get("name").?.string);
+    try std.testing.expectEqualStrings("", linked[0].object.get("package").?.string);
+}
+
+test "rejects linking a Zig library that is not installed as an artifact" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const build_root = try std.fmt.allocPrint(arena, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+
+    const b = try createBuilder(arena, std.testing.io, .{ .array_hash_map = .empty, .allocator = arena }, "unused-zig", build_root, &.{});
+
+    // The Zig library is linked but never installed, so it has no artifact
+    // target to link against.
+    const zig_lib_mod = b.addModule("ziglib", .{ .root_source_file = b.path("src/ziglib.zig"), .target = b.graph.host });
+    const lib = b.addLibrary(.{ .name = "ziglib", .linkage = .static, .root_module = zig_lib_mod });
+
+    const consumer = b.addModule("consumer", .{ .root_source_file = b.path("src/consumer.zig") });
+    consumer.linkLibrary(lib);
+
+    var out: std.Io.Writer.Allocating = .init(arena);
+    try emit(arena, &out.writer, b);
+
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, out.written(), .{});
+    const modules = parsed.object.get("modules").?.array.items;
+    const consumer_entry = for (modules) |m| {
+        if (std.mem.eql(u8, m.object.get("name").?.string, "consumer")) break m.object;
+    } else unreachable;
+    try std.testing.expectEqual(null, consumer_entry.get("linked_artifacts"));
     const unsupported = consumer_entry.get("unsupported").?.array.items;
     try std.testing.expectEqual(1, unsupported.len);
-    try std.testing.expect(std.mem.indexOf(u8, unsupported[0].string, "Zig root source") != null);
+    try std.testing.expect(std.mem.indexOf(u8, unsupported[0].string, "not installed") != null);
 }
 
 test "emits the system libraries a module links" {
@@ -2701,6 +2808,7 @@ fn testModule(name: []const u8, root: []const u8, link_libc: bool, imports: []co
         .system_libs = &.{},
         .weak_system_libs = &.{},
         .unsupported = &.{},
+        .linked_artifacts = &.{},
     };
 }
 
