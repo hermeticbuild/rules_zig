@@ -34,6 +34,12 @@ const linkamalg = @import("linkamalg");
 const translatec = @import("translatec");
 const emittedinc = @import("emittedinc");
 
+// `artdep` installs a static library the importer emits as a
+// `zig_static_library` artifact; the binary links it through
+// `zig_package_artifact`. The `artdep` module is not imported, so the linked
+// artifact alone provides this C-ABI symbol.
+extern fn artdep_scaled(x: c_int) c_int;
+
 pub fn main() void {
     std.debug.assert(leaf.value == 7);
     std.debug.assert(bottom.value == 2);
@@ -142,4 +148,7 @@ pub fn main() void {
     // through a C library's `getEmittedIncludeTree()`, which the importer maps
     // back to the installed header's source directory.
     std.debug.assert(emittedinc.value() == 99);
+    // 7*6: `artdep_scaled` is defined only by the linked static library
+    // artifact, so this resolves only if the artifact target is wired in.
+    std.debug.assert(artdep_scaled(7) == 42);
 }

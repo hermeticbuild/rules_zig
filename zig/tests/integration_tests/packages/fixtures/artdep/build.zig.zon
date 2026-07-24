@@ -1,0 +1,10 @@
+.{
+    .name = .artdep,
+    .version = "0.0.0",
+    .fingerprint = 0x1274741a0c3a941e,
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

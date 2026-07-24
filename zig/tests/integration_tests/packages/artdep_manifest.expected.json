@@ -1,0 +1,1 @@
+{"cells":[""],"modules":[{"name":"artdep","package":"","root_source":"src/artdep.zig","imports":[]}],"artifacts":[{"name":"artdep","kind":"static_library","root_module":"artdep","package":""}]}

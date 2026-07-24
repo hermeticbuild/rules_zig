@@ -1,7 +1,7 @@
 load("@bazel_skylib//rules:diff_test.bzl", "diff_test")
 load("@rules_cc//cc:defs.bzl", "cc_library")
 load("@rules_zig//zig:defs.bzl", "zig_binary")
-load("@zig_deps//:defs.bzl", "zig_deps", "zig_import_names", "zig_package_file")
+load("@zig_deps//:defs.bzl", "zig_deps", "zig_import_names", "zig_package_artifact", "zig_package_file")
 
 # The binary wires every dependency the manifest declares. `top` pulls its
 # diamond (`left`/`right`/`bottom`/`base`) transitively; the copies of `lib`
@@ -18,6 +18,9 @@ zig_binary(
     deps = zig_deps() + [
         "//path_deps/greeter",
         "@child_module//:child_lib",
+        # `artdep` installs a static library; the binary links its emitted
+        # artifact target (CcInfo) and calls the C-ABI symbol it provides.
+        zig_package_artifact("artdep"),
     ],
 )
 
@@ -27,6 +30,14 @@ diff_test(
     name = "multi_manifest_test",
     file1 = "multi_manifest.expected.json",
     file2 = zig_package_file("multi", "module_manifest.json"),
+)
+
+# `artdep` installs a static library, so its manifest carries an `artifacts`
+# entry alongside its module.
+diff_test(
+    name = "artdep_manifest_test",
+    file1 = "artdep_manifest.expected.json",
+    file2 = zig_package_file("artdep", "module_manifest.json"),
 )
 
 # The translate step's C flags, in order: `defineCMacro`'s separate `-D` and
