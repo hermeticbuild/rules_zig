@@ -17,11 +17,23 @@ ZigSettingsInfo = provider(
     fields = FIELDS,
 )
 
-def zig_settings(*, settings, args):
+def zig_settings(*, settings, args, strip = True):
     """Set flags for the given Zig build settings.
 
     Args:
       settings: ZigSettingsInfo, The active Zig build settings.
       args: Args; mutable, Append the needed Zig compiler flags to this object.
+      strip: bool; Whether to append the Bazel-derived strip flag. Explicit zigopts are preserved.
     """
-    args.add_all(settings.args)
+    if strip or not settings.strip:
+        args.add_all(settings.args)
+        return
+
+    settings_args = []
+    strip_removed = False
+    for arg in settings.args:
+        if not strip_removed and arg == "-fstrip":
+            strip_removed = True
+        else:
+            settings_args.append(arg)
+    args.add_all(settings_args)

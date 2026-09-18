@@ -246,16 +246,6 @@ def _executable_extension(os):
 def _object_extension(os):
     return ".obj" if os == "windows" else ".o"
 
-def _without_bazel_strip(settings):
-    args = []
-    strip_removed = False
-    for arg in settings.args:
-        if settings.strip and not strip_removed and arg == "-fstrip":
-            strip_removed = True
-        else:
-            args.append(arg)
-    return args
-
 def zig_build_impl(ctx, *, kind):
     """Common implementation for Zig build rules.
 
@@ -463,13 +453,11 @@ def zig_build_impl(ctx, *, kind):
             import_names = import_names,
         )
 
-    if generate_dsym_file:
-        global_args.add_all(_without_bazel_strip(settings))
-    else:
-        zig_settings(
-            settings = settings,
-            args = global_args,
-        )
+    zig_settings(
+        settings = settings,
+        args = global_args,
+        strip = not generate_dsym_file,
+    )
 
     zig_target_platform(
         target = zigtargetinfo,
