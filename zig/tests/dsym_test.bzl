@@ -60,15 +60,6 @@ _dsyms_enabled_test = analysistest.make(
     },
 )
 
-_dsyms_enabled_without_bazel_strip_test = analysistest.make(
-    _dsyms_enabled_test_impl,
-    config_settings = {
-        _APPLE_GENERATE_DSYM: True,
-        _SETTINGS_USE_CC_COMMON_LINK: True,
-        _STRIP: "never",
-    },
-)
-
 def _dsyms_disabled_test_impl(ctx):
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
@@ -130,8 +121,6 @@ def dsym_test_suite(name):
         partial.make(_dsyms_enabled_test, name = "dsym_binary_enabled_test", target_under_test = "//zig/tests/simple-binary:binary", size = "small"),
         partial.make(_dsyms_enabled_test, name = "dsym_shared_library_enabled_test", target_under_test = "//zig/tests/simple-shared-library:shared", size = "small"),
         partial.make(_dsyms_enabled_test, name = "dsym_test_enabled_test", target_under_test = "//zig/tests/simple-test:test", size = "small"),
-        partial.make(_dsyms_enabled_without_bazel_strip_test, name = "dsym_strip_attr_test", target_under_test = "//zig/tests/strip_debug_symbols:binary-strip", size = "small"),
-        partial.make(_dsyms_enabled_without_bazel_strip_test, name = "dsym_zigopt_strip_test", target_under_test = "//zig/tests/strip_debug_symbols:binary-zigopt-strip", size = "small"),
         partial.make(_dsyms_disabled_test, name = "dsym_binary_disabled_test", target_under_test = "//zig/tests/simple-binary:binary", size = "small"),
         partial.make(_dsyms_without_cc_toolchain_requested_test, name = "dsym_zig_only_requested_test", target_under_test = "//zig/tests/simple-binary:binary", size = "small"),
         partial.make(_dsyms_without_cc_toolchain_unrequested_test, name = "dsym_zig_only_unrequested_test", target_under_test = "//zig/tests/simple-binary:binary", size = "small"),

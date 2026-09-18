@@ -246,6 +246,16 @@ def _executable_extension(os):
 def _object_extension(os):
     return ".obj" if os == "windows" else ".o"
 
+def _without_bazel_strip(settings):
+    args = []
+    strip_removed = False
+    for arg in settings.args:
+        if settings.strip and not strip_removed and arg == "-fstrip":
+            strip_removed = True
+        else:
+            args.append(arg)
+    return args
+
 def zig_build_impl(ctx, *, kind):
     """Common implementation for Zig build rules.
 
@@ -327,7 +337,7 @@ def zig_build_impl(ctx, *, kind):
     elif ctx.attr.compiler_runtime == "exclude":
         args.add("-fno-compiler-rt")
 
-    if ctx.attr.strip_debug_symbols and not settings.strip and not generate_dsym_file:
+    if ctx.attr.strip_debug_symbols and not settings.strip:
         args.add("-fstrip")
 
     zig_lib_dir(
@@ -453,11 +463,13 @@ def zig_build_impl(ctx, *, kind):
             import_names = import_names,
         )
 
-    zig_settings(
-        settings = settings,
-        args = global_args,
-        strip = not generate_dsym_file,
-    )
+    if generate_dsym_file:
+        global_args.add_all(_without_bazel_strip(settings))
+    else:
+        zig_settings(
+            settings = settings,
+            args = global_args,
+        )
 
     zig_target_platform(
         target = zigtargetinfo,
@@ -503,7 +515,6 @@ def zig_build_impl(ctx, *, kind):
         root_module = root_module,
         args = args,
         c_module = c_module,
-        strip = not generate_dsym_file,
     )
 
     transitive_inputs.append(root_module.transitive_inputs)

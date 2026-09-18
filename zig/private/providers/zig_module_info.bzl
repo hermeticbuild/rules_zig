@@ -95,25 +95,19 @@ def _render_per_module_args(module):
 
     return args
 
-def _render_per_module_args_without_strip(module):
-    return [arg for arg in _render_per_module_args(module) if arg != "-fstrip"]
-
-def zig_module_specifications(*, root_module, args, c_module = None, strip = True):
+def zig_module_specifications(*, root_module, args, c_module = None):
     """Collect inputs and flags to build Zig modules.
 
     Args:
         root_module: ZigModuleInfo; The root module for which to render args.
         args: Args; mutable, Append the needed Zig compiler flags to this object.
         c_module: ZigModuleInfo or None; If not None, the global C translation module to depend on.
-        strip: bool; Whether to append strip flags from module options.
     """
 
-    render_per_module_args = _render_per_module_args if strip else _render_per_module_args_without_strip
-
     # The first module is the main module.
-    args.add_all([root_module.module_context], map_each = render_per_module_args)
-    args.add_all(root_module.transitive_module_contexts, map_each = render_per_module_args)
+    args.add_all([root_module.module_context], map_each = _render_per_module_args)
+    args.add_all(root_module.transitive_module_contexts, map_each = _render_per_module_args)
 
     if c_module:
-        args.add_all([c_module.module_context], map_each = render_per_module_args)
-        args.add_all(c_module.transitive_module_contexts, map_each = render_per_module_args)
+        args.add_all([c_module.module_context], map_each = _render_per_module_args)
+        args.add_all(c_module.transitive_module_contexts, map_each = _render_per_module_args)

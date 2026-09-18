@@ -18,13 +18,6 @@ zig_binary(
     visibility = ["//zig/tests:__pkg__"],
 )
 
-zig_binary(
-    name = "binary-zigopt-strip",
-    main = "main.zig",
-    visibility = ["//zig/tests:__pkg__"],
-    zigopts = ["-fstrip"],
-)
-
 zig_shared_library(
     name = "library-shared-strip",
     main = "main.zig",
