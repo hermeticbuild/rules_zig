@@ -2,6 +2,7 @@ load("@bazel_skylib//:bzl_library.bzl", "bzl_library")
 load(":bzlmod_zig_test.bzl", "bzlmod_zig_test_suite")
 load(":cache_test.bzl", "cache_test_suite")
 load(":config_test.bzl", "config_test_suite")
+load(":dsym_test.bzl", "dsym_test_suite")
 load(":emit_attr_test.bzl", "emit_attr_test_suite")
 load(":mode_test.bzl", "mode_test_suite")
 load(":module_info_test.bzl", "module_info_test_suite")
@@ -25,6 +26,8 @@ bzlmod_zig_test_suite(name = "bzlmod_zig_test")
 cache_test_suite(name = "cache_test")
 
 config_test_suite(name = "config_test")
+
+dsym_test_suite(name = "dsym_test")
 
 emit_attr_test_suite(name = "emit_attr_test")
 
