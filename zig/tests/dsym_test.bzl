@@ -17,7 +17,6 @@ _EXTRA_TOOLCHAINS = "//command_line_option:extra_toolchains"
 _STRIP = "//command_line_option:strip"
 _TARGET_PLATFORM = "//command_line_option:platforms"
 _SETTINGS_USE_CC_COMMON_LINK = canonical_label("@//zig/settings:use_cc_common_link")
-_SETTINGS_ZIGOPT = canonical_label("@//zig/settings:zigopt")
 
 _PLATFORM_ZIG_ONLY_X86_64_LINUX = canonical_label("@//zig/tests/platforms:zig-only-x86_64-linux")
 _TOOLCHAIN_UNCONSTRAINED_DEFAULT_TEST = canonical_label("@//zig/tests/platforms:unconstrained_default_test_toolchain")
@@ -57,22 +56,7 @@ _dsyms_enabled_test = analysistest.make(
     config_settings = {
         _APPLE_GENERATE_DSYM: True,
         _SETTINGS_USE_CC_COMMON_LINK: True,
-        _STRIP: "always",
-    },
-)
-
-def _dsyms_explicit_fstrip_test_impl(ctx):
-    env = analysistest.begin(ctx)
-    assert_flag_set(env, "-fstrip", assert_find_action(env, "ZigBuildLib").argv)
-    return analysistest.end(env)
-
-_dsyms_explicit_fstrip_test = analysistest.make(
-    _dsyms_explicit_fstrip_test_impl,
-    config_settings = {
-        _APPLE_GENERATE_DSYM: True,
-        _SETTINGS_USE_CC_COMMON_LINK: True,
-        _SETTINGS_ZIGOPT: ["-fstrip"],
-        _STRIP: "always",
+        _STRIP: "never",
     },
 )
 
@@ -151,7 +135,6 @@ def dsym_test_suite(name):
         partial.make(_dsyms_enabled_test, name = "dsym_binary_enabled_test", target_under_test = "//zig/tests/simple-binary:binary", size = "small", target_compatible_with = ["@platforms//os:macos"]),
         partial.make(_dsyms_enabled_test, name = "dsym_shared_library_enabled_test", target_under_test = "//zig/tests/simple-shared-library:shared", size = "small", target_compatible_with = ["@platforms//os:macos"]),
         partial.make(_dsyms_enabled_test, name = "dsym_test_enabled_test", target_under_test = "//zig/tests/simple-test:test", size = "small", target_compatible_with = ["@platforms//os:macos"]),
-        partial.make(_dsyms_explicit_fstrip_test, name = "dsym_explicit_fstrip_test", target_under_test = "//zig/tests/simple-binary:binary", size = "small", target_compatible_with = ["@platforms//os:macos"]),
         partial.make(_dsyms_strip_debug_symbols_test, name = "dsym_strip_debug_symbols_test", target_under_test = "//zig/tests/strip_debug_symbols:binary-strip", size = "small", target_compatible_with = ["@platforms//os:macos"]),
         partial.make(_dsyms_disabled_test, name = "dsym_binary_disabled_test", target_under_test = "//zig/tests/simple-binary:binary", size = "small"),
         partial.make(_dsyms_without_cc_toolchain_requested_test, name = "dsym_zig_only_requested_test", target_under_test = "//zig/tests/simple-binary:binary", size = "small"),

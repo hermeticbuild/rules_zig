@@ -137,6 +137,9 @@ def _settings_impl(ctx):
     use_cc_common_link = ctx.attr.host_use_cc_common_link[BuildSettingInfo].value if is_exec_configuration else ctx.attr.use_cc_common_link[BuildSettingInfo].value
 
     strip = _resolve_strip(ctx, ctx.attr._bazel_strip[BazelStripInfo].strip)
+    if strip:
+        args.append("-fstrip")
+
     args.extend(ctx.attr.host_zigopt[BuildSettingInfo].value if is_exec_configuration else ctx.attr.zigopt[BuildSettingInfo].value)
 
     settings_info = ZigSettingsInfo(

@@ -329,7 +329,7 @@ def zig_build_impl(ctx, *, kind):
 
     if ctx.attr.strip_debug_symbols:
         if generate_dsym_file:
-            fail("'strip_debug_symbols' cannot be enabled when generating a dSYM; use Bazel's '--strip' option to strip the linked binary after dSYM generation")
+            fail("'strip_debug_symbols' cannot be enabled when generating a dSYM")
         if not settings.strip:
             args.add("-fstrip")
 
@@ -459,7 +459,6 @@ def zig_build_impl(ctx, *, kind):
     zig_settings(
         settings = settings,
         args = global_args,
-        strip = not generate_dsym_file,
     )
 
     zig_target_platform(
