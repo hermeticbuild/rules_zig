@@ -327,8 +327,11 @@ def zig_build_impl(ctx, *, kind):
     elif ctx.attr.compiler_runtime == "exclude":
         args.add("-fno-compiler-rt")
 
-    if ctx.attr.strip_debug_symbols and not settings.strip:
-        args.add("-fstrip")
+    if ctx.attr.strip_debug_symbols:
+        if generate_dsym_file:
+            fail("'strip_debug_symbols' cannot be enabled when generating a dSYM; use Bazel's '--strip' option to strip the linked binary after dSYM generation")
+        if not settings.strip:
+            args.add("-fstrip")
 
     zig_lib_dir(
         zigtoolchaininfo = zigtoolchaininfo,

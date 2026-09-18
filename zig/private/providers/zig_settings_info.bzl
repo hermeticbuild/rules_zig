@@ -9,7 +9,7 @@ FIELDS = {
     "use_cc_common_link": "Whether to use cc_common.link to link zig binaries, tests and shared libraries.",
     "threaded": "The Zig multi- or single-threaded setting.",
     "strip": "Whether Zig compile actions should remove debug symbols.",
-    "args": "The collected compiler arguments for all active settings.",
+    "args": "The collected compiler arguments excluding the Bazel-derived strip flag.",
 }
 
 ZigSettingsInfo = provider(
@@ -23,17 +23,8 @@ def zig_settings(*, settings, args, strip = True):
     Args:
       settings: ZigSettingsInfo, The active Zig build settings.
       args: Args; mutable, Append the needed Zig compiler flags to this object.
-      strip: bool; Whether to append the Bazel-derived strip flag. Explicit zigopts are preserved.
+      strip: bool; Whether to append the Bazel-derived strip flag.
     """
-    if strip or not settings.strip:
-        args.add_all(settings.args)
-        return
-
-    settings_args = []
-    strip_removed = False
-    for arg in settings.args:
-        if not strip_removed and arg == "-fstrip":
-            strip_removed = True
-        else:
-            settings_args.append(arg)
-    args.add_all(settings_args)
+    if strip and settings.strip:
+        args.add("-fstrip")
+    args.add_all(settings.args)

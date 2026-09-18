@@ -467,10 +467,7 @@ def _define_bazel_strip_settings_test(*, strip, compilation_mode, expected_strip
 
         settings = analysistest.target_under_test(env)[ZigSettingsInfo]
         asserts.equals(env, expected_strip, settings.strip)
-        if expected_strip:
-            assert_flag_set(env, "-fstrip", settings.args)
-        else:
-            assert_flag_unset(env, "-fstrip", settings.args)
+        assert_flag_unset(env, "-fstrip", settings.args)
 
         return analysistest.end(env)
 
