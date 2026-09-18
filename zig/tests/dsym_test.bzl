@@ -118,9 +118,9 @@ _dsyms_without_cc_toolchain_unrequested_test = analysistest.make(
 def dsym_test_suite(name):
     unittest.suite(
         name,
-        partial.make(_dsyms_enabled_test, name = "dsym_binary_enabled_test", target_under_test = "//zig/tests/simple-binary:binary", size = "small"),
-        partial.make(_dsyms_enabled_test, name = "dsym_shared_library_enabled_test", target_under_test = "//zig/tests/simple-shared-library:shared", size = "small"),
-        partial.make(_dsyms_enabled_test, name = "dsym_test_enabled_test", target_under_test = "//zig/tests/simple-test:test", size = "small"),
+        partial.make(_dsyms_enabled_test, name = "dsym_binary_enabled_test", target_under_test = "//zig/tests/simple-binary:binary", size = "small", target_compatible_with = ["@platforms//os:macos"]),
+        partial.make(_dsyms_enabled_test, name = "dsym_shared_library_enabled_test", target_under_test = "//zig/tests/simple-shared-library:shared", size = "small", target_compatible_with = ["@platforms//os:macos"]),
+        partial.make(_dsyms_enabled_test, name = "dsym_test_enabled_test", target_under_test = "//zig/tests/simple-test:test", size = "small", target_compatible_with = ["@platforms//os:macos"]),
         partial.make(_dsyms_disabled_test, name = "dsym_binary_disabled_test", target_under_test = "//zig/tests/simple-binary:binary", size = "small"),
         partial.make(_dsyms_without_cc_toolchain_requested_test, name = "dsym_zig_only_requested_test", target_under_test = "//zig/tests/simple-binary:binary", size = "small"),
         partial.make(_dsyms_without_cc_toolchain_unrequested_test, name = "dsym_zig_only_unrequested_test", target_under_test = "//zig/tests/simple-binary:binary", size = "small"),
