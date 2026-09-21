@@ -277,6 +277,16 @@ def zig_build_impl(ctx, *, kind):
     use_cc_common_link = settings.use_cc_common_link
     use_test_obj = kind == "zig_test" and use_cc_common_link and semver.gte(zigtoolchaininfo.zig_version, "0.16.0")
 
+    cc_toolchain = None
+    feature_configuration = None
+    generate_dsym_file = False
+    if use_cc_common_link and kind != "zig_static_library":
+        cc_toolchain, feature_configuration = find_cc_toolchain(ctx, mandatory = True)
+        generate_dsym_file = cc_common.is_enabled(
+            feature_configuration = feature_configuration,
+            feature_name = "generate_dsym_file",
+        )
+
     providers = []
     exported_library_to_link = None
     direct_data = []
@@ -317,8 +327,11 @@ def zig_build_impl(ctx, *, kind):
     elif ctx.attr.compiler_runtime == "exclude":
         args.add("-fno-compiler-rt")
 
-    if ctx.attr.strip_debug_symbols and not settings.strip:
-        args.add("-fstrip")
+    if ctx.attr.strip_debug_symbols:
+        if generate_dsym_file:
+            fail("'strip_debug_symbols' cannot be enabled when generating a dSYM")
+        if not settings.strip:
+            args.add("-fstrip")
 
     zig_lib_dir(
         zigtoolchaininfo = zigtoolchaininfo,
@@ -360,6 +373,15 @@ def zig_build_impl(ctx, *, kind):
             bin_output_name = _lib_prefix(zigtargetinfo.triple.os) + ctx.label.name + _shared_lib_extension(zigtargetinfo.triple.os)
             bin_output = ctx.actions.declare_file(bin_output_name)
         solib_parents = [""]
+
+    cc_link_kwargs = {}
+    if generate_dsym_file:
+        dsym_file = ctx.actions.declare_directory(ctx.label.name + ".dSYM", sibling = bin_output)
+        cc_link_kwargs = {
+            "additional_outputs": [dsym_file],
+            "variables_extension": {"dsym_path": dsym_file.path},
+        }
+        output_groups["dsyms"] = depset([dsym_file])
 
     if kind == "zig_test" and ctx.attr.test_runner:
         args.add("--test-runner", ctx.file.test_runner)
@@ -547,7 +569,6 @@ def zig_build_impl(ctx, *, kind):
                 **zig_build_kwargs
             )
 
-            cc_toolchain, feature_configuration = find_cc_toolchain(ctx, mandatory = True)
             library_to_link = cc_common.create_library_to_link(
                 actions = ctx.actions,
                 feature_configuration = feature_configuration,
@@ -571,6 +592,7 @@ def zig_build_impl(ctx, *, kind):
                 main_output = bin_output,
                 linking_contexts = [linking_context, root_module.cc_info.linking_context],
                 user_link_flags = linkopts,
+                **cc_link_kwargs
             )
         else:
             args.add(bin_output, format = "-femit-bin=%s")
@@ -638,7 +660,6 @@ def zig_build_impl(ctx, *, kind):
                 **zig_build_kwargs
             )
 
-            cc_toolchain, feature_configuration = find_cc_toolchain(ctx, mandatory = True)
             library_to_link = cc_common.create_library_to_link(
                 actions = ctx.actions,
                 feature_configuration = feature_configuration,
@@ -662,6 +683,7 @@ def zig_build_impl(ctx, *, kind):
                 main_output = bin_output,
                 linking_contexts = [linking_context, root_module.cc_info.linking_context],
                 user_link_flags = linkopts,
+                **cc_link_kwargs
             )
         else:
             args.add(bin_output, format = "-femit-bin=%s")
@@ -713,7 +735,6 @@ def zig_build_impl(ctx, *, kind):
                 **zig_build_kwargs
             )
 
-            cc_toolchain, feature_configuration = find_cc_toolchain(ctx, mandatory = True)
             library_to_link = cc_common.create_library_to_link(
                 actions = ctx.actions,
                 feature_configuration = feature_configuration,
@@ -738,6 +759,7 @@ def zig_build_impl(ctx, *, kind):
                 main_output = bin_output,
                 linking_contexts = [linking_context, root_module.cc_info.linking_context],
                 user_link_flags = linkopts,
+                **cc_link_kwargs
             )
 
             exported_library_to_link = link_outputs.library_to_link
