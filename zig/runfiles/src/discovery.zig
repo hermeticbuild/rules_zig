@@ -212,14 +212,23 @@ fn isOpenableDir_016(io: std.Io, dir_path: []const u8) bool {
 }
 
 const testing = struct {
-    const c = @cImport({
-        @cInclude("stdlib.h");
-    });
+    const c = struct {
+        extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+        extern "c" fn unsetenv(name: [*:0]const u8) c_int;
+        extern "c" fn _putenv_s(name: [*:0]const u8, value: [*:0]const u8) c_int;
+    };
+
+    fn dupeZ(value: []const u8) ![:0]u8 {
+        return if (is_zig_0_16_or_later)
+            std.testing.allocator.dupeSentinel(u8, value, 0)
+        else
+            std.testing.allocator.dupeZ(u8, value);
+    }
 
     pub fn setenv(name: []const u8, value: []const u8) !void {
-        const nameZ = try std.testing.allocator.dupeZ(u8, name);
+        const nameZ = try dupeZ(name);
         defer std.testing.allocator.free(nameZ);
-        const valueZ = try std.testing.allocator.dupeZ(u8, value);
+        const valueZ = try dupeZ(value);
         defer std.testing.allocator.free(valueZ);
         if (builtin.os.tag == .windows) {
             if (testing.c._putenv_s(nameZ, valueZ) != 0)
@@ -231,7 +240,7 @@ const testing = struct {
     }
 
     pub fn unsetenv(name: []const u8) !void {
-        const nameZ = try std.testing.allocator.dupeZ(u8, name);
+        const nameZ = try dupeZ(name);
         defer std.testing.allocator.free(nameZ);
         if (builtin.os.tag == .windows) {
             if (testing.c._putenv_s(nameZ, "") != 0)

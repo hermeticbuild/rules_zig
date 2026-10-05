@@ -13,6 +13,11 @@ zig_library(
 zls_completion(
     name = "completion",
     testonly = True,
+    target_compatible_with = select({
+        # Drop once ZLS 0.17.0 is supported.
+        "@zig_toolchains//:0.17.0": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
     deps = [":lib"],
 )
 

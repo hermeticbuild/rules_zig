@@ -13,7 +13,8 @@ def zls_completion(name, deps, testonly = False, **kwargs):
         name: The name of the completion target.
         deps: The List of Zig modules to include for completion.
         testonly: Whether generated targets should be test-only.
-        **kwargs: Additional keyword arguments passed to the `zig_binary`
+        **kwargs: Additional keyword arguments passed to the `zig_binary`;
+          `target_compatible_with` also applies to the ZLS runner.
     """
 
     # Generate the ZLS BuildConfig file.
@@ -90,6 +91,7 @@ def zls_completion(name, deps, testonly = False, **kwargs):
         out = name + ".runner.zig",
         build_runner = ":" + name + ".build_runner.zig",
         testonly = testonly,
+        target_compatible_with = kwargs.get("target_compatible_with"),
     )
 
     zig_binary(
