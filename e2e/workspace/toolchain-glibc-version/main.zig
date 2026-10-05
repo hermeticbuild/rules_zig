@@ -1,7 +1,9 @@
+const builtin = @import("builtin");
 const std = @import("std");
-const c = @cImport({
-    @cInclude("features.h");
-});
+
+const is_zig_0_17_or_later = builtin.zig_version.major == 0 and builtin.zig_version.minor >= 17;
+
+const c = if (is_zig_0_17_or_later) @import("c") else @import("cimport").c;
 
 extern "c" fn gnu_get_libc_version() [*c]const u8;
 

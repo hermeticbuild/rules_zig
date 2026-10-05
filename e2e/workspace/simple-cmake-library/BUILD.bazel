@@ -1,5 +1,6 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
 load("@rules_foreign_cc//foreign_cc:defs.bzl", "cmake")
-load("@rules_zig//zig:defs.bzl", "zig_binary")
+load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_library")
 
 # --------------------
 # external library using foreign_cc
@@ -27,11 +28,31 @@ cmake(
 # )
 # --------------------
 
-zig_binary(
-    name = "main",
-    main = "main.zig",
+# The `c` module includes only direct public headers, which cmake does not provide.
+cc_library(
+    name = "c-hello-header",
+    hdrs = ["c_hello.h"],
+    deps = [":c-hello"],
+)
+
+zig_library(
+    name = "cimport",
+    main = "cimport.zig",
     deps = [
         ":c-hello",
         "@rules_zig//zig/lib:libc",
     ],
+)
+
+zig_binary(
+    name = "main",
+    main = "main.zig",
+    deps = [
+        ":c-hello-header",
+        "@rules_zig//zig/lib:libc",
+    ] + select({
+        "@zig_toolchains//:0.15.2": [":cimport"],
+        "@zig_toolchains//:0.16.0": [":cimport"],
+        "//conditions:default": [],
+    }),
 )

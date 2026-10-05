@@ -1,3 +1,3 @@
 pub const c = @cImport({
-    @cInclude("header.h");
+    @cInclude("math.h");
 });

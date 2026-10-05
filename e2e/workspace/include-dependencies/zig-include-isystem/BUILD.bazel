@@ -1,7 +1,7 @@
 load("@bazel_skylib//rules:build_test.bzl", "build_test")
 load("@bazel_skylib//rules:diff_test.bzl", "diff_test")
 load("@rules_cc//cc:defs.bzl", "cc_library")
-load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_static_library", "zig_test")
+load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_library", "zig_static_library", "zig_test")
 
 cc_library(
     name = "header",
@@ -9,23 +9,41 @@ cc_library(
     includes = ["."],
 )
 
+zig_library(
+    name = "cimport",
+    main = "cimport.zig",
+    deps = [":header"],
+)
+
 zig_binary(
     name = "binary",
     main = "main.zig",
-    deps = [":header"],
+    deps = [":header"] + select({
+        "@zig_toolchains//:0.15.2": [":cimport"],
+        "@zig_toolchains//:0.16.0": [":cimport"],
+        "//conditions:default": [],
+    }),
 )
 
 zig_static_library(
     name = "library",
     main = "main.zig",
-    deps = [":header"],
+    deps = [":header"] + select({
+        "@zig_toolchains//:0.15.2": [":cimport"],
+        "@zig_toolchains//:0.16.0": [":cimport"],
+        "//conditions:default": [],
+    }),
 )
 
 zig_test(
     name = "test",
     size = "small",
     main = "main.zig",
-    deps = [":header"],
+    deps = [":header"] + select({
+        "@zig_toolchains//:0.15.2": [":cimport"],
+        "@zig_toolchains//:0.16.0": [":cimport"],
+        "//conditions:default": [],
+    }),
 )
 
 build_test(
