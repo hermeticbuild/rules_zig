@@ -12,6 +12,7 @@ load(
     "translate_c_exec_group_action_kwargs",
     "zig_exec_group_action_kwargs",
 )
+load("//zig/private/common:semver.bzl", "semver")
 load("//zig/private/providers:zig_module_info.bzl", "zig_module_info")
 load(
     "//zig/private/providers:zig_toolchain_info.bzl",
@@ -27,6 +28,11 @@ _APPLE_DEFAULT_TOOLCHAIN_INCLUDE_DIRS = _DEFAULT_SYSROOT_INCLUDE_DIRS + [
     paths.join("usr", "lib", "clang", str(version), "include")
     for version in range(15, 22)
 ]
+
+# translate-c >= 2.0.0, which requires Zig >= 0.17.0, takes its own options
+# before `--` and the input file and C options after it, and requires
+# `--zig-lib`.
+_TRANSLATE_C_2_MIN_ZIG_VERSION = "0.17.0"
 
 _TRANSLATED_ARGS = {
     "-internal-isystem": "-isystem",
@@ -149,7 +155,7 @@ def _builtin_translate_c(*, ctx, zigtoolchaininfo, global_args, compilation_cont
 
     return zig_out, []
 
-def _external_translate_c(*, ctx, translatectoolchaininfo, compilation_context, output_prefix):
+def _external_translate_c(*, ctx, zigtoolchaininfo, translatectoolchaininfo, compilation_context, output_prefix):
     inputs = []
     transitive_inputs = [compilation_context.headers]
 
@@ -192,13 +198,23 @@ def _external_translate_c(*, ctx, translatectoolchaininfo, compilation_context, 
     ]))
     inputs.append(hdr)
 
+    zig_out = ctx.actions.declare_file("{}{}_c.zig".format(output_prefix, ctx.label.name))
+
     args = ctx.actions.args()
+    args.add("-fmodule-libs")
+    if semver.gte(zigtoolchaininfo.zig_version, _TRANSLATE_C_2_MIN_ZIG_VERSION):
+        args.add(zig_out, format = "-o=%s")
+        args.add(zig_toolchain_lib_dir_path(zigtoolchaininfo), format = "--zig-lib=%s")
+        args.add("--")
+        if zigtoolchaininfo.zig_lib.file != None:
+            inputs.append(zigtoolchaininfo.zig_lib.file)
+    else:
+        args.add("-o", zig_out)
     args.add(hdr)
 
     args.add_all([
         "-undef",
         "-nobuiltininc",
-        "-fmodule-libs",
         "-D__building_module(x)=0",
     ])
 
@@ -251,8 +267,6 @@ def _external_translate_c(*, ctx, translatectoolchaininfo, compilation_context, 
     args.add_all(getattr(compilation_context, "external_includes", []), before_each = "-isystem")
     args.add_all(compilation_context.framework_includes, format_each = "-F%s")
 
-    zig_out = ctx.actions.declare_file("{}{}_c.zig".format(output_prefix, ctx.label.name))
-    args.add("-o", zig_out)
     args.add("--emulate=clang")
 
     actions_run = ctx.actions.run
@@ -310,6 +324,7 @@ def zig_translate_c(*, ctx, name, zigtoolchaininfo, global_args, cc_infos, outpu
     if translatectoolchaininfo:
         zig_out, translate_c_deps = _external_translate_c(
             ctx = ctx,
+            zigtoolchaininfo = zigtoolchaininfo,
             translatectoolchaininfo = translatectoolchaininfo,
             compilation_context = compilation_context,
             output_prefix = output_prefix,
