@@ -47,6 +47,7 @@ zig_dev = use_extension(
     dev_dependency = True,
 )
 zig_dev.toolchain(zig_version = "0.17.0")
+zig_dev.toolchain(zig_version = "0.16.0")
 zig_dev.toolchain(zig_version = "0.15.2")
 
 zls_dev = use_extension(
@@ -55,8 +56,8 @@ zls_dev = use_extension(
     dev_dependency = True,
 )
 zls_dev.toolchain(
-    zig_version = "0.17.0",
-    zls_version = "0.17.0",
+    zig_version = "0.16.0",
+    zls_version = "0.16.0",
 )
 zls_dev.toolchain(
     zig_version = "0.15.2",

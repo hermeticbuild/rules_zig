@@ -135,8 +135,8 @@ Zig SDK version.
 zls = use_extension("@rules_zig//zig/zls:extensions.bzl", "zls")
 zls.index(file = "@rules_zig//zig/zls/private:versions.json")
 zls.toolchain(
-    zig_version = "0.17.0",
-    zls_version = "0.17.0",
+    zig_version = "0.16.0",
+    zls_version = "0.16.0",
 )
 use_repo(zls, "zls_toolchains")
 register_toolchains("@zls_toolchains//:all")
