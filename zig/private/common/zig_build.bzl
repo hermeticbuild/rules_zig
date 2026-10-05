@@ -275,7 +275,7 @@ def zig_build_impl(ctx, *, kind):
 
     settings = ctx.attr._settings[ZigSettingsInfo]
     use_cc_common_link = settings.use_cc_common_link
-    use_test_obj = kind == "zig_test" and use_cc_common_link and semver.gte(zigtoolchaininfo.zig_version, "0.16.0")
+    use_test_obj = kind == "zig_test" and use_cc_common_link and semver.gte(zigtoolchaininfo.zig_version, "0.17.0")
 
     cc_toolchain = None
     feature_configuration = None

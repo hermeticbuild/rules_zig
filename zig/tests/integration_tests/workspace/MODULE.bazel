@@ -15,7 +15,7 @@ zig.index(file = "extra-versions.json")
 zig.toolchain(zig_version = "0.17.0-dev.135+9df02121d")
 zig.toolchain(
     default = True,
-    zig_version = "0.16.0",
+    zig_version = "0.17.0",
 )
 zig.toolchain(zig_version = "0.15.2")
 use_repo(zig, "zig_toolchains")

@@ -225,13 +225,13 @@ _sorted_test = unittest.make(_sorted_test_impl)
 def _gte_test_impl(ctx):
     env = unittest.begin(ctx)
 
-    asserts.true(env, semver.gte("0.16.0", "0.16.0"))
-    asserts.true(env, semver.gte("0.16.1", "0.16.0"))
-    asserts.true(env, semver.gte("0.17.0-dev.135+9df02121d", "0.16.0"))
-    asserts.true(env, semver.gte("1.0.0", "0.16.0"))
+    asserts.true(env, semver.gte("0.17.0", "0.17.0"))
+    asserts.true(env, semver.gte("0.16.1", "0.17.0"))
+    asserts.true(env, semver.gte("0.17.0-dev.135+9df02121d", "0.17.0"))
+    asserts.true(env, semver.gte("1.0.0", "0.17.0"))
 
-    asserts.false(env, semver.gte("0.15.2", "0.16.0"))
-    asserts.false(env, semver.gte("0.16.0-dev.1", "0.16.0"))
+    asserts.false(env, semver.gte("0.15.2", "0.17.0"))
+    asserts.false(env, semver.gte("0.17.0-dev.1", "0.17.0"))
 
     return unittest.end(env)
 
