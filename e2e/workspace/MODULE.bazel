@@ -17,7 +17,6 @@ zig = use_extension(
 )
 zig.toolchain(zig_version = "0.17.0")
 zig.toolchain(zig_version = "0.16.0")
-zig.toolchain(zig_version = "0.15.2")
 use_repo(zig, "zig_toolchains")
 
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")

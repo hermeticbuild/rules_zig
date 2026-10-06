@@ -55,7 +55,6 @@ zig_binary(
         ":glibc_features",
         "@rules_zig//zig/lib:libc",
     ] + select({
-        "@zig_toolchains//:0.15.2": [":cimport"],
         "@zig_toolchains//:0.16.0": [":cimport"],
         "//conditions:default": [],
     }),
@@ -79,7 +78,6 @@ zig_test(
         ":glibc_features",
         "@rules_zig//zig/lib:libc",
     ] + select({
-        "@zig_toolchains//:0.15.2": [":cimport"],
         "@zig_toolchains//:0.16.0": [":cimport"],
         "//conditions:default": [],
     }),

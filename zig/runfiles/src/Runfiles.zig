@@ -10,12 +10,7 @@ const Manifest = @import("Manifest.zig");
 const RepoMapping = @import("RepoMapping.zig");
 const RPath = @import("RPath.zig");
 
-const is_zig_0_16_or_later = builtin.zig_version.major == 0 and builtin.zig_version.minor >= 16;
-
-const EnvMap = if (is_zig_0_16_or_later)
-    std.process.Environ.Map
-else
-    std.process.EnvMap;
+const EnvMap = std.process.Environ.Map;
 
 const Runfiles = @This();
 
@@ -62,28 +57,19 @@ pub fn create(options: CreateOptions) CreateError!?Runfiles {
         switch (result) {
             .manifest => |path| {
                 defer options.allocator.free(path);
-                const manifest = if (is_zig_0_16_or_later)
-                    try Manifest.init(options.allocator, options.io, path)
-                else
-                    try Manifest.init(options.allocator, path);
+                const manifest = try Manifest.init(options.allocator, options.io, path);
                 break :discover Implementation{ .manifest = manifest };
             },
             .directory => |path| {
                 defer options.allocator.free(path);
-                const directory = if (is_zig_0_16_or_later)
-                    try Directory.init(options.allocator, options.io, path)
-                else
-                    try Directory.init(options.allocator, path);
+                const directory = try Directory.init(options.allocator, options.io, path);
                 break :discover Implementation{ .directory = directory };
             },
         }
     };
     errdefer implementation.deinit(options.allocator);
 
-    const repo_mapping = try if (is_zig_0_16_or_later)
-        implementation.loadRepoMapping(options.allocator, options.io)
-    else
-        implementation.loadRepoMapping(options.allocator);
+    const repo_mapping = try implementation.loadRepoMapping(options.allocator, options.io);
 
     return Runfiles{
         .implementation = implementation,
@@ -158,10 +144,7 @@ pub const WithSourceRepo = struct {
     };
 
     fn validateRPath(rpath: []const u8) !void {
-        var iter = if (is_zig_0_16_or_later)
-            std.fs.path.componentIterator(rpath)
-        else
-            try std.fs.path.componentIterator(rpath);
+        var iter = std.fs.path.componentIterator(rpath);
 
         if (iter.root() != null)
             return error.RPathIsAbsolute;
@@ -268,35 +251,7 @@ const Implementation = union(discovery.Strategy) {
         }
     }
 
-    pub const loadRepoMapping = if (is_zig_0_16_or_later)
-        loadRepoMapping_io
-    else
-        loadRepoMapping_non_io;
-
-    pub fn loadRepoMapping_non_io(self: *const Implementation, allocator: std.mem.Allocator) !?RepoMapping {
-        // Bazel <7 with bzlmod disabled does not generate a repo-mapping.
-        const msg_not_found = "No repository mapping found. " ++
-            "This is likely an error if you are using Bazel version >=7 with bzlmod enabled.";
-
-        const path = try self.rlocationUnmappedAlloc(allocator, .{
-            .repo = "",
-            .path = discovery.repo_mapping_file_name,
-        }) orelse {
-            log.warn(msg_not_found, .{});
-            return null;
-        };
-        defer allocator.free(path);
-
-        return RepoMapping.init(allocator, path) catch |e| switch (e) {
-            error.FileNotFound => {
-                log.warn(msg_not_found, .{});
-                return null;
-            },
-            else => |e_| return e_,
-        };
-    }
-
-    pub fn loadRepoMapping_io(self: *const Implementation, allocator: std.mem.Allocator, io: std.Io) !?RepoMapping {
+    pub fn loadRepoMapping(self: *const Implementation, allocator: std.mem.Allocator, io: std.Io) !?RepoMapping {
         // Bazel <7 with bzlmod disabled does not generate a repo-mapping.
         const msg_not_found = "No repository mapping found. " ++
             "This is likely an error if you are using Bazel version >=7 with bzlmod enabled.";
@@ -355,17 +310,11 @@ test "Runfiles from manifest" {
     const manifest_path = try testutil.tmpRealpathAlloc(tmp.dir, std.testing.allocator, "test.runfiles_manifest");
     defer std.testing.allocator.free(manifest_path);
 
-    var runfiles = try Runfiles.create(if (is_zig_0_16_or_later)
-        .{
-            .allocator = std.testing.allocator,
-            .io = std.testing.io,
-            .manifest = manifest_path,
-        }
-    else
-        .{
-            .allocator = std.testing.allocator,
-            .manifest = manifest_path,
-        }) orelse
+    var runfiles = try Runfiles.create(.{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .manifest = manifest_path,
+    }) orelse
         return error.RunfilesNotFound;
     defer runfiles.deinit(std.testing.allocator);
 
@@ -479,17 +428,11 @@ test "Runfiles from manifest with compact repo mapping" {
     );
     defer std.testing.allocator.free(manifest_path);
 
-    var runfiles = try Runfiles.create(if (is_zig_0_16_or_later)
-        .{
-            .allocator = std.testing.allocator,
-            .io = std.testing.io,
-            .manifest = manifest_path,
-        }
-    else
-        .{
-            .allocator = std.testing.allocator,
-            .manifest = manifest_path,
-        }) orelse return error.RunfilesNotFound;
+    var runfiles = try Runfiles.create(.{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .manifest = manifest_path,
+    }) orelse return error.RunfilesNotFound;
     defer runfiles.deinit(std.testing.allocator);
 
     {
@@ -576,17 +519,11 @@ test "Runfiles from directory" {
     const directory_path = try testutil.tmpRealpathAlloc(tmp.dir, std.testing.allocator, "test.runfiles");
     defer std.testing.allocator.free(directory_path);
 
-    var runfiles = try Runfiles.create(if (is_zig_0_16_or_later)
-        .{
-            .allocator = std.testing.allocator,
-            .io = std.testing.io,
-            .directory = directory_path,
-        }
-    else
-        .{
-            .allocator = std.testing.allocator,
-            .directory = directory_path,
-        }) orelse
+    var runfiles = try Runfiles.create(.{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .directory = directory_path,
+    }) orelse
         return error.RunfilesNotFound;
     defer runfiles.deinit(std.testing.allocator);
 
@@ -702,17 +639,11 @@ test "Runfiles from directory with compact repo mapping" {
     const directory_path = try testutil.tmpRealpathAlloc(tmp.dir, std.testing.allocator, "foo.runfiles");
     defer std.testing.allocator.free(directory_path);
 
-    var runfiles = try Runfiles.create(if (is_zig_0_16_or_later)
-        .{
-            .allocator = std.testing.allocator,
-            .io = std.testing.io,
-            .directory = directory_path,
-        }
-    else
-        .{
-            .allocator = std.testing.allocator,
-            .directory = directory_path,
-        }) orelse
+    var runfiles = try Runfiles.create(.{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .directory = directory_path,
+    }) orelse
         return error.RunfilesNotFound;
     defer runfiles.deinit(std.testing.allocator);
 

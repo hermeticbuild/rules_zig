@@ -6,8 +6,6 @@ const builtin = @import("builtin");
 const log = std.log.scoped(.runfiles);
 const testutil = @import("testutil.zig");
 
-const is_zig_0_16_or_later = builtin.zig_version.major == 0 and builtin.zig_version.minor >= 16;
-
 pub const runfiles_manifest_var_name = "RUNFILES_MANIFEST_FILE";
 pub const runfiles_directory_var_name = "RUNFILES_DIR";
 pub const runfiles_manifest_suffix = ".runfiles_manifest";
@@ -35,34 +33,22 @@ pub const Location = union(Strategy) {
     }
 };
 
-pub const DiscoverOptions = if (is_zig_0_16_or_later)
-    struct {
-        /// Used during runfiles discovery.
-        allocator: std.mem.Allocator,
-        /// Used for IO operations during discovery.
-        io: std.Io,
-        /// Command-line arguments, used for runfiles discovery.
-        argv: ?std.process.Args = null,
-        /// Environment variables, used for runfiles discovery.
-        environ_map: ?*std.process.Environ.Map = null,
-        /// User override for the `RUNFILES_MANIFEST_FILE` variable.
-        manifest: ?[]const u8 = null,
-        /// User override for the `RUNFILES_DIRECTORY` variable.
-        directory: ?[]const u8 = null,
-        /// User override for `argv[0]`.
-        argv0: ?[]const u8 = null,
-    }
-else
-    struct {
-        /// Used during runfiles discovery.
-        allocator: std.mem.Allocator,
-        /// User override for the `RUNFILES_MANIFEST_FILE` variable.
-        manifest: ?[]const u8 = null,
-        /// User override for the `RUNFILES_DIRECTORY` variable.
-        directory: ?[]const u8 = null,
-        /// User override for `argv[0]`.
-        argv0: ?[]const u8 = null,
-    };
+pub const DiscoverOptions = struct {
+    /// Used during runfiles discovery.
+    allocator: std.mem.Allocator,
+    /// Used for IO operations during discovery.
+    io: std.Io,
+    /// Command-line arguments, used for runfiles discovery.
+    argv: ?std.process.Args = null,
+    /// Environment variables, used for runfiles discovery.
+    environ_map: ?*std.process.Environ.Map = null,
+    /// User override for the `RUNFILES_MANIFEST_FILE` variable.
+    manifest: ?[]const u8 = null,
+    /// User override for the `RUNFILES_DIRECTORY` variable.
+    directory: ?[]const u8 = null,
+    /// User override for `argv[0]`.
+    argv0: ?[]const u8 = null,
+};
 
 pub const DiscoverError = std.fmt.BufPrintError || error{
     OutOfMemory,
@@ -81,58 +67,7 @@ pub const DiscoverError = std.fmt.BufPrintError || error{
 /// * assume the binary has no runfiles.
 ///
 /// The caller has to free the path contained in the returned location.
-pub const discoverRunfiles = if (is_zig_0_16_or_later)
-    discoverRunfiles_016
-else
-    discoverRunfiles_pre_016;
-
-pub fn discoverRunfiles_pre_016(options: DiscoverOptions) DiscoverError!?Location {
-    if (options.manifest) |value|
-        return .{ .manifest = try options.allocator.dupe(u8, value) };
-
-    if (options.directory) |value|
-        return .{ .directory = try options.allocator.dupe(u8, value) };
-
-    if (try getEnvVar_pre_016(options.allocator, runfiles_manifest_var_name)) |value|
-        return .{ .manifest = value };
-
-    if (try getEnvVar_pre_016(options.allocator, runfiles_directory_var_name)) |value|
-        return .{ .directory = value };
-
-    var iter = try std.process.argsWithAllocator(options.allocator);
-    defer iter.deinit();
-    const argv0 = options.argv0 orelse iter.next() orelse
-        return error.MissingArg0;
-
-    var buffer: [std.fs.max_path_bytes]u8 = undefined;
-
-    var path = try std.fmt.bufPrint(&buffer, "{s}{s}", .{ argv0, runfiles_manifest_suffix });
-    if (isReadableFile_pre_016(path))
-        return .{ .manifest = try options.allocator.dupe(u8, path) };
-
-    path = try std.fmt.bufPrint(&buffer, "{s}.exe{s}", .{ argv0, runfiles_manifest_suffix });
-    if (isReadableFile_pre_016(path))
-        return .{ .manifest = try options.allocator.dupe(u8, path) };
-
-    path = try std.fmt.bufPrint(&buffer, "{s}{s}", .{ argv0, runfiles_directory_suffix });
-    if (isOpenableDir_pre_016(path))
-        return .{ .directory = try options.allocator.dupe(u8, path) };
-
-    path = try std.fmt.bufPrint(&buffer, "{s}.exe{s}", .{ argv0, runfiles_directory_suffix });
-    if (isOpenableDir_pre_016(path))
-        return .{ .directory = try options.allocator.dupe(u8, path) };
-
-    return null;
-}
-
-fn getEnvVar_pre_016(allocator: std.mem.Allocator, key: []const u8) !?[]const u8 {
-    return std.process.getEnvVarOwned(allocator, key) catch |e| switch (e) {
-        error.EnvironmentVariableNotFound => null,
-        else => |e_| return e_,
-    };
-}
-
-pub fn discoverRunfiles_016(options: DiscoverOptions) DiscoverError!?Location {
+pub fn discoverRunfiles(options: DiscoverOptions) DiscoverError!?Location {
     if (options.manifest) |value|
         return .{ .manifest = try options.allocator.dupe(u8, value) };
 
@@ -177,35 +112,13 @@ pub fn discoverRunfiles_016(options: DiscoverOptions) DiscoverError!?Location {
     return null;
 }
 
-pub const isReadableFile = if (is_zig_0_16_or_later)
-    isReadableFile_016
-else
-    isReadableFile_pre_016;
-
-pub const isOpenableDir = if (is_zig_0_16_or_later)
-    isOpenableDir_016
-else
-    isOpenableDir_pre_016;
-
-fn isReadableFile_pre_016(file_path: []const u8) bool {
-    var file = std.fs.cwd().openFile(file_path, .{}) catch return false;
-    file.close();
-    return true;
-}
-
-fn isOpenableDir_pre_016(dir_path: []const u8) bool {
-    var dir = std.fs.cwd().openDir(dir_path, .{}) catch return false;
-    dir.close();
-    return true;
-}
-
-fn isReadableFile_016(io: std.Io, file_path: []const u8) bool {
+pub fn isReadableFile(io: std.Io, file_path: []const u8) bool {
     var file = std.Io.Dir.cwd().openFile(io, file_path, .{}) catch return false;
     file.close(io);
     return true;
 }
 
-fn isOpenableDir_016(io: std.Io, dir_path: []const u8) bool {
+pub fn isOpenableDir(io: std.Io, dir_path: []const u8) bool {
     var dir = std.Io.Dir.cwd().openDir(io, dir_path, .{}) catch return false;
     dir.close(io);
     return true;
@@ -218,17 +131,10 @@ const testing = struct {
         extern "c" fn _putenv_s(name: [*:0]const u8, value: [*:0]const u8) c_int;
     };
 
-    fn dupeZ(value: []const u8) ![:0]u8 {
-        return if (is_zig_0_16_or_later)
-            std.testing.allocator.dupeSentinel(u8, value, 0)
-        else
-            std.testing.allocator.dupeZ(u8, value);
-    }
-
     pub fn setenv(name: []const u8, value: []const u8) !void {
-        const nameZ = try dupeZ(name);
+        const nameZ = try std.testing.allocator.dupeSentinel(u8, name, 0);
         defer std.testing.allocator.free(nameZ);
-        const valueZ = try dupeZ(value);
+        const valueZ = try std.testing.allocator.dupeSentinel(u8, value, 0);
         defer std.testing.allocator.free(valueZ);
         if (builtin.os.tag == .windows) {
             if (testing.c._putenv_s(nameZ, valueZ) != 0)
@@ -240,7 +146,7 @@ const testing = struct {
     }
 
     pub fn unsetenv(name: []const u8) !void {
-        const nameZ = try dupeZ(name);
+        const nameZ = try std.testing.allocator.dupeSentinel(u8, name, 0);
         defer std.testing.allocator.free(nameZ);
         if (builtin.os.tag == .windows) {
             if (testing.c._putenv_s(nameZ, "") != 0)
@@ -252,17 +158,7 @@ const testing = struct {
     }
 };
 
-const TestEnvMap = if (is_zig_0_16_or_later)
-    std.process.Environ.Map
-else
-    std.process.EnvMap;
-
-const testingEnvironMap = if (is_zig_0_16_or_later)
-    testingEnvironMap_016
-else
-    testingEnvironMap_pre_016;
-
-fn testingEnvironMap_016() !TestEnvMap {
+fn testingEnvironMap() !std.process.Environ.Map {
     const environ: std.process.Environ = switch (builtin.os.tag) {
         .windows => .{ .block = .global },
         else => environ: {
@@ -275,20 +171,11 @@ fn testingEnvironMap_016() !TestEnvMap {
     return try std.process.Environ.createMap(environ, std.testing.allocator);
 }
 
-fn testingEnvironMap_pre_016() !TestEnvMap {
-    return try std.process.getEnvMap(std.testing.allocator);
-}
-
-const discoverTestOptions = if (is_zig_0_16_or_later)
-    discoverTestOptions_016
-else
-    discoverTestOptions_pre_016;
-
-fn discoverTestOptions_016(
+fn discoverTestOptions(
     manifest: ?[]const u8,
     directory: ?[]const u8,
     argv0: ?[]const u8,
-    environ_map: ?*TestEnvMap,
+    environ_map: ?*std.process.Environ.Map,
 ) DiscoverOptions {
     return .{
         .allocator = std.testing.allocator,
@@ -300,31 +187,14 @@ fn discoverTestOptions_016(
     };
 }
 
-fn discoverTestOptions_pre_016(
-    manifest: ?[]const u8,
-    directory: ?[]const u8,
-    argv0: ?[]const u8,
-    _: ?*TestEnvMap,
-) DiscoverOptions {
-    return .{
-        .allocator = std.testing.allocator,
-        .manifest = manifest,
-        .directory = directory,
-        .argv0 = argv0,
-    };
-}
-
 fn discoverTestRunfilesWithEnv(
     manifest: ?[]const u8,
     directory: ?[]const u8,
     argv0: ?[]const u8,
 ) !?Location {
-    if (is_zig_0_16_or_later) {
-        var env_map = try testingEnvironMap();
-        defer env_map.deinit();
-        return try discoverRunfiles(discoverTestOptions(manifest, directory, argv0, &env_map));
-    }
-    return try discoverRunfiles(discoverTestOptions(manifest, directory, argv0, null));
+    var env_map = try testingEnvironMap();
+    defer env_map.deinit();
+    return try discoverRunfiles(discoverTestOptions(manifest, directory, argv0, &env_map));
 }
 
 test "discover user specified manifest" {

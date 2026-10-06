@@ -9,6 +9,7 @@ import urllib.request
 _ZIG_INDEX_URL = "https://ziglang.org/download/index.json"
 
 _UNSUPPORTED_VERSIONS = [
+    "0.15.2",
     "0.15.1",
     "0.14.1",
     "0.14.0",

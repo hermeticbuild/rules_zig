@@ -1,24 +1,9 @@
-const builtin = @import("builtin");
 const std = @import("std");
 
 const bazel_builtin = @import("bazel_builtin");
 const runfiles = @import("runfiles");
 
 const workspace_printer = @import("workspace_printer.zig");
-
-const is_zig_0_16_or_later = builtin.zig_version.major == 0 and builtin.zig_version.minor >= 16;
-
-const EnvMap = if (is_zig_0_16_or_later)
-    std.process.Environ.Map
-else
-    std.process.EnvMap;
-
-fn exitedTerm(code: u8) std.process.Child.Term {
-    if (is_zig_0_16_or_later) {
-        return .{ .exited = code };
-    }
-    return .{ .Exited = code };
-}
 
 fn requireEnv(name: [:0]const u8) ![]const u8 {
     return std.mem.span(std.c.getenv(name) orelse return error.MissingEnvironmentVariable);
@@ -44,19 +29,12 @@ test "completion print_build_config emits valid json" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var r_ = (if (is_zig_0_16_or_later)
-        try runfiles.Runfiles.create(.{
-            .allocator = allocator,
-            .io = std.testing.io,
-            .directory = if (std.c.getenv("RUNFILES_DIR")) |value| std.mem.span(value) else null,
-            .manifest = if (std.c.getenv("RUNFILES_MANIFEST_FILE")) |value| std.mem.span(value) else null,
-        })
-    else
-        try runfiles.Runfiles.create(.{
-            .allocator = allocator,
-            .directory = if (std.c.getenv("RUNFILES_DIR")) |value| std.mem.span(value) else null,
-            .manifest = if (std.c.getenv("RUNFILES_MANIFEST_FILE")) |value| std.mem.span(value) else null,
-        })) orelse return error.RunfilesNotFound;
+    var r_ = try runfiles.Runfiles.create(.{
+        .allocator = allocator,
+        .io = std.testing.io,
+        .directory = if (std.c.getenv("RUNFILES_DIR")) |value| std.mem.span(value) else null,
+        .manifest = if (std.c.getenv("RUNFILES_MANIFEST_FILE")) |value| std.mem.span(value) else null,
+    }) orelse return error.RunfilesNotFound;
     defer r_.deinit(allocator);
 
     const r = r_.withSourceRepo(bazel_builtin.current_repository);
@@ -72,22 +50,15 @@ test "completion print_build_config emits valid json" {
     const workspace_dir = try workspaceDirFromConfigPath(config_path, package_name);
     const execution_root = workspace_dir;
 
-    var child_env_map: EnvMap = .init(std.testing.allocator);
+    var child_env_map: std.process.Environ.Map = .init(std.testing.allocator);
     defer child_env_map.deinit();
     try child_env_map.put("BUILD_WORKSPACE_DIRECTORY", workspace_dir);
     try child_env_map.put("BAZEL_EXECUTION_ROOT", execution_root);
 
-    const result = if (is_zig_0_16_or_later)
-        try std.process.run(std.testing.allocator, std.testing.io, .{
-            .argv = &.{ printer_path, config_path },
-            .environ_map = &child_env_map,
-        })
-    else
-        try std.process.Child.run(.{
-            .allocator = std.testing.allocator,
-            .argv = &.{ printer_path, config_path },
-            .env_map = &child_env_map,
-        });
+    const result = try std.process.run(std.testing.allocator, std.testing.io, .{
+        .argv = &.{ printer_path, config_path },
+        .environ_map = &child_env_map,
+    });
     defer std.testing.allocator.free(result.stdout);
     defer std.testing.allocator.free(result.stderr);
 
@@ -95,7 +66,7 @@ test "completion print_build_config emits valid json" {
         std.log.warn("workspace_printer stderr: {s}", .{result.stderr});
     }
 
-    try std.testing.expectEqual(exitedTerm(0), result.term);
+    try std.testing.expectEqual(std.process.Child.Term{ .exited = 0 }, result.term);
 
     const config = try std.json.parseFromSliceLeaky(workspace_printer.BuildConfig, allocator, result.stdout, .{});
     try std.testing.expect(config.modules.map.count() > 0);

@@ -19,7 +19,6 @@ zig_library(
     name = "library",
     main = "library.zig",
     deps = [":header"] + select({
-        "@zig_toolchains//:0.15.2": [":cimport"],
         "@zig_toolchains//:0.16.0": [":cimport"],
         "//conditions:default": [],
     }),

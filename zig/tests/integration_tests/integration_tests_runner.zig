@@ -1,12 +1,9 @@
-const builtin = @import("builtin");
 const std = @import("std");
 const integration_testing = @import("integration_testing");
 const BitContext = integration_testing.BitContext;
 const EnvMap = integration_testing.EnvMap;
-const exitedTerm = integration_testing.exitedTerm;
+const Term = std.process.Child.Term;
 const removeEnv = integration_testing.removeEnv;
-
-const is_zig_0_16_or_later = builtin.zig_version.major == 0 and builtin.zig_version.minor >= 16;
 
 test "zig_binary prints Hello World!" {
     const ctx = try BitContext.init();
@@ -44,7 +41,7 @@ test "failing zig_test fails" {
     defer result.deinit();
 
     // See https://bazel.build/run/scripts for Bazel exit codes.
-    try std.testing.expectEqual(exitedTerm(3), result.term);
+    try std.testing.expectEqual(Term{ .exited = 3 }, result.term);
 }
 
 test "Zig cache directory can be configured" {
@@ -151,17 +148,9 @@ test "can compile to target platform aarch64-linux" {
     var file = try ctx.openWorkspaceFile("bazel-bin/binary");
     defer BitContext.closeWorkspaceFile(&file);
 
-    const elf_header = header: {
-        if (is_zig_0_16_or_later) {
-            var buffer: [1024]u8 = undefined;
-            var reader = file.reader(std.testing.io, &buffer);
-            break :header try std.elf.Header.read(&reader.interface);
-        } else {
-            var buffer: [1024]u8 = undefined;
-            var reader = file.reader(&buffer);
-            break :header try std.elf.Header.read(&reader.interface);
-        }
-    };
+    var buffer: [1024]u8 = undefined;
+    var reader = file.reader(std.testing.io, &buffer);
+    const elf_header = try std.elf.Header.read(&reader.interface);
 
     try std.testing.expectEqual(std.elf.EM.AARCH64, elf_header.machine);
 }
@@ -237,7 +226,7 @@ test "zig_binary result should not contain the output base path in release_fast 
 }
 
 test "zig_target_toolchain attribute dynamic_linker configures the interpreter" {
-    if (is_zig_0_16_or_later) {
+    if (true) {
         return error.SkipZigTest;
     }
 
@@ -258,44 +247,22 @@ test "zig_target_toolchain attribute dynamic_linker configures the interpreter" 
     var file = try ctx.openWorkspaceFile("bazel-bin/custom_interpreter/binary-custom_interpreter");
     defer BitContext.closeWorkspaceFile(&file);
 
-    if (is_zig_0_16_or_later) {
-        var buffer: [1024]u8 = undefined;
-        var reader = file.reader(std.testing.io, &buffer);
-        const elf_header = try std.elf.Header.read(&reader.interface);
-        var ph_iter = elf_header.iterateProgramHeaders(&reader);
-        var interp: std.Io.Writer.Allocating = .init(std.testing.allocator);
-        defer interp.deinit();
-        while (try ph_iter.next()) |phdr| {
-            if (phdr.p_type == std.elf.PT_INTERP) {
-                try reader.seekTo(phdr.p_offset);
-                _ = try reader.interface.streamDelimiter(&interp.writer, 0);
-                try interp.writer.flush();
-                break;
-            }
+    var buffer: [1024]u8 = undefined;
+    var reader = file.reader(std.testing.io, &buffer);
+    const elf_header = try std.elf.Header.read(&reader.interface);
+    var ph_iter = elf_header.iterateProgramHeaders(&reader);
+    var interp: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer interp.deinit();
+    while (try ph_iter.next()) |phdr| {
+        if (phdr.p_type == std.elf.PT_INTERP) {
+            try reader.seekTo(phdr.p_offset);
+            _ = try reader.interface.streamDelimiter(&interp.writer, 0);
+            try interp.writer.flush();
+            break;
         }
-
-        try std.testing.expectEqualStrings("/custom/loader.so", interp.written());
-    } else {
-        var buffer: [1024]u8 = undefined;
-        var reader = file.reader(&buffer);
-        const elf_header = try std.elf.Header.read(&reader.interface);
-        var ph_iter = elf_header.iterateProgramHeaders(&reader);
-        var interp = std.array_list.Managed(u8).init(std.testing.allocator);
-        defer interp.deinit();
-        var old_writer = interp.writer();
-        var write_buffer: [1024]u8 = undefined;
-        var writer = old_writer.adaptToNewApi(&write_buffer);
-        while (try ph_iter.next()) |phdr| {
-            if (phdr.p_type == std.elf.PT_INTERP) {
-                try reader.seekTo(phdr.p_offset);
-                _ = try reader.interface.streamDelimiter(&writer.new_interface, 0);
-                try writer.new_interface.flush();
-                break;
-            }
-        }
-
-        try std.testing.expectEqualStrings("/custom/loader.so", interp.items);
     }
+
+    try std.testing.expectEqualStrings("/custom/loader.so", interp.written());
 }
 
 test "zig_binary forwards env attribute environment" {
@@ -388,27 +355,16 @@ test "runfiles library supports manifest mode" {
     removeEnv(&env_map, "RUNFILES_MANIFEST_FILE");
 
     // Execute the binary.
-    const result = if (is_zig_0_16_or_later)
-        try std.process.run(std.testing.allocator, std.testing.io, .{
-            .argv = &[_][]const u8{"bazel-bin/runfiles/binary"},
-            .cwd = .{ .path = ctx.workspace_path },
-            .environ_map = &env_map,
-        })
-    else result: {
-        var workspace = try ctx.openWorkspace();
-        defer BitContext.closeWorkspaceDir(&workspace);
-        break :result try std.process.Child.run(.{
-            .allocator = std.testing.allocator,
-            .argv = &[_][]const u8{"bazel-bin/runfiles/binary"},
-            .cwd_dir = workspace,
-            .env_map = &env_map,
-        });
-    };
+    const result = try std.process.run(std.testing.allocator, std.testing.io, .{
+        .argv = &[_][]const u8{"bazel-bin/runfiles/binary"},
+        .cwd = .{ .path = ctx.workspace_path },
+        .environ_map = &env_map,
+    });
     defer std.testing.allocator.free(result.stdout);
     defer std.testing.allocator.free(result.stderr);
 
     if (result.stderr.len > 0)
         std.log.warn("stderr: {s}", .{result.stderr});
-    try std.testing.expectEqual(exitedTerm(0), result.term);
+    try std.testing.expectEqual(Term{ .exited = 0 }, result.term);
     try std.testing.expectEqualStrings("data: Hello World!\n", result.stdout);
 }

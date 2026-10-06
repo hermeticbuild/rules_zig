@@ -48,7 +48,6 @@ zig_dev = use_extension(
 )
 zig_dev.toolchain(zig_version = "0.17.0")
 zig_dev.toolchain(zig_version = "0.16.0")
-zig_dev.toolchain(zig_version = "0.15.2")
 
 zls_dev = use_extension(
     "//zig/zls:extensions.bzl",
@@ -58,10 +57,6 @@ zls_dev = use_extension(
 zls_dev.toolchain(
     zig_version = "0.16.0",
     zls_version = "0.16.0",
-)
-zls_dev.toolchain(
-    zig_version = "0.15.2",
-    zls_version = "0.15.1",
 )
 
 bazel_dep(name = "toolchains_buildbuddy", version = "0.0.4", dev_dependency = True)

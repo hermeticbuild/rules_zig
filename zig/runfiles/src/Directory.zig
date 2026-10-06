@@ -4,36 +4,16 @@
 //! [runfiles-design]: https://docs.google.com/document/d/e/2PACX-1vSDIrFnFvEYhKsCMdGdD40wZRBX3m3aZ5HhVj4CtHPmiXKDCxioTUbYsDydjKtFDAzER5eg7OjJWs3V/pub
 
 const std = @import("std");
-const builtin = @import("builtin");
 
 const RPath = @import("RPath.zig");
 
 const Directory = @This();
 
-const is_zig_0_16_or_later = builtin.zig_version.major == 0 and builtin.zig_version.minor >= 16;
+path: [:0]const u8,
 
-const OwnedPath = if (is_zig_0_16_or_later) [:0]const u8 else []const u8;
+pub const InitError = std.mem.Allocator.Error || std.Io.Dir.OpenError || std.Io.Dir.RealPathFileAllocError;
 
-path: OwnedPath,
-
-pub const InitError = std.mem.Allocator.Error || (if (is_zig_0_16_or_later)
-    std.Io.Dir.OpenError || std.Io.Dir.RealPathFileAllocError
-else
-    std.posix.OpenError || std.posix.RealPathError);
-
-pub const init = if (is_zig_0_16_or_later)
-    init_016
-else
-    init_pre_016;
-
-fn init_pre_016(allocator: std.mem.Allocator, path: []const u8) InitError!Directory {
-    const absolute = try std.fs.cwd().realpathAlloc(allocator, path);
-    errdefer allocator.free(absolute);
-    // TODO[AH] Implement OS specific normalization, e.g. Windows lower-case.
-    return .{ .path = absolute };
-}
-
-fn init_016(allocator: std.mem.Allocator, io: std.Io, path: []const u8) InitError!Directory {
+pub fn init(allocator: std.mem.Allocator, io: std.Io, path: []const u8) InitError!Directory {
     const absolute = try std.Io.Dir.cwd().realPathFileAlloc(io, path, allocator);
     errdefer allocator.free(absolute);
     // TODO[AH] Implement OS specific normalization, e.g. Windows lower-case.
@@ -79,23 +59,14 @@ test "Directory init and unmapped lookup" {
     try testutil.tmpWriteFile(tmp.dir, "test.runfiles/_repo_mapping", "_repo_mapping");
     try testutil.tmpWriteFile(tmp.dir, "test.runfiles/my_workspace/some/package/some_file", "some_file");
 
-    const cwd_path_absolute = if (is_zig_0_16_or_later)
-        try std.process.currentPathAlloc(std.testing.io, std.testing.allocator)
-    else
-        try std.fs.cwd().realpathAlloc(std.testing.allocator, ".");
+    const cwd_path_absolute = try std.process.currentPathAlloc(std.testing.io, std.testing.allocator);
     defer std.testing.allocator.free(cwd_path_absolute);
     const runfiles_path_absolute = try testutil.tmpRealpathAlloc(tmp.dir, std.testing.allocator, "test.runfiles");
     defer std.testing.allocator.free(runfiles_path_absolute);
-    const runfiles_path = if (is_zig_0_16_or_later)
-        try std.fs.path.relative(std.testing.allocator, ".", null, cwd_path_absolute, runfiles_path_absolute)
-    else
-        try std.fs.path.relative(std.testing.allocator, cwd_path_absolute, runfiles_path_absolute);
+    const runfiles_path = try std.fs.path.relative(std.testing.allocator, ".", null, cwd_path_absolute, runfiles_path_absolute);
     defer std.testing.allocator.free(runfiles_path);
 
-    var directory = if (is_zig_0_16_or_later)
-        try Directory.init(std.testing.allocator, std.testing.io, runfiles_path)
-    else
-        try Directory.init(std.testing.allocator, runfiles_path);
+    var directory = try Directory.init(std.testing.allocator, std.testing.io, runfiles_path);
     defer directory.deinit(std.testing.allocator);
 
     {

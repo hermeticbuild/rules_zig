@@ -30,7 +30,6 @@ bzl_library(
         ":filetypes",
         ":linker_script",
         ":location_expansion",
-        ":semver",
         ":translate_c",
         ":zig_cache",
         ":zig_lib_dir",
@@ -101,6 +100,7 @@ bzl_library(
     deps = [
         ":escape_label",
         ":exec_groups",
+        ":semver",
         "//zig/private:cc_helper",
         "//zig/private/providers:zig_module_info",
         "//zig/private/providers:zig_toolchain_info",

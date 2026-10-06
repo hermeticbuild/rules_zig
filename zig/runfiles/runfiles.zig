@@ -9,7 +9,6 @@
 //!
 //!zig-autodoc-guide: guide.md
 
-const builtin = @import("builtin");
 const std = @import("std");
 
 pub const Runfiles = @import("src/Runfiles.zig");
@@ -24,94 +23,54 @@ test {
 }
 
 test Runfiles {
-    const is_zig_0_16_or_later = builtin.zig_version.major == 0 and builtin.zig_version.minor >= 16;
+    var allocator = std.testing.allocator;
+    const io = std.testing.io;
+    const argv0 = try std.process.executablePathAlloc(io, allocator);
+    defer allocator.free(argv0);
+    var environ_map = try std.testing.environ.createMap(allocator);
+    defer environ_map.deinit();
 
-    if (is_zig_0_16_or_later) {
-        var allocator = std.testing.allocator;
-        const io = std.testing.io;
-        const argv0 = try std.process.executablePathAlloc(io, allocator);
-        defer allocator.free(argv0);
-        var environ_map = try std.testing.environ.createMap(allocator);
-        defer environ_map.deinit();
+    var r_ = try Runfiles.create(.{
+        .allocator = allocator,
+        // Would be `.io = init.io`.
+        .io = std.testing.io,
+        // Would be `.argv = init.Minimal.args`.
+        .argv0 = argv0,
+        // Would be `.environ_map = init.environ_map`.
+        .environ_map = &environ_map,
+    }) orelse return error.RunfilesNotFound;
+    defer r_.deinit(allocator);
 
-        var r_ = try Runfiles.create(.{
-            .allocator = allocator,
-            // Would be `.io = init.io`.
-            .io = std.testing.io,
-            // Would be `.argv = init.Minimal.args`.
-            .argv0 = argv0,
-            // Would be `.environ_map = init.environ_map`.
-            .environ_map = &environ_map,
-        }) orelse return error.RunfilesNotFound;
-        defer r_.deinit(allocator);
+    // Runfiles lookup is subject to repository remapping. You must pass the
+    // name of the repository relative to which the runfiles path is valid.
+    // Use the auto-generated `bazel_builtin` module to obtain it.
+    const source_repo = @import("bazel_builtin").current_repository;
+    const r = r_.withSourceRepo(source_repo);
 
-        // Runfiles lookup is subject to repository remapping. You must pass the
-        // name of the repository relative to which the runfiles path is valid.
-        // Use the auto-generated `bazel_builtin` module to obtain it.
-        const source_repo = @import("bazel_builtin").current_repository;
-        const r = r_.withSourceRepo(source_repo);
+    // Runfiles paths have the form `WORKSPACE/PACKAGE/FILE`.
+    // Use `$(rlocationpath ...)` expansion in your `BUILD.bazel` file to
+    // obtain one. You can forward it to your executable using the `env` or
+    // `args` attribute, or by embedding it in a generated file.
+    const rpath = "rules_zig/zig/runfiles/test-data.txt";
 
-        // Runfiles paths have the form `WORKSPACE/PACKAGE/FILE`.
-        // Use `$(rlocationpath ...)` expansion in your `BUILD.bazel` file to
-        // obtain one. You can forward it to your executable using the `env` or
-        // `args` attribute, or by embedding it in a generated file.
-        const rpath = "rules_zig/zig/runfiles/test-data.txt";
+    const allocated_path = try r.rlocationAlloc(allocator, rpath) orelse
+        // Runfiles path lookup may return `null`.
+        return error.RPathNotFound;
+    defer allocator.free(allocated_path);
 
-        const allocated_path = try r.rlocationAlloc(allocator, rpath) orelse
-            // Runfiles path lookup may return `null`.
+    const file = std.Io.Dir.openFileAbsolute(io, allocated_path, .{}) catch |e| switch (e) {
+        error.FileNotFound => {
+            // Runfiles path lookup may return a non-existent path.
             return error.RPathNotFound;
-        defer allocator.free(allocated_path);
+        },
+        else => |e_| return e_,
+    };
+    defer file.close(io);
 
-        const file = std.Io.Dir.openFileAbsolute(io, allocated_path, .{}) catch |e| switch (e) {
-            error.FileNotFound => {
-                // Runfiles path lookup may return a non-existent path.
-                return error.RPathNotFound;
-            },
-            else => |e_| return e_,
-        };
-        defer file.close(io);
+    var reader_buf: [1024]u8 = undefined;
+    var reader = file.reader(io, &reader_buf);
+    const content = try reader.interface.allocRemaining(allocator, .limited(4096));
+    defer allocator.free(content);
 
-        var reader_buf: [1024]u8 = undefined;
-        var reader = file.reader(io, &reader_buf);
-        const content = try reader.interface.allocRemaining(allocator, .limited(4096));
-        defer allocator.free(content);
-
-        try std.testing.expectEqualStrings("Hello World!\n", content);
-    } else {
-        var allocator = std.testing.allocator;
-
-        var r_ = try Runfiles.create(.{ .allocator = allocator }) orelse return error.RunfilesNotFound;
-        defer r_.deinit(allocator);
-
-        // Runfiles lookup is subject to repository remapping. You must pass the
-        // name of the repository relative to which the runfiles path is valid.
-        // Use the auto-generated `bazel_builtin` module to obtain it.
-        const source_repo = @import("bazel_builtin").current_repository;
-        const r = r_.withSourceRepo(source_repo);
-
-        // Runfiles paths have the form `WORKSPACE/PACKAGE/FILE`.
-        // Use `$(rlocationpath ...)` expansion in your `BUILD.bazel` file to
-        // obtain one. You can forward it to your executable using the `env` or
-        // `args` attribute, or by embedding it in a generated file.
-        const rpath = "rules_zig/zig/runfiles/test-data.txt";
-
-        const allocated_path = try r.rlocationAlloc(allocator, rpath) orelse
-            // Runfiles path lookup may return `null`.
-            return error.RPathNotFound;
-        defer allocator.free(allocated_path);
-
-        const file = std.fs.openFileAbsolute(allocated_path, .{}) catch |e| switch (e) {
-            error.FileNotFound => {
-                // Runfiles path lookup may return a non-existent path.
-                return error.RPathNotFound;
-            },
-            else => |e_| return e_,
-        };
-        defer file.close();
-
-        const content = try file.readToEndAlloc(allocator, 4096);
-        defer allocator.free(content);
-
-        try std.testing.expectEqualStrings("Hello World!\n", content);
-    }
+    try std.testing.expectEqualStrings("Hello World!\n", content);
 }

@@ -79,7 +79,6 @@ zig_configure_test(
     size = "small",
     actual = ":global_output_test",
     target_compatible_with = select({
-        "@zig_toolchains//:0.15.2": ["@platforms//:incompatible"],
         "@zig_toolchains//:0.16.0": ["@platforms//:incompatible"],
         "//conditions:default": [],
     }),

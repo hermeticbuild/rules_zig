@@ -27,42 +27,13 @@ const RPath = @import("RPath.zig");
 
 const Manifest = @This();
 
-const is_zig_0_16_or_later = builtin.zig_version.major == 0 and builtin.zig_version.minor >= 16;
-
-const OwnedPath = if (is_zig_0_16_or_later) [:0]const u8 else []const u8;
-
 mapping: HashMapUnmanaged,
 content: []const u8,
-path: OwnedPath,
+path: [:0]const u8,
 
-pub const InitError = ParseError || std.mem.Allocator.Error || (if (is_zig_0_16_or_later)
-    std.Io.File.OpenError || std.Io.Reader.LimitedAllocError || std.Io.Dir.RealPathFileAllocError
-else
-    std.posix.OpenError || std.posix.PReadError || std.posix.RealPathError);
+pub const InitError = ParseError || std.mem.Allocator.Error || std.Io.File.OpenError || std.Io.Reader.LimitedAllocError || std.Io.Dir.RealPathFileAllocError;
 
-pub const init = if (is_zig_0_16_or_later)
-    init_io
-else
-    init_non_io;
-
-pub fn init_non_io(allocator: std.mem.Allocator, path: []const u8) InitError!Manifest {
-    const content = std.fs.cwd().readFileAlloc(allocator, path, std.math.maxInt(usize)) catch |e| {
-        log.err("Failed to open runfiles manifest ({s}) at '{s}'", .{
-            @errorName(e),
-            path,
-        });
-        return e;
-    };
-    errdefer allocator.free(content);
-    const mapping = try parse(allocator, content);
-    return .{
-        .mapping = mapping,
-        .content = content,
-        .path = try std.fs.cwd().realpathAlloc(allocator, path),
-    };
-}
-
-pub fn init_io(allocator: std.mem.Allocator, io: std.Io, path: []const u8) InitError!Manifest {
+pub fn init(allocator: std.mem.Allocator, io: std.Io, path: []const u8) InitError!Manifest {
     const file = std.Io.Dir.cwd().openFile(io, path, .{}) catch |e| {
         log.err("Failed to open runfiles manifest ({s}) at '{s}'", .{
             @errorName(e),
@@ -186,10 +157,7 @@ test "RunfilesManifest init unmapped lookup" {
     const runfiles_path = try testutil.tmpRealpathAlloc(tmp.dir, std.testing.allocator, "test.runfiles_manifest");
     defer std.testing.allocator.free(runfiles_path);
 
-    var manifest = if (is_zig_0_16_or_later)
-        try Manifest.init(std.testing.allocator, std.testing.io, runfiles_path)
-    else
-        try Manifest.init(std.testing.allocator, runfiles_path);
+    var manifest = try Manifest.init(std.testing.allocator, std.testing.io, runfiles_path);
     defer manifest.deinit(std.testing.allocator);
 
     try std.testing.expectEqualStrings(runfiles_path, manifest.path);
@@ -232,9 +200,6 @@ test "RunfilesManifest init missing file" {
     });
     defer std.testing.allocator.free(missing_path);
 
-    const result = if (is_zig_0_16_or_later)
-        Manifest.init(std.testing.allocator, std.testing.io, missing_path)
-    else
-        Manifest.init(std.testing.allocator, missing_path);
+    const result = Manifest.init(std.testing.allocator, std.testing.io, missing_path);
     try std.testing.expectError(error.FileNotFound, result);
 }
