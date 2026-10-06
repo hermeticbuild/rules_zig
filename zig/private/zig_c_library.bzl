@@ -14,6 +14,7 @@ load(
     "translate_c_exec_group_toolchain",
     "zig_exec_group_toolchain",
 )
+load("//zig/private/common:location_expansion.bzl", "location_expansion")
 load("//zig/private/common:translate_c.bzl", "zig_translate_c")
 load("//zig/private/common:zig_cache.bzl", "zig_cache_output")
 load("//zig/private/common:zig_lib_dir.bzl", "zig_lib_dir")
@@ -53,6 +54,10 @@ ATTRS = {
         doc = "C dependencies to translate their headers from.",
         mandatory = True,
         providers = [CcInfo],
+    ),
+    "copts": attr.string_list(
+        doc = "C compiler flags passed to `translate-c`. Subject to location and Make variable expansion.",
+        mandatory = False,
     ),
     "data": attr.label_list(
         allow_files = True,
@@ -104,6 +109,14 @@ def _zig_c_library_impl(ctx):
         ),
     )
 
+    copts = location_expansion(
+        ctx = ctx,
+        targets = ctx.attr.data,
+        outputs = [],
+        attribute_name = "copts",
+        strings = ctx.attr.copts,
+    )
+
     cc_infos = [dep[CcInfo] for dep in ctx.attr.cdeps]
     module = zig_translate_c(
         ctx = ctx,
@@ -111,6 +124,8 @@ def _zig_c_library_impl(ctx):
         zigtoolchaininfo = zigtoolchaininfo,
         global_args = global_args,
         cc_infos = cc_infos,
+        copts = copts,
+        copts_inputs = ctx.files.data,
         translatectoolchaininfo = translatectoolchaininfo,
     )
 

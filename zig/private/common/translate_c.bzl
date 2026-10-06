@@ -93,8 +93,8 @@ def _include_path_for_file(file):
 def _is_local_config_apple_cc(cc_toolchain):
     return cc_toolchain and "local_config_apple_cc" in cc_toolchain.compiler_executable
 
-def _builtin_translate_c(*, ctx, zigtoolchaininfo, global_args, compilation_context, output_prefix):
-    inputs = []
+def _builtin_translate_c(*, ctx, zigtoolchaininfo, global_args, compilation_context, copts, copts_inputs, output_prefix):
+    inputs = list(copts_inputs)
     transitive_inputs = [compilation_context.headers]
 
     hdr = ctx.actions.declare_file("{}{}_c.h".format(output_prefix, ctx.label.name))
@@ -128,6 +128,8 @@ def _builtin_translate_c(*, ctx, zigtoolchaininfo, global_args, compilation_cont
         transitive_inputs.append(cc_toolchain.all_files)
         args.add_all(cc_toolchain.built_in_include_directories, before_each = "-isystem")
 
+    args.add_all(copts)
+
     zig_out = ctx.actions.declare_file("{}{}_c.zig".format(output_prefix, ctx.label.name))
     inputs.extend([zigtoolchaininfo.validation])
     if zigtoolchaininfo.zig_lib.file != None:
@@ -155,8 +157,8 @@ def _builtin_translate_c(*, ctx, zigtoolchaininfo, global_args, compilation_cont
 
     return zig_out, []
 
-def _external_translate_c(*, ctx, zigtoolchaininfo, translatectoolchaininfo, compilation_context, output_prefix):
-    inputs = []
+def _external_translate_c(*, ctx, zigtoolchaininfo, translatectoolchaininfo, compilation_context, copts, copts_inputs, output_prefix):
+    inputs = list(copts_inputs)
     transitive_inputs = [compilation_context.headers]
 
     hdrs = compilation_context.direct_public_headers
@@ -267,6 +269,8 @@ def _external_translate_c(*, ctx, zigtoolchaininfo, translatectoolchaininfo, com
     args.add_all(getattr(compilation_context, "external_includes", []), before_each = "-isystem")
     args.add_all(compilation_context.framework_includes, format_each = "-F%s")
 
+    args.add_all(copts)
+
     args.add("--emulate=clang")
 
     actions_run = ctx.actions.run
@@ -298,7 +302,7 @@ def _external_translate_c(*, ctx, zigtoolchaininfo, translatectoolchaininfo, com
 
     return zig_out, translatectoolchaininfo.runtime_modules
 
-def zig_translate_c(*, ctx, name, zigtoolchaininfo, global_args, cc_infos, output_prefix = "", canonical_name = None, translatectoolchaininfo = None):
+def zig_translate_c(*, ctx, name, zigtoolchaininfo, global_args, cc_infos, copts = [], copts_inputs = [], output_prefix = "", canonical_name = None, translatectoolchaininfo = None):
     """Handle translate-c build action.
 
     Sets the appropriate command-line flags for the Zig compiler to expose
@@ -311,6 +315,8 @@ def zig_translate_c(*, ctx, name, zigtoolchaininfo, global_args, cc_infos, outpu
       zigtoolchaininfo: ZigToolchainInfo.
       global_args: Args; mutable, Append the global Zig command-line flags to this object.
       cc_infos: List of CcInfo, The CcInfo providers for the C dependencies.
+      copts: List of String, C compiler flags passed after those derived from `cc_infos`.
+      copts_inputs: List of File, files that `copts` reference.
       output_prefix: String, a prefix to be used for generated files. Used for zig_docs.
       translatectoolchaininfo: TranslateCToolchainInfo or None. If present, use the external translate-c executable.
 
@@ -327,6 +333,8 @@ def zig_translate_c(*, ctx, name, zigtoolchaininfo, global_args, cc_infos, outpu
             zigtoolchaininfo = zigtoolchaininfo,
             translatectoolchaininfo = translatectoolchaininfo,
             compilation_context = compilation_context,
+            copts = copts,
+            copts_inputs = copts_inputs,
             output_prefix = output_prefix,
         )
     else:
@@ -335,6 +343,8 @@ def zig_translate_c(*, ctx, name, zigtoolchaininfo, global_args, cc_infos, outpu
             zigtoolchaininfo = zigtoolchaininfo,
             global_args = global_args,
             compilation_context = compilation_context,
+            copts = copts,
+            copts_inputs = copts_inputs,
             output_prefix = output_prefix,
         )
 
