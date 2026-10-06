@@ -2111,3 +2111,33 @@ test "writeMerged renders a select overlay for the varying fields" {
     try std.testing.expectEqual(false, libc.get("dbg").?.bool);
     try std.testing.expectEqual(true, libc.get("rel").?.bool);
 }
+
+test "merge varies a translated-C module's flags apart from its header" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var dbg = testModule("boxc", "", true, &.{});
+    dbg.root_source = null;
+    dbg.translate_c = .{ .header_package = "", .header = "c/box.h" };
+    dbg.translate_c_flags = &.{"-DBOX_DEBUG=1"};
+    var rel = dbg;
+    rel.translate_c_flags = &.{"-DBOX_DEBUG=0"};
+    const cells: []const Cell = &.{
+        .{ .name = "dbg", .modules = &.{dbg} },
+        .{ .name = "rel", .modules = &.{rel} },
+    };
+
+    const merged = try merge(arena, cells);
+    try std.testing.expectEqual(@as(usize, 1), merged.varying[0].count());
+    try std.testing.expect(merged.varying[0].contains(.translate_c_flags));
+
+    var out: std.Io.Writer.Allocating = .init(arena);
+    try writeMerged(&out.writer, merged);
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, out.written(), .{});
+    const module = parsed.object.get("modules").?.array.items[0].object;
+    try std.testing.expectEqualStrings("c/box.h", module.get("translate_c").?.object.get("header").?.string);
+    const flags = module.get("select").?.object.get("translate_c_flags").?.object;
+    try std.testing.expectEqualStrings("-DBOX_DEBUG=1", flags.get("dbg").?.array.items[0].string);
+    try std.testing.expectEqualStrings("-DBOX_DEBUG=0", flags.get("rel").?.array.items[0].string);
+}

@@ -448,7 +448,10 @@ def _render_translate_c_library(repository_ctx, module, packages, owner, cells):
             name = name,
             import_name = module["name"],
             cdeps = json.encode([":" + headers]),
-            copts = _literal_copts(module.get("translate_c_flags", [])),
+            copts = _select_expr(cells, repository_ctx.attr.config_settings, {
+                cell.name: _literal_copts(_field(module, "translate_c_flags", [], cell.name))
+                for cell in cells
+            }),
         ),
     ]
 
@@ -556,10 +559,11 @@ def _link_deps(repository_ctx, module, cell):
 # Fields that reshape the module's own root and that the importer renders once
 # for every configuration, so they must agree across cells: a
 # `generated_source` is materialized to a single file shared by every cell, and
-# a `translate_c` module becomes one `zig_c_library`. The root source, C sources
-# and include directories may vary: they render as a `select()` over the cells'
-# `config_setting_group`s. Translated-C modules keep their C sources, include
-# directories and C flags invariant (see `_check_module_supported`).
+# a `translate_c` module becomes one `zig_c_library`. The root source, C
+# sources, include directories and translate-c flags may vary: they render as a
+# `select()` over the cells' `config_setting_group`s. Translated-C modules keep
+# their C sources and include directories invariant (see
+# `_check_module_supported`).
 _INVARIANT_FIELDS = ["generated_source", "translate_c"]
 
 def _check_module_supported(repository_ctx, module, cells):
@@ -582,9 +586,9 @@ def _check_module_supported(repository_ctx, module, cells):
     invariant = _INVARIANT_FIELDS
     if module.get("translate_c") != None:
         # A translated-C module renders one `zig_c_library` and header
-        # `cc_library` from the fallback cell's header, include directories and
-        # C flags, none of which it selects per cell.
-        invariant = invariant + ["csrcs", "include_dirs", "translate_c_flags"]
+        # `cc_library` from the fallback cell's header and include directories,
+        # neither of which it selects per cell.
+        invariant = invariant + ["csrcs", "include_dirs"]
     for field in invariant:
         if field in select:
             fail("The Zig package '{}' module '{}' varies its '{}' across configurations, which the importer does not support.".format(
@@ -605,10 +609,11 @@ def _render_libraries(repository_ctx, modules, cells, packages):
     owned by a URL dependency lives in that dependency's own spoke and is skipped
     here.
 
-    A module's root source, C sources, include directories, dependencies, libc
-    linkage and system libraries may vary across the configuration matrix,
-    rendering as a `select()` on the cells' `config_setting_group`s (see
-    `_INVARIANT_FIELDS` for the fields that may not).
+    A module's root source, C sources, include directories, translate-c flags,
+    dependencies, libc linkage and system libraries may vary across the
+    configuration matrix, rendering as a `select()` on the cells'
+    `config_setting_group`s (see `_INVARIANT_FIELDS` for the fields that may
+    not).
 
     Returns:
       `(text, has_cc, has_translate_c)`: the rendered targets, whether any
