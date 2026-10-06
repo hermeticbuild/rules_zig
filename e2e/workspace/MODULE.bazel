@@ -15,6 +15,7 @@ zig = use_extension(
     "zig",
     dev_dependency = True,
 )
+zig.toolchain(zig_version = "0.17.0")
 zig.toolchain(zig_version = "0.16.0")
 zig.toolchain(zig_version = "0.15.2")
 use_repo(zig, "zig_toolchains")
@@ -24,18 +25,18 @@ http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "ht
 http_archive(
     name = "arocc",
     build_file = "//third_party/arocc:arocc.bazel",
-    sha256 = "e20b49a13049e8ef5aa1d798a70d8fc02b691fe44c7c78928aae3d363a1deb7e",
-    strip_prefix = "arocc-5f5a050569a95ecc40a426f0c3666ae7ef987ede",
-    url = "https://github.com/Vexu/arocc/archive/5f5a050569a95ecc40a426f0c3666ae7ef987ede.tar.gz",
+    sha256 = "423d54bb68d08b457459e9467832ddf8049611563ebb0fef9867e13d94513d98",
+    strip_prefix = "arocc-d0c8c4d9c55daa7ef6e40cf0f630a5b5e900989b",
+    url = "https://github.com/Vexu/arocc/archive/d0c8c4d9c55daa7ef6e40cf0f630a5b5e900989b.tar.gz",
 )
 
 http_archive(
     name = "translate-c",
     build_file = "//third_party/translate-c:translate-c.bazel",
-    sha256 = "8a24b51b6f1fe1be643b68142077cb92e638b1cd02d58351ff0910a44db7dafd",
-    strip_prefix = "translate-c-42f630117deffd5318b4a6ceffbd366dd0af8cee",
-    # Upstream: https://codeberg.org/ziglang/translate-c/commit/42f630117deffd5318b4a6ceffbd366dd0af8cee
-    url = "https://github.com/aherrmann/translate-c/archive/42f630117deffd5318b4a6ceffbd366dd0af8cee.tar.gz",
+    sha256 = "948dbb0efe888bf436f6fbe00c5099d42975f916e7fe92838c1a0c29869fd44d",
+    strip_prefix = "translate-c-0da7a16c3235b935b82421646076e0657cda21f6",
+    # Upstream: https://codeberg.org/ziglang/translate-c/commit/0da7a16c3235b935b82421646076e0657cda21f6
+    url = "https://github.com/aherrmann/translate-c/archive/0da7a16c3235b935b82421646076e0657cda21f6.tar.gz",
 )
 
 register_toolchains("//third_party/translate-c:toolchain")

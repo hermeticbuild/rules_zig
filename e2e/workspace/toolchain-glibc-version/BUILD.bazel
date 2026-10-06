@@ -1,5 +1,6 @@
 load("@bazel_skylib//rules:diff_test.bzl", "diff_test")
-load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_configure_binary", "zig_test")
+load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_configure_binary", "zig_library", "zig_test")
 load("@rules_zig//zig:toolchain.bzl", "zig_target_toolchain")
 
 platform(
@@ -33,13 +34,31 @@ toolchain(
     toolchain_type = "@rules_zig//zig/target:toolchain_type",
 )
 
+cc_library(
+    name = "glibc_features",
+    hdrs = ["glibc_features.h"],
+    target_compatible_with = ["@platforms//os:linux"],
+)
+
+zig_library(
+    name = "cimport",
+    main = "cimport.zig",
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = ["@rules_zig//zig/lib:libc"],
+)
+
 zig_binary(
     name = "main-unconfigured",
     main = "main.zig",
     target_compatible_with = ["@platforms//os:linux"],
     deps = [
+        ":glibc_features",
         "@rules_zig//zig/lib:libc",
-    ],
+    ] + select({
+        "@zig_toolchains//:0.15.2": [":cimport"],
+        "@zig_toolchains//:0.16.0": [":cimport"],
+        "//conditions:default": [],
+    }),
 )
 
 zig_configure_binary(
@@ -57,8 +76,13 @@ zig_test(
     target_compatible_with = ["@platforms//os:linux"],
     visibility = ["//zig/tests:__pkg__"],
     deps = [
+        ":glibc_features",
         "@rules_zig//zig/lib:libc",
-    ],
+    ] + select({
+        "@zig_toolchains//:0.15.2": [":cimport"],
+        "@zig_toolchains//:0.16.0": [":cimport"],
+        "//conditions:default": [],
+    }),
 )
 
 genrule(

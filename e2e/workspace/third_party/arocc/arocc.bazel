@@ -40,17 +40,10 @@ zig_library(
 )
 
 zig_library(
-    name = "zig",
-    srcs = glob(["deps/zig/**/*.zig"]),
-    main = "deps/zig/lib.zig",
-)
-
-zig_library(
     name = "backend",
     main = "src/backend.zig",
     deps = [
         ":build_options",
-        ":zig",
     ],
 )
 

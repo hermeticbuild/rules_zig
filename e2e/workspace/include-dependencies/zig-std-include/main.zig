@@ -1,10 +1,10 @@
 const builtin = @import("builtin");
 const std = @import("std");
-const c = @cImport({
-    @cInclude("math.h");
-});
 
 const is_zig_0_16_or_later = builtin.zig_version.major == 0 and builtin.zig_version.minor >= 16;
+const is_zig_0_17_or_later = builtin.zig_version.major == 0 and builtin.zig_version.minor >= 17;
+
+const c = if (is_zig_0_17_or_later) @import("c") else @import("cimport").c;
 
 pub const main = if (is_zig_0_16_or_later) main_016 else main_pre_016;
 
