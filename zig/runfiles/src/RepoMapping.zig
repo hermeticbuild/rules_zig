@@ -29,41 +29,14 @@ const WildcardMap = std.StringArrayHashMapUnmanaged(TargetMap);
 
 const RepoMapping = @This();
 
-const is_zig_0_16_or_later = builtin.zig_version.major == 0 and builtin.zig_version.minor >= 16;
-
 exact_mapping: ExactMap,
 wildcard_mapping: WildcardMap,
 content: []const u8,
 
-pub const InitError = ParseError || (if (is_zig_0_16_or_later)
-    std.Io.File.OpenError || std.Io.Reader.LimitedAllocError || std.Io.Dir.RealPathFileAllocError
-else
-    std.posix.OpenError || std.posix.PReadError || std.posix.RealPathError);
-
-pub const init = if (is_zig_0_16_or_later)
-    init_io
-else
-    init_non_io;
+pub const InitError = ParseError || std.Io.File.OpenError || std.Io.Reader.LimitedAllocError || std.Io.Dir.RealPathFileAllocError;
 
 /// Reads the given file into memory and parses the repo-mapping file format.
-pub fn init_non_io(allocator: std.mem.Allocator, file_path: []const u8) InitError!RepoMapping {
-    const content = std.fs.cwd().readFileAlloc(allocator, file_path, std.math.maxInt(usize)) catch |e| {
-        log.err("Failed to open repository mapping ({s}) at '{s}'", .{
-            @errorName(e),
-            file_path,
-        });
-        return e;
-    };
-    errdefer allocator.free(content);
-    const exact_map, const wildcard_map = try parse(allocator, content, file_path);
-    return .{
-        .exact_mapping = exact_map,
-        .wildcard_mapping = wildcard_map,
-        .content = content,
-    };
-}
-
-pub fn init_io(allocator: std.mem.Allocator, io: std.Io, file_path: []const u8) InitError!RepoMapping {
+pub fn init(allocator: std.mem.Allocator, io: std.Io, file_path: []const u8) InitError!RepoMapping {
     const file = std.Io.Dir.cwd().openFile(io, file_path, .{}) catch |e| {
         log.err("Failed to open repository mapping ({s}) at '{s}'", .{
             @errorName(e),
@@ -319,10 +292,7 @@ test "RepoMapping init from file" {
     );
     const mapping_path = try testutil.tmpRealpathAlloc(tmp.dir, std.testing.allocator, "_repo_mapping");
     defer std.testing.allocator.free(mapping_path);
-    var repo_mapping = if (is_zig_0_16_or_later)
-        try RepoMapping.init(std.testing.allocator, std.testing.io, mapping_path)
-    else
-        try RepoMapping.init(std.testing.allocator, mapping_path);
+    var repo_mapping = try RepoMapping.init(std.testing.allocator, std.testing.io, mapping_path);
     defer repo_mapping.deinit(std.testing.allocator);
     try std.testing.expectEqualStrings("my_workspace", repo_mapping.exact_mapping.get(.{ .source = "", .target = "my_module" }).?);
     try std.testing.expectEqualStrings("protobuf~3.19.2", repo_mapping.exact_mapping.get(.{ .source = "", .target = "my_protobuf" }).?);
@@ -340,9 +310,6 @@ test "RepoMapping init missing file" {
         "_repo_mapping",
     });
     defer std.testing.allocator.free(missing_path);
-    const result = if (is_zig_0_16_or_later)
-        RepoMapping.init(std.testing.allocator, std.testing.io, missing_path)
-    else
-        RepoMapping.init(std.testing.allocator, missing_path);
+    const result = RepoMapping.init(std.testing.allocator, std.testing.io, missing_path);
     try std.testing.expectError(error.FileNotFound, result);
 }

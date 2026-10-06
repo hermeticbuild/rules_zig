@@ -3,24 +3,10 @@
 /// Sets up paths to ZLS dependencies with Bazel runfiles.
 ///
 /// This file is used as a template by `zls_write_runner_zig_src.bzl`.
-const builtin = @import("builtin");
 const std = @import("std");
-const fs = std.fs;
 
 const bazel_builtin = @import("bazel_builtin");
 const runfiles = @import("runfiles");
-
-const is_zig_0_16_or_later = builtin.zig_version.major == 0 and builtin.zig_version.minor >= 16;
-
-const EnvMap = if (is_zig_0_16_or_later)
-    std.process.Environ.Map
-else
-    std.process.EnvMap;
-
-fn getRandomFilename_pre_016(buf: []u8, extension: []const u8) ![]const u8 {
-    const now = std.time.nanoTimestamp();
-    return std.fmt.bufPrint(buf, "/tmp/{d}{s}", .{ now, extension }) catch @panic("OOM");
-}
 
 fn getRandomFilename(io: std.Io, buf: []u8, extension: []const u8) ![]const u8 {
     const now = std.Io.Clock.real.now(io);
@@ -44,81 +30,7 @@ const Config = struct {
     enable_build_on_save: ?bool = false,
 };
 
-pub const main = if (is_zig_0_16_or_later) main_016 else main_pre_016;
-
-fn main_pre_016() !void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-
-    const allocator = arena.allocator();
-
-    var r_ = try runfiles.Runfiles.create(.{ .allocator = allocator }) orelse
-        return error.RunfilesNotFound;
-    defer r_.deinit(allocator);
-    const r = r_.withSourceRepo(bazel_builtin.current_repository);
-
-    const zls_bin_rpath = "__ZLS_BIN_RPATH__";
-    const zls_bin_path = try r.rlocationAlloc(allocator, zls_bin_rpath) orelse
-        return error.RLocationNotFound;
-
-    const zig_exe_rpath = "__ZIG_EXE_RPATH__";
-    const zig_exe_path = try r.rlocationAlloc(allocator, zig_exe_rpath) orelse
-        return error.RLocationNotFound;
-
-    const zig_lib_path = "__ZIG_LIB_RPATH__";
-    const zig_lib_computed_path = try r.rlocationAlloc(allocator, zig_lib_path) orelse
-        return error.RLocationNotFound;
-
-    const zls_build_runner_rpath = "__ZLS_BUILD_RUNNER_RPATH__";
-    const zls_build_runner_path = try r.rlocationAlloc(allocator, zls_build_runner_rpath) orelse
-        return error.RLocationNotFound;
-
-    const global_cache_path = "__GLOBAL_CACHE_PATH__";
-
-    const config: Config = .{
-        .zig_exe_path = zig_exe_path,
-        .zig_lib_path = zig_lib_computed_path,
-        .build_runner_path = zls_build_runner_path,
-        .global_cache_path = global_cache_path,
-    };
-
-    var buf: [fs.max_path_bytes]u8 = undefined;
-    const tmp_file_path = try getRandomFilename_pre_016(&buf, ".json");
-
-    {
-        var tmp_file = try fs.createFileAbsolute(tmp_file_path, .{});
-        defer tmp_file.close();
-
-        var out_buf: [4096]u8 = undefined;
-        var tmp_file_writer = tmp_file.writer(&out_buf);
-        try std.json.Stringify.value(config, .{ .whitespace = .indent_2 }, &tmp_file_writer.interface);
-        try tmp_file_writer.interface.flush();
-    }
-
-    const args = try std.process.argsAlloc(allocator);
-    const exec_args_len = args.len - 1 + 3; // Skip args[0] and add "zls" + --config-path + tmp_file_path
-    var exec_args = try allocator.alloc([]const u8, exec_args_len);
-
-    exec_args[0] = zls_bin_path; // "zls"
-
-    @memcpy(exec_args[1 .. exec_args.len - 2], args[1..]);
-    @memcpy(exec_args[exec_args.len - 2 ..], &[_][]const u8{
-        "--config-path",
-        tmp_file_path,
-    });
-    var child_env_map = try std.process.getEnvMap(allocator);
-    defer child_env_map.deinit();
-    try child_env_map.put("ZIG_LIB_DIR", zig_lib_computed_path);
-    try child_env_map.put("ZIG_GLOBAL_CACHE_DIR", global_cache_path);
-    try child_env_map.put("ZIG_LOCAL_CACHE_DIR", global_cache_path);
-
-    var child = std.process.Child.init(exec_args, allocator);
-    child.env_map = &child_env_map;
-    try child.spawn();
-    _ = try child.wait();
-}
-
-fn main_016(init: std.process.Init) !void {
+pub fn main(init: std.process.Init) !void {
     const arena = init.arena;
     const io = init.io;
 
@@ -183,7 +95,7 @@ fn main_016(init: std.process.Init) !void {
         "--config-path",
         tmp_file_path,
     });
-    var child_env_map: EnvMap = .init(arena.allocator());
+    var child_env_map: std.process.Environ.Map = .init(arena.allocator());
     defer child_env_map.deinit();
     for (init.environ_map.keys(), init.environ_map.values()) |key, value| {
         try child_env_map.put(key, value);
