@@ -5,8 +5,6 @@ extern const rlocationpath: [*:0]const u8;
 extern const target: [*:0]const u8;
 extern const zig_target: [*:0]const u8;
 
-const is_zig_0_16_or_later = builtin.zig_version.major == 0 and builtin.zig_version.minor >= 16;
-
 test "-DRLOCATIONPATH is set" {
     try std.testing.expectStringEndsWith(
         std.mem.sliceTo(rlocationpath, 0),
@@ -32,10 +30,7 @@ test "-DZIG_TARGET is set" {
 }
 
 test "Env-var TARGET is set" {
-    const value = if (is_zig_0_16_or_later)
-        try std.testing.environ.getAlloc(std.testing.allocator, "TARGET")
-    else
-        try std.process.getEnvVarOwned(std.testing.allocator, "TARGET");
+    const value = try std.testing.environ.getAlloc(std.testing.allocator, "TARGET");
     defer std.testing.allocator.free(value);
     try std.testing.expectEqualStrings(
         "//location-expansion:test",
