@@ -18,6 +18,7 @@ const syslibdep = @import("syslibdep");
 const optdep = @import("optdep");
 const cfgdep = @import("cfgdep");
 const cvardep = @import("cvardep");
+const tcvardep = @import("tcvardep");
 const host = @import("host");
 const greeter = @import("greeter");
 const genopts = @import("genopts");
@@ -72,6 +73,9 @@ pub fn main() void {
     // include directory per optimize mode: `debug` yields 11+100, `fast`
     // 22+200, each rendered as a `select()` branch.
     std.debug.assert(cvardep.value() == @as(c_int, if (builtin.mode == .debug) 111 else 222));
+    // The `configure` matrix selects `tcvardep`'s translate-c define per
+    // optimize mode.
+    std.debug.assert(tcvardep.tcvar_value == if (builtin.mode == .debug) 33 else 44);
     // (5 + 7 + 42) + 9: `host` has sub-tree path dependencies `foo` and `bar`;
     // `foo` pulls its own nested `bar` (5) and the URL `leaf` (7), while `host`
     // links a distinct `bar` (9) — the two `bar`s stay separate by sub-path.

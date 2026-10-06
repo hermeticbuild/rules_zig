@@ -1,0 +1,1 @@
+{"cells":["dbg","rel"],"modules":[{"name":"tcvardep","package":"","root_source":null,"translate_c":{"header":"c/val.h"},"translate_c_flags":["-D","TCVAR_VALUE=33"],"link_libc":true,"imports":[],"select":{"translate_c_flags":{"dbg":["-D","TCVAR_VALUE=33"],"rel":["-D","TCVAR_VALUE=44"]}}}]}

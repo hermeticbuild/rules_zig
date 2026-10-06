@@ -75,6 +75,10 @@
             .url = "__CVARDEP_URL__",
             .hash = "__CVARDEP_HASH__",
         },
+        .tcvardep = .{
+            .url = "__TCVARDEP_URL__",
+            .hash = "__TCVARDEP_HASH__",
+        },
         .host = .{
             .url = "__HOST_URL__",
             .hash = "__HOST_HASH__",

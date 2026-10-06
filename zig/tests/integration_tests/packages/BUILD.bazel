@@ -93,6 +93,14 @@ diff_test(
     file2 = zig_package_file("cvardep", "module_manifest.json"),
 )
 
+# The configuration matrix drives `tcvardep`'s translate-c define per optimize
+# mode, pushing its translate-c flags into a `select` overlay.
+diff_test(
+    name = "tcvardep_manifest_test",
+    file1 = "tcvardep_manifest.expected.json",
+    file2 = zig_package_file("tcvardep", "module_manifest.json"),
+)
+
 # Provide the system libraries the `tgtdep` package links under each cell of
 # its target `configure` matrix: `posixonly` for the fallback `linux` cell,
 # `winonly` for the `windows` cell, `maconly` for the `macos` cell.

@@ -93,6 +93,14 @@ zig_packages.configure(
     fallback = "dbg",
     package = "cvardep",
 )
+zig_packages.configure(
+    configs = [
+        "dbg",
+        "rel",
+    ],
+    fallback = "dbg",
+    package = "tcvardep",
+)
 zig_packages.config(
     name = "linux",
     target = "x86_64-linux-gnu",

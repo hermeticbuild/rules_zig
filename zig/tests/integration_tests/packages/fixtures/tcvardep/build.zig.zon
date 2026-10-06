@@ -1,0 +1,10 @@
+.{
+    .name = .tcvardep,
+    .version = "0.0.0",
+    .fingerprint = 0x4828436f5c1e7a29,
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "c",
+    },
+}
