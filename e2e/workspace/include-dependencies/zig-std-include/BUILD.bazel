@@ -21,7 +21,6 @@ zig_binary(
         ":std_headers",
         "@rules_zig//zig/lib:libc",
     ] + select({
-        "@zig_toolchains//:0.15.2": [":cimport"],
         "@zig_toolchains//:0.16.0": [":cimport"],
         "//conditions:default": [],
     }),
@@ -34,7 +33,6 @@ zig_static_library(
         ":std_headers",
         "@rules_zig//zig/lib:libc",
     ] + select({
-        "@zig_toolchains//:0.15.2": [":cimport"],
         "@zig_toolchains//:0.16.0": [":cimport"],
         "//conditions:default": [],
     }),
@@ -48,7 +46,6 @@ zig_test(
         ":std_headers",
         "@rules_zig//zig/lib:libc",
     ] + select({
-        "@zig_toolchains//:0.15.2": [":cimport"],
         "@zig_toolchains//:0.16.0": [":cimport"],
         "//conditions:default": [],
     }),

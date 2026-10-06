@@ -19,7 +19,6 @@ zig_binary(
     name = "binary",
     main = "main.zig",
     deps = [":header"] + select({
-        "@zig_toolchains//:0.15.2": [":cimport"],
         "@zig_toolchains//:0.16.0": [":cimport"],
         "//conditions:default": [],
     }),
@@ -29,7 +28,6 @@ zig_static_library(
     name = "library",
     main = "main.zig",
     deps = [":header"] + select({
-        "@zig_toolchains//:0.15.2": [":cimport"],
         "@zig_toolchains//:0.16.0": [":cimport"],
         "//conditions:default": [],
     }),
@@ -40,7 +38,6 @@ zig_test(
     size = "small",
     main = "main.zig",
     deps = [":header"] + select({
-        "@zig_toolchains//:0.15.2": [":cimport"],
         "@zig_toolchains//:0.16.0": [":cimport"],
         "//conditions:default": [],
     }),

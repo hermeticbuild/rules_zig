@@ -20,11 +20,6 @@ zig_configure_binary(
     name = "binary_linked_with_cc_common_link",
     actual = ":binary",
     target_compatible_with = select({
-        # Zig 0.15.1 sometimes creates malformed archives
-        # https://github.com/ziglang/zig/issues/25069
-        "@zig_toolchains//:0.15.2": ["@platforms//:incompatible"],
-        "//conditions:default": [],
-    }) + select({
         # fails on macOS, see //cc-dependencies/static-library:add-test
         "@platforms//os:macos": ["@platforms//:incompatible"],
         "//conditions:default": [],
@@ -42,12 +37,6 @@ zig_static_library(
 zig_configure(
     name = "static_library_linked_with_cc_common_link",
     actual = ":static-library",
-    target_compatible_with = select({
-        # Zig 0.15.1 sometimes creates malformed archives
-        # https://github.com/ziglang/zig/issues/25069
-        "@zig_toolchains//:0.15.2": ["@platforms//:incompatible"],
-        "//conditions:default": [],
-    }),
     use_cc_common_link = 1,
 )
 
@@ -62,11 +51,6 @@ zig_configure(
     name = "shared_library_linked_with_cc_common_link",
     actual = ":shared-library",
     target_compatible_with = select({
-        # Zig 0.15.1 sometimes creates malformed archives
-        # https://github.com/ziglang/zig/issues/25069
-        "@zig_toolchains//:0.15.2": ["@platforms//:incompatible"],
-        "//conditions:default": [],
-    }) + select({
         # fails on macOS, see //cc-dependencies/static-library:add-test
         "@platforms//os:macos": ["@platforms//:incompatible"],
         "//conditions:default": [],
@@ -87,11 +71,6 @@ zig_configure_test(
     size = "small",
     actual = ":test",
     target_compatible_with = select({
-        # Zig 0.15.1 sometimes creates malformed archives
-        # https://github.com/ziglang/zig/issues/25069
-        "@zig_toolchains//:0.15.2": ["@platforms//:incompatible"],
-        "//conditions:default": [],
-    }) + select({
         # fails on macOS, see //cc-dependencies/static-library:add-test
         "@platforms//os:macos": ["@platforms//:incompatible"],
         "//conditions:default": [],

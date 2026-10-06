@@ -19,7 +19,7 @@ zig.toolchain(
     default = True,
     zig_version = "0.17.0",
 )
-zig.toolchain(zig_version = "0.15.2")
+zig.toolchain(zig_version = "0.16.0")
 use_repo(zig, "zig_toolchains")
 
 bazel_dep(name = "toolchains_buildbuddy", version = "0.0.4", dev_dependency = True)

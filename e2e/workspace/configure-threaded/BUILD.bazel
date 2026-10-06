@@ -34,12 +34,6 @@ genrule(
     srcs = [":library_single"],
     outs = ["library_single_symbol.txt"],
     cmd = "$(NM) --defined-only $(SRCS) | grep single_threaded > $(OUTS)",
-    target_compatible_with = select({
-        # Zig 0.15.1 sometimes creates malformed archives
-        # https://github.com/ziglang/zig/issues/25069
-        "@zig_toolchains//:0.15.2": ["@platforms//:incompatible"],
-        "//conditions:default": [],
-    }),
     toolchains = ["@bazel_tools//tools/cpp:current_cc_toolchain"],
 )
 
@@ -48,12 +42,6 @@ genrule(
     srcs = [":library_multi"],
     outs = ["library_multi_symbol.txt"],
     cmd = "$(NM) --defined-only $(SRCS) | grep multi_threaded > $(OUTS)",
-    target_compatible_with = select({
-        # Zig 0.15.1 sometimes creates malformed archives
-        # https://github.com/ziglang/zig/issues/25069
-        "@zig_toolchains//:0.15.2": ["@platforms//:incompatible"],
-        "//conditions:default": [],
-    }),
     toolchains = ["@bazel_tools//tools/cpp:current_cc_toolchain"],
 )
 
