@@ -1,0 +1,10 @@
+.{
+    .name = .lazyunused,
+    .version = "0.0.0",
+    .fingerprint = 0x02c7e8959a3b1d57,
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

@@ -32,7 +32,8 @@ const packages = [_]Package{
     .{ .name = "pruned" },
     .{ .name = "symlinked", .symlink = .{ "real.zig", "src/aliased.zig" } },
     .{ .name = "lazyleaf" },
-    .{ .name = "lazyhost", .patches = &.{.{ .deps = &.{"lazyleaf"} }} },
+    .{ .name = "lazyunused" },
+    .{ .name = "lazyhost", .patches = &.{.{ .deps = &.{ "lazyleaf", "lazyunused" } }} },
 };
 
 const Consumer = struct {

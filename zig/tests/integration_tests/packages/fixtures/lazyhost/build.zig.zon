@@ -8,6 +8,11 @@
             .hash = "__LAZYLEAF_HASH__",
             .lazy = true,
         },
+        .lazyunused = .{
+            .url = "__LAZYUNUSED_URL__",
+            .hash = "__LAZYUNUSED_HASH__",
+            .lazy = true,
+        },
     },
     .paths = .{
         "build.zig",
