@@ -181,9 +181,9 @@ cc_library(
 )
 """
 
-# The header a translated-C module (`b.addTranslateC`) translates, exposed as a
-# `cc_library` the `zig_c_library` translates. Only this header is public, so it
-# alone is translated; its own `#include`s resolve to the headers and include
+# The header a translated-C module translates, exposed as a `cc_library` the
+# `zig_c_library` translates. Only this header is public, so it alone is
+# translated; its own `#include`s resolve to the headers and include
 # directories provided by `deps` (see `_CC_HEADERS` and `_CC_CROSS_INCLUDE`).
 # The header is valid only under the translate step's C flags, which this
 # library does not carry, so it opts out of `parse_headers`.
@@ -383,18 +383,20 @@ def _render_c_library(repository_ctx, module, packages, owner, cells):
     return chunks, cc_dep_by_cell
 
 def _render_translate_c_library(repository_ctx, module, packages, owner, cells):
-    """Render the `zig_c_library` (and its header `cc_library`) for a `b.addTranslateC` module.
+    """Render the `zig_c_library` (and its header `cc_library`) for a translated-C module.
 
-    A translated-C module's root is generated at build time from its header, so
-    it becomes a `zig_c_library` that translates the header under the build
+    A translated-C module (`b.addTranslateC` or a translate-c package
+    `Translator`) has its root generated at build time from its header, so it
+    becomes a `zig_c_library` that translates the header under the build
     toolchain. The header and each include directory are resolved like vendored
     C sources: an in-package path is referenced locally, an out-of-package one
-    (`package` set) across repositories. The libraries the module links are
-    linked through the header `cc_library`.
+    (`package` set) across repositories. The C libraries the module links
+    (`linkLibrary`) are rendered like vendored C; they and the module's other
+    linked libraries are linked through the header `cc_library`.
 
     Returns:
-      the target text chunks: any cross-repo include directory, the header
-      `cc_library`, and the `zig_c_library`.
+      the target text chunks: any cross-repo include directory, the linked C
+      libraries, the header `cc_library`, and the `zig_c_library`.
     """
     translate = module["translate_c"]
     name = _target_name(packages, owner, module["name"])
@@ -435,7 +437,19 @@ def _render_translate_c_library(repository_ctx, module, packages, owner, cells):
             includes = json.encode(local_includes),
         ))
 
-    return dep_chunks + [
+    c_chunks, cc_dep = _render_c_shape(
+        repository_ctx,
+        module,
+        packages,
+        owner,
+        module.get("csrcs", []),
+        module.get("include_dirs", []),
+        name + ".cinc",
+    )
+    if cc_dep:
+        header_deps.append(cc_dep)
+
+    return dep_chunks + c_chunks + [
         _CC_TRANSLATE_HEADERS.format(
             name = headers,
             hdrs = json.encode([header]),
@@ -603,11 +617,10 @@ def _render_libraries(repository_ctx, modules, cells, packages):
     A dependency is imported under its own name by default; an import under a
     different name is remapped through `import_names`. Vendored C sources become
     sibling `cc_library` targets the module links against. A translated-C module
-    (`b.addTranslateC`) becomes a `zig_c_library` importers reach by name. Root-
-    package modules become top-level libraries; a module owned by an in-tree
-    sub-tree path dependency becomes a library scoped to its sub-path; a module
-    owned by a URL dependency lives in that dependency's own spoke and is skipped
-    here.
+    becomes a `zig_c_library` importers reach by name. Root-package modules
+    become top-level libraries; a module owned by an in-tree sub-tree path
+    dependency becomes a library scoped to its sub-path; a module owned by a URL
+    dependency lives in that dependency's own spoke and is skipped here.
 
     A module's root source, C sources, include directories, translate-c flags,
     dependencies, libc linkage and system libraries may vary across the
@@ -630,9 +643,6 @@ def _render_libraries(repository_ctx, modules, cells, packages):
             continue
         _check_module_supported(repository_ctx, module, cells)
 
-        # A translated-C module (`b.addTranslateC`) becomes a `zig_c_library`
-        # that runs `translate-c` at build time; its importers reach it by name
-        # like any other module.
         if module.get("translate_c") != None:
             cc_chunks.extend(_render_translate_c_library(repository_ctx, module, packages, owner, cells))
             has_translate_c = True

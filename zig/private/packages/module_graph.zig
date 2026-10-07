@@ -21,13 +21,27 @@ const Allocator = std.mem.Allocator;
 
 const ModuleSet = std.AutoArrayHashMapUnmanaged(*Build.Module, void);
 const NameMap = std.AutoHashMapUnmanaged(*Build.Module, []const u8);
+/// Maps a module to the Zig hash of the package it belongs to.
+const PackageMap = std.AutoHashMapUnmanaged(*Build.Module, []const u8);
 
 /// Collect `module` and every module it transitively imports, deduplicated by
-/// identity.
-fn collect(arena: Allocator, modules: *ModuleSet, module: *Build.Module) !void {
+/// identity. `user` is the package using `module`. A translate-c package
+/// `Translator`'s module is created by that package's builder yet translates the
+/// user's header, so it is recorded in `adopted` as belonging to its first
+/// user; its imports serve only the package's own `translate-c` output and are
+/// not collected.
+fn collect(arena: Allocator, builder: *Build, modules: *ModuleSet, adopted: *PackageMap, user: []const u8, module: *Build.Module) !void {
     const gop = try modules.getOrPut(arena, module);
     if (gop.found_existing) return;
-    for (module.import_table.values()) |imported| try collect(arena, modules, imported);
+    if (translatorRun(builder, module.root_source_file) != null) {
+        try adopted.put(arena, module, user);
+        return;
+    }
+    for (module.import_table.values()) |imported| try collect(arena, builder, modules, adopted, module.owner.pkg_hash, imported);
+}
+
+fn modulePackage(adopted: *const PackageMap, module: *Build.Module) []const u8 {
+    return adopted.get(module) orelse module.owner.pkg_hash;
 }
 
 /// Name each module as its owning package registers it, or `__anon_<index>`
@@ -140,13 +154,13 @@ pub const Import = struct {
     package: []const u8,
 };
 
-/// A module whose root source is produced by `b.addTranslateC`: its Zig code is
-/// the translation of a C header, generated at build time and absent from the
-/// package tree. The header and the search path needed to translate it are
-/// emitted so the importer can render a `zig_c_library`, which runs `translate-c`
-/// under the build toolchain. The step's include directories, `link_libc`, and
-/// linked system libraries fold into the module's ordinary `include_dirs`,
-/// `link_libc`, and `system_libs` fields.
+/// A module whose root source is produced by `b.addTranslateC` or a translate-c
+/// package `Translator`: its Zig code is the translation of a C header,
+/// generated at build time and absent from the package tree. The header and the
+/// search path needed to translate it are emitted so the importer can render a
+/// `zig_c_library`, which runs `translate-c` under the build toolchain. The
+/// translation's include directories, `link_libc`, and linked libraries fold
+/// into the module's ordinary fields.
 pub const TranslateC = struct {
     /// The package owning the translated header, as for `CSource.package`.
     header_package: []const u8,
@@ -159,7 +173,8 @@ pub const Module = struct {
     /// The module's name in its owning package (see `nameModules`).
     name: []const u8,
     /// The Zig hash of the owning package, or the empty string for the package
-    /// being configured.
+    /// being configured. A `Translator` module is owned by the package using it
+    /// (see `collect`).
     package: []const u8,
     /// The root source file within the owning package; null for a generated
     /// root.
@@ -167,8 +182,8 @@ pub const Module = struct {
     /// The source of a module whose root is produced by `b.addOptions()`, which
     /// has no file in the package tree; null for a file-backed module.
     generated_source: ?[]const u8,
-    /// Present when the module's root is produced by `b.addTranslateC`; null
-    /// otherwise. Mutually exclusive with a file-backed `root_source`.
+    /// Present when the module's root is a translated C header; null otherwise.
+    /// Mutually exclusive with a file-backed `root_source`.
     translate_c: ?TranslateC,
     /// A translated-C module's raw C flags (`addCFlags`, `defineCMacro`) in
     /// order, less the include paths folded into its `include_dirs`.
@@ -193,15 +208,21 @@ pub const Module = struct {
     unsupported: []const []const u8,
 };
 
-/// If `lazy_path` is the generated output of a `b.addOptions()` step, return
-/// that step. Other paths return null.
-fn optionsStep(builder: *Build, lazy_path: ?LazyPath) ?*Build.Step.Options {
+/// The step generating the file at `lazy_path`; null for a source path or a
+/// path relative to a generated file.
+fn generatedStep(builder: *Build, lazy_path: ?LazyPath) ?*Build.Step {
     const generated = switch (lazy_path orelse return null) {
         .generated => |generated| generated,
         else => return null,
     };
     if (generated.up != 0 or generated.sub_path.len != 0) return null;
-    const step = builder.graph.generated_files.items[@backingInt(generated.index)];
+    return builder.graph.generated_files.items[@backingInt(generated.index)];
+}
+
+/// If `lazy_path` is the generated output of a `b.addOptions()` step, return
+/// that step. Other paths return null.
+fn optionsStep(builder: *Build, lazy_path: ?LazyPath) ?*Build.Step.Options {
+    const step = generatedStep(builder, lazy_path) orelse return null;
     if (step.tag != .options) return null;
     return @fieldParentPtr("step", step);
 }
@@ -218,14 +239,40 @@ fn generatedOptionsSource(builder: *Build, lazy_path: ?LazyPath) ?[]const u8 {
 /// that step; the module it roots is a translated-C module. Other paths return
 /// null.
 fn translateCStep(builder: *Build, lazy_path: ?LazyPath) ?*Build.Step.TranslateC {
-    const generated = switch (lazy_path orelse return null) {
-        .generated => |generated| generated,
-        else => return null,
-    };
-    if (generated.up != 0 or generated.sub_path.len != 0) return null;
-    const step = builder.graph.generated_files.items[@backingInt(generated.index)];
+    const step = generatedStep(builder, lazy_path) orelse return null;
     if (step.tag != .translate_c) return null;
     return @fieldParentPtr("step", step);
+}
+
+/// The Zig hash prefix of the translate-c package
+/// (https://codeberg.org/ziglang/translate-c).
+const translator_package_prefix = "translate_c-";
+/// The name of the translate-c package's executable.
+const translator_exe_name = "translate-c";
+
+/// If `lazy_path` is the output of a translate-c package `Translator` (a run of
+/// the package's own executable), return that run step. Other paths return null.
+fn translatorRun(builder: *Build, lazy_path: ?LazyPath) ?*Build.Step.Run {
+    const step = generatedStep(builder, lazy_path) orelse return null;
+    const run = step.cast(Build.Step.Run) orelse return null;
+    const exe = run.producer orelse return null;
+    if (!mem.eql(u8, exe.name, translator_exe_name)) return null;
+    if (!mem.startsWith(u8, exe.step.owner.pkg_hash, translator_package_prefix)) return null;
+    return run;
+}
+
+/// What generates a translated-C module's root.
+const Translation = union(enum) {
+    /// `b.addTranslateC`.
+    step: *Build.Step.TranslateC,
+    /// A translate-c package `Translator`.
+    translator: *Build.Step.Run,
+};
+
+fn translation(builder: *Build, lazy_path: ?LazyPath) ?Translation {
+    if (translateCStep(builder, lazy_path)) |step| return .{ .step = step };
+    if (translatorRun(builder, lazy_path)) |run| return .{ .translator = run };
+    return null;
 }
 
 /// Fold a `b.addTranslateC` step's include directories into `acc` and return the
@@ -239,16 +286,113 @@ fn foldTranslateC(arena: Allocator, builder: *Build, acc: *CAccum, translate: *B
     const argv = try arena.alloc([]const u8, translate.cc_argv.items.len);
     for (argv, translate.cc_argv.items) |*arg, string| arg.* = builder.graph.wip_configuration.stringSlice(string);
     const c_flags = try foldTranslateCFlags(arena, acc, try packageRoots(arena, builder), try nonEmptyFlags(arena, argv));
+    return .{ try translatedHeader(arena, acc, translate.source), c_flags };
+}
 
-    const resolved_header = resolvePath(arena, translate.source) catch |err| {
-        try reportPath(arena, &acc.unsupported, translate.source, err);
-        return .{ .{ .header_package = "", .header = "" }, c_flags };
+fn translatedHeader(arena: Allocator, acc: *CAccum, source: ?LazyPath) !TranslateC {
+    const resolved_header = resolvePath(arena, source) catch |err| {
+        try reportPath(arena, &acc.unsupported, source.?, err);
+        return .{ .header_package = "", .header = "" };
     };
     const header = resolved_header orelse {
         try acc.unsupported.put(arena, "a translate-c root header with a generated path", {});
-        return .{ .{ .header_package = "", .header = "" }, c_flags };
+        return .{ .header_package = "", .header = "" };
     };
-    return .{ .{ .header_package = header.package, .header = header.sub_path }, c_flags };
+    return .{ .header_package = header.package, .header = header.sub_path };
+}
+
+/// `Translator` arguments before the `--` separator that `translate-c` under
+/// the build toolchain reproduces: the toolchain sets the target and optimize
+/// mode, the module carries libc and system library linkage, and the
+/// toolchain's output is self-contained, needing none of the package's helper
+/// modules whether or not `-fmodule-libs` asks for them.
+const translator_default_args = [_][]const u8{ "-lc", "-fmodule-libs", "-fno-module-libs" };
+const translator_default_prefixes = [_][]const u8{ "-O=", "--target=", "-mcpu=", "-l=" };
+
+/// `Translator` arguments after the `--` separator that only drive the
+/// package's dependency file and warnings.
+const translator_ignored_args = [_][]const u8{ "-MD", "-MV", "-MF", "-w" };
+
+/// The `Translator` flag that precedes the Aro resource directory, which the
+/// build toolchain's `translate-c` provides itself.
+const translator_resource_dir_flag = "-resource-dir";
+
+fn isTranslatorDefault(arg: []const u8) bool {
+    for (translator_default_args) |default| {
+        if (mem.eql(u8, arg, default)) return true;
+    }
+    for (translator_default_prefixes) |prefix| {
+        if (mem.startsWith(u8, arg, prefix)) return true;
+    }
+    return false;
+}
+
+/// Fold a translate-c package `Translator`'s run arguments into `acc` and return
+/// the translate-c marker and C flags, as `foldTranslateC` does. The run is
+/// `translate-c <options> -- <C flags> <header> <C flags>`, where a directory
+/// is a separate argument after its flag. Options other than the defaults have
+/// no counterpart under the build toolchain and are recorded as `unsupported`.
+///
+/// `zig translate-c` default-initializes struct fields with no option to
+/// disable it, while the package's executable does not by default, so the
+/// translation accepts a superset of the Zig code the native build accepts.
+fn foldTranslator(arena: Allocator, builder: *Build, acc: *CAccum, run: *Build.Step.Run) !struct { TranslateC, []const []const u8 } {
+    const argv = run.argv.items;
+    var c_argv: std.ArrayList([]const u8) = .empty;
+    var header: ?LazyPath = null;
+    var separated = false;
+    // `argv[0]` is the executable.
+    var i: usize = 1;
+    while (i < argv.len) : (i += 1) switch (argv[i]) {
+        .output_file, .output_file_dep => {},
+        .bytes => |arg| {
+            if (!separated) {
+                if (mem.eql(u8, arg, "--")) {
+                    separated = true;
+                } else if (!isTranslatorDefault(arg)) {
+                    try reportFlag(arena, acc, "a translate-c package option (`{s}`)", arg);
+                }
+                continue;
+            }
+            if (i + 1 < argv.len and argv[i + 1] == .decorated_directory) {
+                i += 1;
+                try foldTranslatorDirectory(arena, builder, acc, arg, argv[i].decorated_directory);
+                continue;
+            }
+            for (translator_ignored_args) |ignored| {
+                if (mem.eql(u8, arg, ignored)) break;
+            } else try c_argv.append(arena, arg);
+        },
+        .lazy_path => |path| {
+            if (separated and header == null and path.prefix.len == 0 and path.suffix.len == 0) {
+                header = path.lazy_path;
+            } else {
+                try reportFlag(arena, acc, "a translate-c package file option (`{s}`)", path.prefix);
+            }
+        },
+        .decorated_directory => |dir| {
+            if (separated or dir.lazy_path != .relative or dir.lazy_path.relative.base != .zig_lib) {
+                try reportFlag(arena, acc, "a translate-c package directory option (`{s}`)", dir.prefix);
+            }
+        },
+        else => try acc.unsupported.put(arena, "a translate-c package argument the importer cannot represent", {}),
+    };
+
+    const c_flags = try foldTranslateCFlags(arena, acc, try packageRoots(arena, builder), try nonEmptyFlags(arena, c_argv.items));
+    return .{ try translatedHeader(arena, acc, header), c_flags };
+}
+
+/// Fold a `Translator` directory argument and the `flag` preceding it.
+fn foldTranslatorDirectory(arena: Allocator, builder: *Build, acc: *CAccum, flag: []const u8, dir: Build.Step.Run.DecoratedLazyPath) !void {
+    if (dir.prefix.len == 0 and dir.suffix.len == 0) {
+        if (mem.eql(u8, flag, translator_resource_dir_flag)) return;
+        for (include_path_flags) |entry| {
+            const include_flag, const kind = entry;
+            if (!mem.eql(u8, flag, include_flag)) continue;
+            return appendIncludeDir(arena, builder, &acc.include_dirs, &acc.unsupported, kind, dir.lazy_path);
+        }
+    }
+    try reportFlag(arena, acc, "a translate-c package directory option (`{s}`)", flag);
 }
 
 /// A package's absolute root directory.
@@ -495,12 +639,7 @@ fn includeDirForInstall(source: []const u8, dest: []const u8) ?[]const u8 {
 /// is not one or its layout cannot be reproduced (a renamed or re-nested
 /// header, a generated or absolute source).
 fn emittedIncludeDirs(arena: Allocator, builder: *Build, lazy_path: LazyPath) !?[]const ResolvedPath {
-    const generated = switch (lazy_path) {
-        .generated => |generated| generated,
-        else => return null,
-    };
-    if (generated.up != 0 or generated.sub_path.len != 0) return null;
-    const step = builder.graph.generated_files.items[@backingInt(generated.index)];
+    const step = generatedStep(builder, lazy_path) orelse return null;
     if (step.tag != .write_file) return null;
     const write_file: *Build.Step.WriteFile = @fieldParentPtr("step", step);
 
@@ -623,19 +762,19 @@ fn collectCInto(arena: Allocator, builder: *Build, acc: *CAccum, module: *Build.
 /// A module's collected C information.
 const Collected = struct {
     cinfo: CInfo,
-    /// Null unless the module's root is a `b.addTranslateC` step.
+    /// Null unless the module's root is a translation.
     translate_c: ?TranslateC,
     translate_c_flags: []const []const u8,
 };
 
-/// Collect `module`'s C information; `translate` is the `b.addTranslateC` step
-/// rooting it, if any, and `root_source_error` is how `resolvePath` rejected its
-/// root source, if it did.
+/// Collect `module`'s C information; `translate` is the translation rooting it,
+/// if any, and `root_source_error` is how `resolvePath` rejected its root
+/// source, if it did.
 fn collectC(
     arena: Allocator,
     builder: *Build,
     module: *Build.Module,
-    translate: ?*Build.Step.TranslateC,
+    translate: ?Translation,
     root_source_error: ?ResolvePathError,
 ) !Collected {
     var acc: CAccum = .{};
@@ -649,7 +788,10 @@ fn collectC(
     }
     var translate_c: ?TranslateC = null;
     var translate_c_flags: []const []const u8 = &.{};
-    if (translate) |t| translate_c, translate_c_flags = try foldTranslateC(arena, builder, &acc, t);
+    if (translate) |t| translate_c, translate_c_flags = switch (t) {
+        .step => |step| try foldTranslateC(arena, builder, &acc, step),
+        .translator => |run| try foldTranslator(arena, builder, &acc, run),
+    };
     return .{
         .cinfo = .{
             .csrcs = acc.csrcs.values(),
@@ -668,7 +810,8 @@ fn collectC(
 /// `b.addModule`, as configuration-independent `Module` records.
 pub fn collectModules(arena: Allocator, builder: *Build) ![]const Module {
     var set: ModuleSet = .empty;
-    for (builder.modules.values()) |module| try collect(arena, &set, module);
+    var adopted: PackageMap = .empty;
+    for (builder.modules.values()) |module| try collect(arena, builder, &set, &adopted, builder.pkg_hash, module);
     var names = try nameModules(arena, &set);
 
     var result: std.ArrayList(Module) = .empty;
@@ -682,7 +825,7 @@ pub fn collectModules(arena: Allocator, builder: *Build) ![]const Module {
             error.OutOfMemory => |e| return e,
         };
         const generated_source = generatedOptionsSource(builder, module.root_source_file);
-        const translate = translateCStep(builder, module.root_source_file);
+        const translate = translation(builder, module.root_source_file);
         // A module with neither a Zig root source nor a generated one (options or
         // a translated-C header) is a pure C-library carrier (`b.addLibrary` over
         // C sources only); it is never a `zig_library` and reaches the graph only
@@ -693,18 +836,18 @@ pub fn collectModules(arena: Allocator, builder: *Build) ![]const Module {
         if (root_source == null and root_source_error == null and generated_source == null and translate == null) continue;
 
         var imports: std.ArrayList(Import) = .empty;
-        for (module.import_table.keys(), module.import_table.values()) |import_name, imported| {
+        if (!adopted.contains(module)) for (module.import_table.keys(), module.import_table.values()) |import_name, imported| {
             try imports.append(arena, .{
                 .name = import_name,
                 .module = names.get(imported).?,
-                .package = imported.owner.pkg_hash,
+                .package = modulePackage(&adopted, imported),
             });
-        }
+        };
         const collected = try collectC(arena, builder, module, translate, root_source_error);
         const c = collected.cinfo;
         try result.append(arena, .{
             .name = names.get(module).?,
-            .package = module.owner.pkg_hash,
+            .package = modulePackage(&adopted, module),
             .root_source = root_source,
             .generated_source = generated_source,
             .translate_c = collected.translate_c,
@@ -2011,6 +2154,158 @@ test "expands a compile step's emitted include tree to source include directorie
     try std.testing.expectEqual(1, incs.len);
     try std.testing.expectEqualStrings("include", incs[0].object.get("path").?.string);
     try std.testing.expectEqual(null, boxc_entry.get("unsupported"));
+}
+
+/// A stand-in for the translate-c package's builder, sharing `b`'s graph.
+fn stubTranslateCPackage(b: *Build) !*Build {
+    const tc = try Build.create(b.graph, b.root, &.{});
+    tc.pkg_hash = translator_package_prefix ++ "2.0.0-stub";
+    return tc;
+}
+
+/// The run arguments and module of translate-c 2.0.0's `Translator.initInner`
+/// (build/Translator.zig) for `header` under its default options, with
+/// `options` passed before the `--` separator.
+fn stubTranslator(tc: *Build, header: LazyPath, options: []const []const u8) struct { *Build.Module, *Build.Step.Run } {
+    const exe = tc.addExecutable(.{
+        .name = translator_exe_name,
+        .root_module = tc.createModule(.{ .root_source_file = tc.path("src/main.zig"), .target = tc.graph.host }),
+    });
+    const run = tc.addRunArtifact(exe);
+    const output_file = run.addPrefixedOutputFileArg("-o=", "box.zig");
+    const mod = tc.createModule(.{ .root_source_file = output_file, .target = tc.graph.host, .optimize = .debug, .link_libc = true });
+    run.addArg("-lc");
+    run.addPrefixedDirectoryArg("--zig-lib=", .zig_lib);
+    run.addArg("-fmodule-libs");
+    run.addArgs(options);
+    run.addArg("--");
+    run.addFileArg(header);
+    run.addArgs(&.{ "-MD", "-MV", "-MF" });
+    _ = run.addDepFileOutputArg("deps.d");
+    mod.addImport("c_builtins", tc.addModule("c_builtins", .{ .root_source_file = tc.path("lib/c_builtins.zig") }));
+    mod.addImport("helpers", tc.addModule("helpers", .{ .root_source_file = tc.path("lib/helpers.zig") }));
+    run.addArg("-w");
+    run.addArg("-resource-dir");
+    run.addDirectoryArg(tc.path(""));
+    return .{ mod, run };
+}
+
+test "emits a translate-c package translation as a module of the package using it" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const build_root = try std.fmt.allocPrint(arena, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+
+    const b = try createBuilder(arena, std.testing.io, .{ .array_hash_map = .empty, .allocator = arena }, "unused-zig", build_root, &.{});
+    const box_c, const run = stubTranslator(try stubTranslateCPackage(b), b.path("c/box.h"), &.{});
+    // `Translator.addIncludePath` and `Translator.defineCMacro`.
+    box_c.addIncludePath(b.path("c"));
+    run.addArg("-I");
+    run.addDirectoryArg(b.path("c"));
+    run.addArg("-DBOX_ENABLED=1");
+
+    const box = b.addModule("box", .{ .root_source_file = b.path("src/box.zig") });
+    box.addImport("c", box_c);
+
+    var out: std.Io.Writer.Allocating = .init(arena);
+    try emit(arena, &out.writer, b);
+
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, out.written(), .{});
+    const modules = parsed.object.get("modules").?.array.items;
+    // The translate-c package's own modules are not collected.
+    try std.testing.expectEqual(2, modules.len);
+
+    const box_entry = modules[0].object;
+    try std.testing.expectEqualStrings("box", box_entry.get("name").?.string);
+    const imports = box_entry.get("imports").?.array.items;
+    try std.testing.expectEqual(1, imports.len);
+    try std.testing.expectEqualStrings("c", imports[0].object.get("name").?.string);
+    try std.testing.expectEqualStrings("", imports[0].object.get("package").?.string);
+
+    const boxc_entry = modules[1].object;
+    try std.testing.expectEqualStrings(imports[0].object.get("module").?.string, boxc_entry.get("name").?.string);
+    try std.testing.expectEqualStrings("", boxc_entry.get("package").?.string);
+    try std.testing.expectEqual(std.json.Value.null, boxc_entry.get("root_source").?);
+    const translate_c = boxc_entry.get("translate_c").?.object;
+    try std.testing.expectEqualStrings("c/box.h", translate_c.get("header").?.string);
+    try std.testing.expectEqual(null, translate_c.get("package"));
+    const c_flags = boxc_entry.get("translate_c_flags").?.array.items;
+    try std.testing.expectEqual(1, c_flags.len);
+    try std.testing.expectEqualStrings("-DBOX_ENABLED=1", c_flags[0].string);
+    const incs = boxc_entry.get("include_dirs").?.array.items;
+    try std.testing.expectEqual(1, incs.len);
+    try std.testing.expectEqualStrings("c", incs[0].object.get("path").?.string);
+    try std.testing.expectEqual(true, boxc_entry.get("link_libc").?.bool);
+    try std.testing.expectEqual(0, boxc_entry.get("imports").?.array.items.len);
+    try std.testing.expectEqual(null, boxc_entry.get("unsupported"));
+}
+
+test "folds a C library linked into a translate-c package translation" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const build_root = try std.fmt.allocPrint(arena, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+
+    const b = try createBuilder(arena, std.testing.io, .{ .array_hash_map = .empty, .allocator = arena }, "unused-zig", build_root, &.{});
+    const carrier = b.createModule(.{ .target = b.graph.host, .link_libc = true });
+    carrier.addCSourceFile(.{ .file = b.path("lib/box.c") });
+    const lib = b.addLibrary(.{ .name = "box", .linkage = .static, .root_module = carrier });
+    lib.installHeader(b.path("lib/box.h"), "box.h");
+
+    const box_c, const run = stubTranslator(try stubTranslateCPackage(b), b.path("c/box_all.h"), &.{});
+    // `Translator.linkLibrary`.
+    box_c.linkLibrary(lib);
+    run.addArg("-I");
+    run.addDirectoryArg(lib.getEmittedIncludeTree());
+
+    const box = b.addModule("box", .{ .root_source_file = b.path("src/box.zig") });
+    box.addImport("c", box_c);
+
+    var out: std.Io.Writer.Allocating = .init(arena);
+    try emit(arena, &out.writer, b);
+
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, out.written(), .{});
+    const boxc_entry = parsed.object.get("modules").?.array.items[1].object;
+    const csrcs = boxc_entry.get("csrcs").?.array.items;
+    try std.testing.expectEqual(1, csrcs.len);
+    try std.testing.expectEqualStrings("lib/box.c", csrcs[0].object.get("path").?.string);
+    const incs = boxc_entry.get("include_dirs").?.array.items;
+    try std.testing.expectEqual(1, incs.len);
+    try std.testing.expectEqualStrings("lib", incs[0].object.get("path").?.string);
+    try std.testing.expectEqual(null, boxc_entry.get("unsupported"));
+}
+
+test "reports a translate-c package translation's non-default options" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const build_root = try std.fmt.allocPrint(arena, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+
+    const b = try createBuilder(arena, std.testing.io, .{ .array_hash_map = .empty, .allocator = arena }, "unused-zig", build_root, &.{});
+    const box_c, const run = stubTranslator(try stubTranslateCPackage(b), b.path("c/box.h"), &.{ "-O=ReleaseFast", "-fno-module-libs", "-fno-default-init" });
+    // `Translator.addFrameworkPath`.
+    run.addArg("-F");
+    run.addDirectoryArg(b.path("frameworks"));
+    const box = b.addModule("box", .{ .root_source_file = b.path("src/box.zig") });
+    box.addImport("c", box_c);
+
+    var out: std.Io.Writer.Allocating = .init(arena);
+    try emit(arena, &out.writer, b);
+
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, out.written(), .{});
+    const unsupported = parsed.object.get("modules").?.array.items[1].object.get("unsupported").?.array.items;
+    try std.testing.expectEqual(2, unsupported.len);
+    try std.testing.expect(std.mem.indexOf(u8, unsupported[0].string, "-fno-default-init") != null);
+    try std.testing.expect(std.mem.indexOf(u8, unsupported[1].string, "-F") != null);
 }
 
 fn testModule(name: []const u8, root: []const u8, link_libc: bool, imports: []const Import) Module {
