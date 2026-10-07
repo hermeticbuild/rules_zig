@@ -24,4 +24,10 @@ pub fn build(b: *std.Build) void {
 
     const tcpkg = b.addModule("tcpkg", .{ .root_source_file = b.path("src/tcpkg.zig") });
     tcpkg.addImport("c", translator.mod);
+    const wrapper: Translator = .init(b.dependency("translate_c", .{}), .{
+        .c_source_file = b.addWriteFiles().add("tcwrap.h", "#define TCPKG_WRAPPED 6\n"),
+        .target = target,
+        .optimize = optimize,
+    });
+    tcpkg.addImport("wrap", wrapper.mod);
 }

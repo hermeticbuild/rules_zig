@@ -83,6 +83,9 @@ pub fn main() void {
     // `tclib_value` is provided only by the `tclib` system library the
     // `Translator` links.
     std.debug.assert(tcpkg.libValue() == 17);
+    // `tcpkg` also translates a header its `build.zig` writes with
+    // `b.addWriteFiles()`, which the importer materializes.
+    std.debug.assert(tcpkg.wrapped == 6);
     // (5 + 7 + 42) + 9: `host` has sub-tree path dependencies `foo` and `bar`;
     // `foo` pulls its own nested `bar` (5) and the URL `leaf` (7), while `host`
     // links a distinct `bar` (9) — the two `bar`s stay separate by sub-path.
@@ -123,6 +126,8 @@ pub fn main() void {
     // translation links.
     std.debug.assert(translatec.libValue() == 24);
     std.debug.assert(std.mem.eql(u8, translatec.tag, "box$tag"));
+    // As for `tcpkg`, through `b.addTranslateC`.
+    std.debug.assert(translatec.wrapped == 5);
     // `emittedinc` translates an umbrella header that resolves its include
     // through a C library's `getEmittedIncludeTree()`, which the importer maps
     // back to the installed header's source directory.

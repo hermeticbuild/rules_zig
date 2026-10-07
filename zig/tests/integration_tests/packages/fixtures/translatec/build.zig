@@ -23,6 +23,12 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/translatec.zig"),
     });
     translatec.addImport("c", box_c.addModule("translatec-c"));
+    const wrapper_c = b.addTranslateC(.{
+        .root_source_file = b.addWriteFiles().add("wrapper.h", "#define BOX_WRAPPED 5\n"),
+        .target = target,
+        .optimize = optimize,
+    });
+    translatec.addImport("wrapper", wrapper_c.createModule());
     translatec.addCSourceFile(.{ .file = b.path("c/box.c") });
     translatec.addIncludePath(b.path("c"));
 }
