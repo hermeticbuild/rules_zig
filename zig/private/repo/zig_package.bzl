@@ -390,7 +390,8 @@ def _render_translate_c_library(repository_ctx, module, packages, owner, cells):
     becomes a `zig_c_library` that translates the header under the build
     toolchain. The header and each include directory are resolved like vendored
     C sources: an in-package path is referenced locally, an out-of-package one
-    (`package` set) across repositories. The C libraries the module links
+    (`package` set) across repositories. A header written at configure time is
+    materialized into the spoke. The C libraries the module links
     (`linkLibrary`) are rendered like vendored C; they and the module's other
     linked libraries are linked through the header `cc_library`.
 
@@ -403,7 +404,11 @@ def _render_translate_c_library(repository_ctx, module, packages, owner, cells):
     headers = name + ".chdr"
 
     prefix = _local_prefix(packages, owner, translate.get("package"))
-    if prefix == None:
+    generated_header = translate.get("generated_header")
+    if generated_header != None:
+        header = prefix + "_zig_generated/" + module["name"] + "/" + translate["header"]
+        repository_ctx.file(header, generated_header)
+    elif prefix == None:
         header = _cross_repo_label(repository_ctx, translate["package"], translate["header"])
     else:
         header = prefix + translate["header"]

@@ -164,8 +164,13 @@ pub const Import = struct {
 pub const TranslateC = struct {
     /// The package owning the translated header, as for `CSource.package`.
     header_package: []const u8,
-    /// The translated header's path within `header_package`.
+    /// The translated header's path within `header_package`, or within its
+    /// `b.addWriteFiles()` directory for a `generated_header`.
     header: []const u8,
+    /// The contents of a header written at configure time
+    /// (`b.addWriteFiles().add`), which has no file in the package tree; null
+    /// for a file-backed header.
+    generated_header: ?[]const u8 = null,
 };
 
 /// A package module's extracted, configuration-independent shape.
@@ -235,6 +240,34 @@ fn generatedOptionsSource(builder: *Build, lazy_path: ?LazyPath) ?[]const u8 {
     return options.contents.items;
 }
 
+/// The contents a `b.addWriteFiles()` step writes at `lazy_path` (`add`), or
+/// null for other paths. They are fully determined once `build` has run, so the
+/// importer materializes them as a static file.
+fn writtenFileContents(builder: *Build, lazy_path: ?LazyPath) ?[]const u8 {
+    const generated = switch (lazy_path orelse return null) {
+        .generated => |generated| generated,
+        else => return null,
+    };
+    if (generated.up != 0) return null;
+    const step = builder.graph.generated_files.items[@backingInt(generated.index)];
+    if (step.tag != .write_file) return null;
+    const write_file: *Build.Step.WriteFile = @fieldParentPtr("step", step);
+    const wc = &builder.graph.wip_configuration;
+    var contents: ?[]const u8 = null;
+    // A later write to the same path overwrites an earlier one.
+    for (write_file.embeds.items) |embed| {
+        if (!mem.eql(u8, wc.stringSlice(embed.sub_path), generated.sub_path)) continue;
+        contents = wc.string_bytes.items[embed.contents.index..][0..embed.contents.len];
+    }
+    return contents;
+}
+
+fn hasParentSegment(path: []const u8) bool {
+    var it = mem.splitScalar(u8, path, '/');
+    while (it.next()) |segment| if (mem.eql(u8, segment, "..")) return true;
+    return false;
+}
+
 /// If `lazy_path` is the generated output of a `b.addTranslateC` step, return
 /// that step; the module it roots is a translated-C module. Other paths return
 /// null.
@@ -286,10 +319,28 @@ fn foldTranslateC(arena: Allocator, builder: *Build, acc: *CAccum, translate: *B
     const argv = try arena.alloc([]const u8, translate.cc_argv.items.len);
     for (argv, translate.cc_argv.items) |*arg, string| arg.* = builder.graph.wip_configuration.stringSlice(string);
     const c_flags = try foldTranslateCFlags(arena, acc, try packageRoots(arena, builder), try nonEmptyFlags(arena, argv));
-    return .{ try translatedHeader(arena, acc, translate.source), c_flags };
+    return .{ try translatedHeader(arena, builder, acc, translate.source), c_flags };
 }
 
-fn translatedHeader(arena: Allocator, acc: *CAccum, source: ?LazyPath) !TranslateC {
+fn translatedHeader(arena: Allocator, builder: *Build, acc: *CAccum, source: ?LazyPath) !TranslateC {
+    if (writtenFileContents(builder, source)) |contents| {
+        const sub_path = source.?.generated.sub_path;
+        // The importer writes the header beneath a directory of its own, as a
+        // Starlark string.
+        if (std.fs.path.isAbsolute(sub_path) or hasParentSegment(sub_path)) {
+            try reportFlag(arena, acc, "a translate-c root header written at configure time outside its directory (`{s}`)", sub_path);
+            return .{ .header_package = "", .header = "" };
+        }
+        if (!std.unicode.utf8ValidateSlice(contents)) {
+            try reportFlag(arena, acc, "a translate-c root header written at configure time with non-UTF-8 contents (`{s}`)", sub_path);
+            return .{ .header_package = "", .header = "" };
+        }
+        return .{
+            .header_package = "",
+            .header = try normalizePath(arena, sub_path),
+            .generated_header = contents,
+        };
+    }
     const resolved_header = resolvePath(arena, source) catch |err| {
         try reportPath(arena, &acc.unsupported, source.?, err);
         return .{ .header_package = "", .header = "" };
@@ -379,7 +430,7 @@ fn foldTranslator(arena: Allocator, builder: *Build, acc: *CAccum, run: *Build.S
     };
 
     const c_flags = try foldTranslateCFlags(arena, acc, try packageRoots(arena, builder), try nonEmptyFlags(arena, c_argv.items));
-    return .{ try translatedHeader(arena, acc, header), c_flags };
+    return .{ try translatedHeader(arena, builder, acc, header), c_flags };
 }
 
 /// Fold a `Translator` directory argument and the `flag` preceding it.
@@ -964,7 +1015,8 @@ fn eqlStrList(a: []const []const u8, b: []const []const u8) bool {
 fn eqlTranslateC(a: ?TranslateC, b: ?TranslateC) bool {
     if (a == null or b == null) return (a == null) == (b == null);
     return mem.eql(u8, a.?.header_package, b.?.header_package) and
-        mem.eql(u8, a.?.header, b.?.header);
+        mem.eql(u8, a.?.header, b.?.header) and
+        eqlOptStr(a.?.generated_header, b.?.generated_header);
 }
 
 fn eqlImports(a: []const Import, b: []const Import) bool {
@@ -1018,6 +1070,10 @@ fn writeTranslateC(json: *std.json.Stringify, translate: TranslateC) !void {
     }
     try json.objectField("header");
     try json.write(translate.header);
+    if (translate.generated_header) |contents| {
+        try json.objectField("generated_header");
+        try json.write(contents);
+    }
     try json.endObject();
 }
 
@@ -2279,6 +2335,81 @@ test "folds a C library linked into a translate-c package translation" {
     try std.testing.expectEqual(1, incs.len);
     try std.testing.expectEqualStrings("lib", incs[0].object.get("path").?.string);
     try std.testing.expectEqual(null, boxc_entry.get("unsupported"));
+}
+
+test "emits a translated header written at configure time" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const build_root = try std.fmt.allocPrint(arena, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+
+    const b = try createBuilder(arena, std.testing.io, .{ .array_hash_map = .empty, .allocator = arena }, "unused-zig", build_root, &.{});
+    const wf = b.addWriteFiles();
+    const wrapper = wf.add("include/./wrapper.h", "#include <box.h>\n");
+
+    const box_c, _ = stubTranslator(try stubTranslateCPackage(b), wrapper, &.{});
+    const box = b.addModule("box", .{ .root_source_file = b.path("src/box.zig") });
+    box.addImport("c", box_c);
+    const step_c = b.addTranslateC(.{ .root_source_file = wrapper, .target = b.graph.host, .optimize = .debug });
+    _ = step_c.addModule("stepc");
+
+    var out: std.Io.Writer.Allocating = .init(arena);
+    try emit(arena, &out.writer, b);
+
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, out.written(), .{});
+    var translated: usize = 0;
+    for (parsed.object.get("modules").?.array.items) |m| {
+        const translate_c = (m.object.get("translate_c") orelse continue).object;
+        translated += 1;
+        try std.testing.expectEqualStrings("include/wrapper.h", translate_c.get("header").?.string);
+        try std.testing.expectEqualStrings("#include <box.h>\n", translate_c.get("generated_header").?.string);
+        try std.testing.expectEqual(null, m.object.get("unsupported"));
+    }
+    try std.testing.expectEqual(2, translated);
+}
+
+test "reports a translated header written at configure time outside its directory or as non-UTF-8" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const build_root = try std.fmt.allocPrint(arena, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+
+    const b = try createBuilder(arena, std.testing.io, .{ .array_hash_map = .empty, .allocator = arena }, "unused-zig", build_root, &.{});
+    const wf = b.addWriteFiles();
+    const headers = [_]struct { []const u8, []const u8, []const u8 }{
+        .{ "escaping", "../escaping.h", "a translate-c root header written at configure time outside its directory (`../escaping.h`)" },
+        .{ "absolute", "/abs.h", "a translate-c root header written at configure time outside its directory (`/abs.h`)" },
+        .{ "binary", "binary.h", "a translate-c root header written at configure time with non-UTF-8 contents (`binary.h`)" },
+    };
+    const contents = [_][]const u8{ "", "", "\xff\n" };
+    for (headers, contents) |header, bytes| {
+        const name, const sub_path, _ = header;
+        const step_c = b.addTranslateC(.{ .root_source_file = wf.add(sub_path, bytes), .target = b.graph.host, .optimize = .debug });
+        _ = step_c.addModule(name);
+    }
+
+    var out: std.Io.Writer.Allocating = .init(arena);
+    try emit(arena, &out.writer, b);
+
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, out.written(), .{});
+    const modules = parsed.object.get("modules").?.array.items;
+    try std.testing.expectEqual(headers.len, modules.len);
+    for (headers) |header| {
+        const name, _, const message = header;
+        const entry = for (modules) |m| {
+            if (mem.eql(u8, name, m.object.get("name").?.string)) break m.object;
+        } else return error.TestUnexpectedResult;
+        try std.testing.expectEqual(null, entry.get("translate_c").?.object.get("generated_header"));
+        const unsupported = entry.get("unsupported").?.array.items;
+        try std.testing.expectEqual(1, unsupported.len);
+        try std.testing.expectEqualStrings(message, unsupported[0].string);
+    }
 }
 
 test "reports a translate-c package translation's non-default options" {
