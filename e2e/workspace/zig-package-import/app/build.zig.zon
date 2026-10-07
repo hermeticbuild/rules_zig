@@ -28,6 +28,10 @@
             .url = "https://github.com/zigzap/zap/archive/refs/tags/v0.10.6.tar.gz",
             .hash = "zap-0.10.6-GoeB89aDJAAUufiqV7sUCudCoSSCle0E2fbw388bO1Ug",
         },
+        .bdwgc_zig = .{
+            .url = "https://github.com/bdwgc/bdwgc-zig/archive/a172686a2da78ad30f21f4ff1f11e9576a3ecf5f.tar.gz",
+            .hash = "bdwgc_zig-0.1.0-ffcEgYp7AABR90M8sophVIu5c4eoaaJIdP3nnWOkoJa2",
+        },
     },
     .paths = .{
         "build.zig.zon",

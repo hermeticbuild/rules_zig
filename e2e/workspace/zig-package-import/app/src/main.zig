@@ -5,6 +5,7 @@ const httpz = @import("httpz");
 const sqlite = @import("sqlite");
 const zlua = @import("zlua");
 const zap = @import("zap");
+const bdwgc = @import("bdwgc");
 
 // Parameters declared with the imported `clap` package, resolved at comptime.
 const params = clap.parseParamsComptime(
@@ -45,5 +46,11 @@ pub fn main(init: std.process.Init) !void {
     const url = "http://example.com:8080/path";
     const parsed = zap.fio.fio_url_parse(url, url.len);
     try out.print("zap parsed host length: {d}\n", .{parsed.host.len});
+    // `bdwgc` translates the collector's headers with translate-c's
+    // `Translator` and links the C library built by its `bdwgc` dependency;
+    // allocating through the translated bindings exercises both.
+    bdwgc.init();
+    const copy = try bdwgc.strdup("rules_zig");
+    try out.print("bdwgc collects: {s} {}\n", .{ copy, bdwgc.isHeapPointer(copy) });
     try out.flush();
 }
