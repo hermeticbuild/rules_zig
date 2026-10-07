@@ -50,12 +50,22 @@ fn panicExit(msg: []const u8, first_trace_addr: ?usize) noreturn {
     if (S.panicking) std.process.exit(1);
     S.panicking = true;
     std.debug.print("panic: {s}\n", .{msg});
+    if (mem.eql(u8, msg, cache_poisoned_panic)) std.debug.print(
+        "configurer: the package's build.zig poisons the cache at configure time (e.g. `findProgram`); " ++
+            "set a build option that avoids it through a `zig_packages.config` tag's `zig_flags`, " ++
+            "or patch the package with `zig_packages.patch`\n",
+        .{},
+    );
     std.debug.dumpCurrentStackTrace(.{
         .first_address = first_trace_addr,
         .allow_unsafe_unwind = true,
     });
     std.process.exit(1);
 }
+
+/// The message of `std.Build.Graph.poisonCache`'s panic under
+/// `cache_poison = .disallowed`.
+const cache_poisoned_panic = "cache poisoned";
 
 /// A configuration matrix cell parsed from the CLI.
 const Config = struct {
@@ -166,6 +176,10 @@ fn configureCell(
     config: Config,
 ) !CellResult {
     const builder = try module_graph.createBuilder(arena, io, environ_map, zig, build_root, dependencies.root_deps);
+
+    // Configure logic that poisons the cache (e.g. a configure-time
+    // `findProgram`) observes the host, so its result would not be hermetic.
+    builder.graph.cache_poison = .disallowed;
 
     for (system_integrations) |name| {
         try builder.graph.system_integration_options.put(arena, name, .user_enabled);
