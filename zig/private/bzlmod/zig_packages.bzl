@@ -20,6 +20,10 @@ def package_name_version(key):
     name, _, rest = key.partition("-")
     return name, rest[:-(_HASH_DIGEST_LEN + 1)]
 
+def _dep_edges(package):
+    """A resolved package's dependency edges as `[name, key, lazy]` lists."""
+    return [[name, key, name in package["lazy"]] for name, key in package["deps"].items()]
+
 from_file = tag_class(
     doc = "Resolve the Zig package dependencies declared in a `build.zig.zon` manifest.",
     attrs = {
@@ -81,14 +85,12 @@ def _zig_packages_impl(module_ctx):
         name, version = package_name_version(key)
 
         reached = {}
-        edges = []
         for dep_name, dep_key in package["deps"].items():
             if graph["packages"][dep_key]["url"] == None:
                 fail("Zig package '{}' has a path dependency '{}', which is not supported inside fetched packages.".format(
                     key,
                     dep_name,
                 ))
-            edges.append([dep_name, dep_key])
             reached[dep_key] = True
             for dep in reachable[dep_key]:
                 reached[dep] = True
@@ -100,9 +102,9 @@ def _zig_packages_impl(module_ctx):
             url = package["url"],
             zig_hash = key,
             deps = json.encode({
-                "root_deps": edges,
+                "root_deps": _dep_edges(package),
                 "packages": {
-                    dep: {"deps": [[n, k] for n, k in graph["packages"][dep]["deps"].items()]}
+                    dep: {"deps": _dep_edges(graph["packages"][dep])}
                     for dep in reached
                 },
             }),

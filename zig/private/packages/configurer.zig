@@ -3,6 +3,10 @@
 //!
 //! Usage: configurer --zig <zig> --build-root <dir>
 //!
+//! If `build.zig` requests unavailable lazy dependencies, the output is
+//! `{"needed_lazy_dependencies": ["<hash>", ...]}` instead, so the caller can
+//! reconfigure with them available.
+//!
 //! Modeled on `lib/compiler/configurer.zig` of Zig 0.17.0. The package's
 //! `build.zig` is provided as the `pkg` module and its dependency table as the
 //! `deps` module, both wired in at compile time.
@@ -18,8 +22,6 @@ pub const dependencies = @import("deps");
 pub fn main(init: process.Init) !void {
     const arena = init.arena.allocator();
     const io = init.io;
-
-    requireAvailableDependencies();
 
     const args = try init.minimal.args.toSlice(arena);
 
@@ -49,17 +51,18 @@ pub fn main(init: process.Init) !void {
 
     var stdout_buffer: [4096]u8 = undefined;
     var stdout = std.Io.File.stdout().writerStreaming(io, &stdout_buffer);
-    try module_graph.emit(arena, &stdout.interface, builder);
+    const needed = builder.graph.needed_lazy_dependencies.keys();
+    if (needed.len != 0) {
+        try writeNeededLazyDependencies(&stdout.interface, needed);
+    } else {
+        try module_graph.emit(arena, &stdout.interface, builder);
+    }
     try stdout.interface.flush();
 }
 
-/// The importer fetches the full dependency closure, so every dependency must be
-/// available: under Zig 0.17.0, `b.dependency` on an unavailable one emits the
-/// binary build configuration and exits 0.
-fn requireAvailableDependencies() void {
-    for (std.Build.package_map.values()) |entry| {
-        if (!entry.available) fatal("lazy dependency '{s}' is unavailable", .{entry.hash});
-    }
+fn writeNeededLazyDependencies(writer: *std.Io.Writer, hashes: []const []const u8) !void {
+    var json: std.json.Stringify = .{ .writer = writer };
+    try json.write(.{ .needed_lazy_dependencies = hashes });
 }
 
 fn nextArg(args: []const [:0]const u8, i: *usize) []const u8 {

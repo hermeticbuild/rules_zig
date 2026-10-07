@@ -27,7 +27,10 @@ ATTRS = {
     "zig_hash": attr.string(doc = "The expected Zig package hash. May be omitted to obtain the hash to pin from a fetch cycle."),
     "deps": attr.string(
         default = "{\"root_deps\": [], \"packages\": {}}",
-        doc = "JSON `{root_deps, packages}` describing the `@dependencies` closure used to configure the package.",
+        doc = """\
+JSON `{root_deps, packages}` describing the `@dependencies` closure used
+to configure the package; each dependency edge is `[name, key, lazy]`.
+""",
     ),
     "dep_build_files": attr.string_keyed_label_dict(
         doc = "Map from each dependency package hash to its `build.zig`, used to wire `@dependencies`.",
@@ -150,11 +153,29 @@ def _zig_string(value):
 def _edge_lines(edges, indent):
     return [
         "{}.{{ {}, {} }},".format(indent, _zig_string(name), _zig_string(key))
-        for name, key in edges
+        for name, key, _lazy in edges
     ]
 
-def _dependencies_source(repository_ctx, deps):
-    """Render the `@dependencies` module that `b.dependency` consumes."""
+def _available(deps, requested):
+    """The packages reachable through eager or `requested` lazy dependency edges."""
+    packages = deps["packages"]
+    available = {}
+    frontier = deps["root_deps"]
+    for _ in range(len(packages)):
+        reached = []
+        for _name, key, lazy in frontier:
+            if key not in available and (not lazy or key in requested):
+                available[key] = True
+                reached.extend(packages[key]["deps"])
+        frontier = reached
+    return available
+
+def _dependencies_source(repository_ctx, deps, available):
+    """Render the `@dependencies` module that `b.dependency` consumes.
+
+    A package outside `available` is an unrequested lazy dependency; it is
+    declared unavailable, so its spoke is not materialized.
+    """
     packages = deps["packages"]
     if not packages:
         return _EMPTY_DEPS
@@ -162,8 +183,12 @@ def _dependencies_source(repository_ctx, deps):
     lines = ["pub const packages = struct {"]
     for key in sorted(packages):
         package = packages[key]
-        build_zig = repository_ctx.path(repository_ctx.attr.dep_build_files[key])
         lines.append("    pub const @\"{}\" = struct {{".format(key))
+        if key not in available:
+            lines.append("        pub const available = false;")
+            lines.append("    };")
+            continue
+        build_zig = repository_ctx.path(repository_ctx.attr.dep_build_files[key])
         lines.append("        pub const build_root = {};".format(_zig_string(str(build_zig.dirname))))
         lines.append("        pub const build_zig = @import(\"{}\");".format(key))
         lines.append("        pub const deps: []const struct { []const u8, []const u8 } = &.{")
@@ -177,11 +202,11 @@ def _dependencies_source(repository_ctx, deps):
     lines.append("};")
     return "\n".join(lines) + "\n"
 
-def _configure(repository_ctx, zig, build_zig, cache):
+def _run_configurer(repository_ctx, zig, build_zig, cache, deps, available):
     """Compile the configurer against the package's `build.zig` and run it.
 
     Returns:
-      the package's module-graph JSON.
+      the configurer's `exec_result`.
     """
     configurer = repository_ctx.path(Label("//zig/private/packages:configurer.zig"))
 
@@ -191,11 +216,9 @@ def _configure(repository_ctx, zig, build_zig, cache):
     # so editing the configurer re-runs configuration.
     repository_ctx.watch(Label("//zig/private/packages:module_graph.zig"))
 
-    deps = json.decode(repository_ctx.attr.deps)
+    repository_ctx.file("_configure/deps.zig", _dependencies_source(repository_ctx, deps, available))
 
-    repository_ctx.file("_configure/deps.zig", _dependencies_source(repository_ctx, deps))
-
-    keys = sorted(deps["packages"])
+    keys = sorted(available)
 
     args = [zig, "build-exe", "--dep", "pkg", "--dep", "deps", "-Mroot=" + str(configurer), "-Mpkg=" + str(build_zig)]
     for key in keys:
@@ -229,7 +252,37 @@ def _configure(repository_ctx, zig, build_zig, cache):
     ])
     if configured.return_code != 0:
         fail("Failed to configure the Zig package '{}':\n{}".format(repository_ctx.attr.url, configured.stderr))
-    return configured.stdout
+    return configured
+
+def _configure(repository_ctx, zig, build_zig, cache):
+    """Configure the package with only the lazy dependencies it requests, as `zig build` does.
+
+    Returns:
+      the package's module-graph JSON.
+    """
+    deps = json.decode(repository_ctx.attr.deps)
+    edges = deps["root_deps"] + [edge for package in deps["packages"].values() for edge in package["deps"]]
+    lazy = {key: None for _name, key, is_lazy in edges if is_lazy}
+    requested = {}
+    for _ in range(len(lazy) + 1):
+        configured = _run_configurer(repository_ctx, zig, build_zig, cache, deps, _available(deps, requested))
+        result = json.decode(configured.stdout, default = None)
+        if result != None and "needed_lazy_dependencies" not in result:
+            return configured.stdout
+
+        # `b.dependency` on an unavailable lazy dependency ends the configuration
+        # early, emitting Zig's binary build configuration, which is not parsed
+        # here, so make every lazy dependency available.
+        needed = lazy.keys() if result == None else result["needed_lazy_dependencies"]
+        new = [key for key in needed if key not in requested]
+        if not new:
+            break
+        requested.update({key: None for key in new})
+    fail("Failed to configure the Zig package '{}': with every requested lazy dependency available, {}:\n{}".format(
+        repository_ctx.attr.url,
+        "its output is not JSON" if result == None else "it still requests lazy dependencies",
+        configured.stderr,
+    ))
 
 def _zig_package_impl(repository_ctx):
     zig = zig_path(repository_ctx)
