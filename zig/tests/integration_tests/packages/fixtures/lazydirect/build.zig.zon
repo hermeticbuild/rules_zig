@@ -1,0 +1,22 @@
+.{
+    .name = .lazydirect,
+    .version = "0.0.0",
+    .fingerprint = 0xb6fcb5226d3e91c4,
+    .dependencies = .{
+        .lazyleaf = .{
+            .url = "__LAZYLEAF_URL__",
+            .hash = "__LAZYLEAF_HASH__",
+            .lazy = true,
+        },
+        .lazyunused = .{
+            .url = "__LAZYUNUSED_URL__",
+            .hash = "__LAZYUNUSED_HASH__",
+            .lazy = true,
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
