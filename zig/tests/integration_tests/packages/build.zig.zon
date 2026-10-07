@@ -79,6 +79,10 @@
             .url = "__TCVARDEP_URL__",
             .hash = "__TCVARDEP_HASH__",
         },
+        .tcpkg = .{
+            .url = "__TCPKG_URL__",
+            .hash = "__TCPKG_HASH__",
+        },
         .host = .{
             .url = "__HOST_URL__",
             .hash = "__HOST_HASH__",

@@ -54,6 +54,10 @@ zig_packages.system_library(
     lib = "//:boxlib_impl",
 )
 zig_packages.system_library(
+    name = "tclib",
+    lib = "//:tclib_impl",
+)
+zig_packages.system_library(
     name = "posixonly",
     lib = "//:posixonly_impl",
 )

@@ -1,0 +1,19 @@
+.{
+    .name = .tcpkg,
+    .version = "0.0.0",
+    .fingerprint = 0xe2cdc7386a06e9ab,
+    .dependencies = .{
+        .translate_c = .{
+            .url = "__TRANSLATE_C_URL__",
+            .hash = "__TRANSLATE_C_HASH__",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "c",
+        "include",
+        "lib",
+        "src",
+    },
+}

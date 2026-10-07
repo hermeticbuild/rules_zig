@@ -84,6 +84,13 @@ cc_library(
     visibility = ["//visibility:public"],
 )
 
+# Provides the `tclib` system library the `tcpkg` package's `Translator` links.
+cc_library(
+    name = "tclib_impl",
+    srcs = ["tclib.c"],
+    visibility = ["//visibility:public"],
+)
+
 # The configuration matrix drives `cvardep`'s root source, C source, and
 # include directory per optimize mode, pushing each into a `select` overlay on
 # its extracted module graph.
@@ -99,6 +106,14 @@ diff_test(
     name = "tcvardep_manifest_test",
     file1 = "tcvardep_manifest.expected.json",
     file2 = zig_package_file("tcvardep", "module_manifest.json"),
+)
+
+# The translate-c package's `Translator` module belongs to `tcpkg`, which uses
+# it, under a synthesized name; the package's own modules are not collected.
+diff_test(
+    name = "tcpkg_manifest_test",
+    file1 = "tcpkg_manifest.expected.json",
+    file2 = zig_package_file("tcpkg", "module_manifest.json"),
 )
 
 # Provide the system libraries the `tgtdep` package links under each cell of

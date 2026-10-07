@@ -19,6 +19,7 @@ const optdep = @import("optdep");
 const cfgdep = @import("cfgdep");
 const cvardep = @import("cvardep");
 const tcvardep = @import("tcvardep");
+const tcpkg = @import("tcpkg");
 const host = @import("host");
 const greeter = @import("greeter");
 const genopts = @import("genopts");
@@ -76,6 +77,12 @@ pub fn main() void {
     // The `configure` matrix selects `tcvardep`'s translate-c define per
     // optimize mode.
     std.debug.assert(tcvardep.tcvar_value == if (builtin.mode == .debug) 33 else 44);
+    // 40 + 2: `tcpkg` translates its header through the translate-c package,
+    // whose include path, define, and linked C library each contribute.
+    std.debug.assert(tcpkg.value() == 42);
+    // `tclib_value` is provided only by the `tclib` system library the
+    // `Translator` links.
+    std.debug.assert(tcpkg.libValue() == 17);
     // (5 + 7 + 42) + 9: `host` has sub-tree path dependencies `foo` and `bar`;
     // `foo` pulls its own nested `bar` (5) and the URL `leaf` (7), while `host`
     // links a distinct `bar` (9) — the two `bar`s stay separate by sub-path.

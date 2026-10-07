@@ -1,0 +1,12 @@
+.{
+    .name = .translate_c,
+    .version = "2.0.0",
+    .fingerprint = 0x1c84f64585a0bcc1,
+    .paths = .{
+        "build",
+        "build.zig",
+        "build.zig.zon",
+        "lib",
+        "src",
+    },
+}
