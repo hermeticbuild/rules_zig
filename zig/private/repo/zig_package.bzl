@@ -798,6 +798,11 @@ def _dependencies_source(repository_ctx, deps, available):
     lines.append("};")
     return "\n".join(lines) + "\n"
 
+def _build_zig_dep_args(edges, keys):
+    # A `build.zig` may `@import` a direct dependency's `build.zig` by the
+    # dependency's name, as under `zig build`.
+    return [arg for name, key, _lazy in edges if key in keys for arg in ("--dep", name + "=" + key)]
+
 def _run_configurer(repository_ctx, zig, build_zig, cache, deps, available):
     """Compile the configurer against the package's `build.zig` and run it.
 
@@ -827,7 +832,9 @@ def _run_configurer(repository_ctx, zig, build_zig, cache, deps, available):
     # its `@dependencies` entry is files-only.
     keys = [key for key in sorted(available) if not deps["packages"][key].get("naked")]
 
-    args = [zig, "build-exe", "--dep", "pkg", "--dep", "deps", "-Mroot=" + str(configurer), "-Mpkg=" + str(build_zig)]
+    args = [zig, "build-exe", "--dep", "pkg", "--dep", "deps", "-Mroot=" + str(configurer)]
+    args.extend(_build_zig_dep_args(deps["root_deps"], keys))
+    args.append("-Mpkg=" + str(build_zig))
     for key in keys:
         args.extend(["--dep", key])
     args.append("-Mdeps=" + str(repository_ctx.path("_configure/deps.zig")))
@@ -841,6 +848,7 @@ def _run_configurer(repository_ctx, zig, build_zig, cache, deps, available):
         # forbids watching a path under the repository's own working directory.
         if package["path"] == None:
             repository_ctx.watch(dep_build_zig)
+        args.extend(_build_zig_dep_args(package["deps"], keys))
         args.append("-M{}={}".format(key, dep_build_zig))
     args.extend([
         "--cache-dir",
