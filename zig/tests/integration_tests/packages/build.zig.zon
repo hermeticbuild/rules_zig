@@ -137,6 +137,9 @@
         // Uncommented by the negative test to assert that linking a system
         // library on a target-less module is rejected with guidance.
         // .syslibnotarget = .{ .url = "__SYSLIBNOTARGET_URL__", .hash = "__SYSLIBNOTARGET_HASH__" },
+        // Uncommented by the negative test to assert that configure logic
+        // poisoning the cache is rejected.
+        // .findprogram = .{ .url = "__FINDPROGRAM_URL__", .hash = "__FINDPROGRAM_HASH__" },
     },
     .paths = .{
         "build.zig.zon",

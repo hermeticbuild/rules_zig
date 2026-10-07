@@ -1,0 +1,10 @@
+.{
+    .name = .findprogram,
+    .version = "0.0.0",
+    .fingerprint = 0x31959ea05e2a7c41,
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
