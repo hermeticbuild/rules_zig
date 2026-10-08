@@ -111,6 +111,36 @@ pub const BitContext = struct {
         return true;
     }
 
+    pub fn writeWorkspaceFile(self: BitContext, sub_path: []const u8, content: []const u8) !void {
+        var workspace = try self.openWorkspace();
+        defer closeWorkspaceDir(&workspace);
+        workspace.deleteFile(std.testing.io, sub_path) catch {};
+        var file = try workspace.createFile(std.testing.io, sub_path, .{});
+        defer file.close(std.testing.io);
+        var buffer: [4096]u8 = undefined;
+        var writer = file.writer(std.testing.io, &buffer);
+        try writer.interface.writeAll(content);
+        try writer.interface.flush();
+    }
+
+    /// Replace each `needle` with its `replacement` in a workspace file, writing
+    /// a fresh file so the original source (a symlink in the test sandbox) is
+    /// never modified.
+    pub fn patchWorkspaceFile(
+        self: BitContext,
+        sub_path: []const u8,
+        replacements: []const [2][]const u8,
+    ) !void {
+        var content = try self.readWorkspaceFileAlloc(sub_path, 4 * 1024 * 1024);
+        for (replacements) |replacement| {
+            const patched = try std.mem.replaceOwned(u8, std.testing.allocator, content, replacement[0], replacement[1]);
+            std.testing.allocator.free(content);
+            content = patched;
+        }
+        defer std.testing.allocator.free(content);
+        try self.writeWorkspaceFile(sub_path, content);
+    }
+
     pub const BazelResult = struct {
         success: bool,
         term: Term,

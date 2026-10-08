@@ -1,0 +1,10 @@
+.{
+    .name = .leaf,
+    .version = "0.0.0",
+    .fingerprint = 0xc69f00e73c05ec58,
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

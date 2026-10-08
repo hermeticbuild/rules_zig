@@ -1,0 +1,14 @@
+# Common configuration.
+import %workspace%/../../../../.bazelrc.common
+
+# Zig build mode flag aliases. See further explanation in that file.
+import %workspace%/../../../../.bazelrc.flags
+
+# Remote cache configuration.
+import %workspace%/../../../../.bazelrc.remote
+
+# Build metadata
+import %workspace%/../.bazelrc.meta
+
+# Load any settings specific to the current user.
+try-import %workspace%/../../../../.bazelrc.ic.user
