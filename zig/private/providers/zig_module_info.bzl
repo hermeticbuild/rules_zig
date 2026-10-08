@@ -33,7 +33,9 @@ def _zig_module_context(name, canonical_name, main, deps, cdeps, compilation_con
         struct(name = import_names.get(dep.canonical_name, dep.name), canonical_name = dep.canonical_name)
         for dep in deps
     ]
-    if any([need_translate_c(dep) for dep in cdeps]):
+
+    # An explicit `c` import takes precedence over the automatic `c` module.
+    if any([need_translate_c(dep) for dep in cdeps]) and not any([mapping.name == "c" for mapping in mappings]):
         # Global C module has a predefined name and canonical name since it is not defined yet here.
         mappings.append(struct(name = "c", canonical_name = "c"))
     return struct(

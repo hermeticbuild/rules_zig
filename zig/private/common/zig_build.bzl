@@ -245,6 +245,15 @@ def _executable_extension(os):
 def _object_extension(os):
     return ".obj" if os == "windows" else ".o"
 
+def _references_auto_c(root_module):
+    """Whether any module imports the automatic `c` module; if none does, skip generating it."""
+    contexts = [root_module.module_context] + root_module.transitive_module_contexts.to_list()
+    for context in contexts:
+        for mapping in context.dependency_mappings:
+            if mapping.name == "c" and mapping.canonical_name == "c":
+                return True
+    return False
+
 def zig_build_impl(ctx, *, kind):
     """Common implementation for Zig build rules.
 
@@ -465,7 +474,7 @@ def zig_build_impl(ctx, *, kind):
     )
 
     c_module = None
-    if need_translate_c(root_module.cc_info):
+    if need_translate_c(root_module.cc_info) and _references_auto_c(root_module):
         c_module = zig_translate_c(
             ctx = ctx,
             name = "c",

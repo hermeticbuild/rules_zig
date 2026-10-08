@@ -1,0 +1,1 @@
+char other_thing();
