@@ -1,15 +1,68 @@
 load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_library")
+load("@zig_deps//:defs.bzl", "zig_package_deps", "zig_package_file")
 
-# A manual import of the fetched package: the `@leaf` repository exposes the
-# package's verified and extracted files, target definitions live here.
+# Manual imports of the fetched packages: one `zig_library` per package in the
+# resolved graph, with `deps` derived from the exposed dependency edges (a
+# dependency's target here is named after the name it is imported under).
+[
+    zig_library(
+        name = pkg,
+        import_name = pkg,
+        main = zig_package_file(
+            pkg,
+            "src/" + pkg + ".zig",
+            version = "0.0.0",
+        ),
+        deps = [":" + dep for dep in zig_package_deps(
+            pkg,
+            version = "0.0.0",
+        )],
+    )
+    for pkg in [
+        "leaf",
+        "base",
+        "bottom",
+        "left",
+        "right",
+        "top",
+    ]
+]
+
+# Several copies of the package `lib` coexist: v1 and a fork sharing its name
+# and version, addressed by the manifest's dependency names, and v2, addressed
+# by version.
 zig_library(
-    name = "leaf",
-    import_name = "leaf",
-    main = "@leaf//:src/leaf.zig",
+    name = "libv1",
+    import_name = "lib",
+    main = zig_package_file("lib", "src/lib.zig"),
+)
+
+zig_library(
+    name = "libfork",
+    import_name = "libfork",
+    main = zig_package_file("libfork", "src/lib.zig"),
+)
+
+zig_library(
+    name = "libv2",
+    import_name = "lib",
+    main = zig_package_file(
+        "lib",
+        "src/lib.zig",
+        version = "2.0.0",
+    ),
 )
 
 zig_binary(
     name = "binary",
+    import_names = {":libv2": "lib2"},
     main = "main.zig",
-    deps = [":leaf"],
+    deps = [
+        ":bottom",
+        ":leaf",
+        ":libfork",
+        ":libv1",
+        ":libv2",
+        ":top",
+    ],
 )

@@ -176,6 +176,10 @@ Generated API documentation for the provided rules is available in
 Generated API documentation for the module extensions is available in
 [`./docs/extensions.md`](./docs/extensions.md).
 
+Generated API documentation for the experimental `zig_packages` module
+extension, which imports Zig package dependencies, is available in
+[`./docs/packages.md`](./docs/packages.md).
+
 Generated API documentation for the toolchain rules is available in
 [`./docs/toolchains.md`](./docs/toolchains.md).
 

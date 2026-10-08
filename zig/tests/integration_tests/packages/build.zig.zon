@@ -1,0 +1,34 @@
+.{
+    .name = .packages,
+    .version = "0.0.0",
+    .fingerprint = 0x9bb5c0a73538e72b,
+    .dependencies = .{
+        .leaf = .{
+            .url = "__LEAF_URL__",
+            .hash = "__LEAF_HASH__",
+        },
+        .bottom = .{
+            .url = "__BOTTOM_URL__",
+            .hash = "__BOTTOM_HASH__",
+        },
+        .top = .{
+            .url = "__TOP_URL__",
+            .hash = "__TOP_HASH__",
+        },
+        .lib = .{
+            .url = "__LIBV1_URL__",
+            .hash = "__LIBV1_HASH__",
+        },
+        .libfork = .{
+            .url = "__LIBFORK_URL__",
+            .hash = "__LIBFORK_HASH__",
+        },
+        .lib2 = .{
+            .url = "__LIBV2_URL__",
+            .hash = "__LIBV2_HASH__",
+        },
+    },
+    .paths = .{
+        "build.zig.zon",
+    },
+}

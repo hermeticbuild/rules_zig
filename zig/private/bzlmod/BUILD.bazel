@@ -12,6 +12,17 @@ bzl_library(
 )
 
 bzl_library(
+    name = "zig_packages",
+    srcs = ["zig_packages.bzl"],
+    visibility = ["//zig:__subpackages__"],
+    deps = [
+        "//zig/private/repo:zig_deps_hub",
+        "//zig/private/repo:zig_package",
+        "@zig_host_toolchain//:toolchain",
+    ],
+)
+
+bzl_library(
     name = "cc_common_link",
     srcs = ["cc_common_link.bzl"],
     visibility = ["//zig:__subpackages__"],
@@ -24,6 +35,7 @@ filegroup(
         ":BUILD.bazel",
         ":cc_common_link.bzl",
         ":zig.bzl",
+        ":zig_packages.bzl",
     ],
     visibility = ["//zig/private:__pkg__"],
 )

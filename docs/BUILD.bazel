@@ -44,6 +44,12 @@ stardoc_with_diff_test(
     target_compatible_with = _TARGET_COMPATIBLE_WITH,
 )
 
+stardoc_with_diff_test(
+    name = "packages",
+    bzl_library_target = "//zig:packages",
+    target_compatible_with = _TARGET_COMPATIBLE_WITH,
+)
+
 update_docs(
     name = "update",
     target_compatible_with = _TARGET_COMPATIBLE_WITH,

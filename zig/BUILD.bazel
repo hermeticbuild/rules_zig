@@ -6,6 +6,7 @@ exports_files(
     [
         "defs.bzl",
         "extensions.bzl",
+        "packages.bzl",
         "toolchain.bzl",
     ],
     visibility = ["//docs:__pkg__"],
@@ -75,6 +76,13 @@ bzl_library(
     ],
 )
 
+bzl_library(
+    name = "packages",
+    srcs = ["packages.bzl"],
+    visibility = ["//visibility:public"],
+    deps = ["//zig/private/bzlmod:zig_packages"],
+)
+
 # Execute `bazel run //util:update_filegroups` to update this target.
 filegroup(
     name = "all_files",
@@ -82,6 +90,7 @@ filegroup(
         ":BUILD.bazel",
         ":defs.bzl",
         ":extensions.bzl",
+        ":packages.bzl",
         ":toolchain.bzl",
         "//zig/config:all_files",
         "//zig/lib:all_files",

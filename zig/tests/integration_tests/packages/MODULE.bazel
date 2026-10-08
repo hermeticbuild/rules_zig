@@ -19,12 +19,6 @@ buildbuddy = use_extension(
 )
 use_repo(buildbuddy, "buildbuddy_toolchain")
 
-zig_package = use_repo_rule("@rules_zig//zig/private/repo:zig_package.bzl", "zig_package")
-
-# The URL and hash placeholders are filled in by the test runner after it
-# packs the fixture into a tarball.
-zig_package(
-    name = "leaf",
-    url = "__LEAF_URL__",
-    zig_hash = "__LEAF_HASH__",
-)
+zig_packages = use_extension("@rules_zig//zig:packages.bzl", "zig_packages")
+zig_packages.from_file(build_zig_zon = "//:build.zig.zon")
+use_repo(zig_packages, "zig_deps")
