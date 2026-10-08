@@ -302,6 +302,7 @@ def _toolchain_extension(module_ctx):
     toolchain_names = []
     toolchain_labels = []
     toolchain_zig_versions = []
+    toolchain_exec_platforms = []
     toolchain_exec_lengths = []
     toolchain_exec_constraints = []
     toolchain_target_compatible_lengths = []
@@ -332,6 +333,7 @@ def _toolchain_extension(module_ctx):
                 toolchain_names.append(name)
                 toolchain_labels.append("@{}//:zig_toolchain".format(repo_name))
                 toolchain_zig_versions.append(zig_version)
+                toolchain_exec_platforms.append(platform)
                 toolchain_exec_lengths.append(len(compatible_with))
                 toolchain_exec_constraints.extend(compatible_with)
                 toolchain_target_compatible_lengths.append(len(variant.extra_target_compatible_with))
@@ -344,6 +346,7 @@ def _toolchain_extension(module_ctx):
         names = toolchain_names,
         labels = toolchain_labels,
         zig_versions = toolchain_zig_versions,
+        exec_platforms = toolchain_exec_platforms,
         exec_lengths = toolchain_exec_lengths,
         exec_constraints = toolchain_exec_constraints,
         target_compatible_lengths = toolchain_target_compatible_lengths,
