@@ -1,9 +1,17 @@
 module(name = "packages")
 
+bazel_dep(name = "bazel_skylib", version = "1.9.0")
 bazel_dep(name = "rules_zig", version = "0.0.0")
+bazel_dep(name = "child_module", version = "0.0.0")
+
 local_path_override(
     module_name = "rules_zig",
     path = "../../../..",
+)
+
+local_path_override(
+    module_name = "child_module",
+    path = "child",
 )
 
 zig = use_extension("@rules_zig//zig:extensions.bzl", "zig")

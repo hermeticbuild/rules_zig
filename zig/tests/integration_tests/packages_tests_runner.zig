@@ -12,6 +12,9 @@ const Patch = struct {
 const Package = struct {
     name: []const u8,
     patches: []const Patch = &.{},
+    // `{target, sym_link_sub_path}`: a symlink to create inside the fixture
+    // before packing, since git/jj checkouts do not preserve one.
+    symlink: ?[2][]const u8 = null,
 };
 
 // Packed in topological order (dependencies first).
@@ -25,6 +28,12 @@ const packages = [_]Package{
     .{ .name = "libv1" },
     .{ .name = "libfork" },
     .{ .name = "libv2" },
+    .{ .name = "multi" },
+    .{ .name = "pruned" },
+    .{ .name = "symlinked", .symlink = .{ "real.zig", "src/aliased.zig" } },
+    .{ .name = "lazyleaf" },
+    .{ .name = "lazyunused" },
+    .{ .name = "lazyhost", .patches = &.{.{ .deps = &.{ "lazyleaf", "lazyunused" } }} },
 };
 
 const Consumer = struct {
@@ -34,7 +43,8 @@ const Consumer = struct {
 
 // Manifests that resolve dependencies via `zig_packages.from_file`.
 const consumers = [_]Consumer{
-    .{ .manifest = "build.zig.zon", .deps = &.{ "leaf", "bottom", "top", "libv1", "libfork", "libv2" } },
+    .{ .manifest = "build.zig.zon", .deps = &.{ "leaf", "bottom", "top", "libv1", "libfork", "libv2", "multi", "pruned", "symlinked", "lazyhost" } },
+    .{ .manifest = "child/build.zig.zon", .deps = &.{ "leaf", "libv2" } },
 };
 
 test "Zig packages are imported from file:// tarballs" {
@@ -52,6 +62,11 @@ test "Zig packages are imported from file:// tarballs" {
         for (pkg.patches) |patch| {
             const manifest = try std.fmt.allocPrint(allocator, "fixtures/{s}/{s}", .{ pkg.name, patch.manifest });
             try ctx.patchWorkspaceFile(manifest, try depReplacements(allocator, patch.deps, &urls, &hashes));
+        }
+
+        if (pkg.symlink) |link| {
+            const link_path = try std.fmt.allocPrint(allocator, "fixtures/{s}/{s}", .{ pkg.name, link[1] });
+            try ctx.symLinkWorkspaceFile(link[0], link_path);
         }
 
         const dir = try std.fmt.allocPrint(allocator, "{s}/fixtures/{s}", .{ ctx.workspace_path, pkg.name });
@@ -79,6 +94,14 @@ test "Zig packages are imported from file:// tarballs" {
     });
     defer result.deinit();
     try std.testing.expect(result.success);
+
+    // The extracted module graph is exposed per package; assert it against the
+    // golden manifests.
+    const manifest_result = try ctx.exec_bazel(.{
+        .argv = &[_][]const u8{ "test", "//:multi_manifest_test" },
+    });
+    defer manifest_result.deinit();
+    try std.testing.expect(manifest_result.success);
 }
 
 fn depReplacements(

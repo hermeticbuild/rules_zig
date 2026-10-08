@@ -29,17 +29,15 @@ _package_name_version_test = unittest.make(_package_name_version_test_impl)
 _LIB_A = "lib-1.0.0-AAAA"
 _LIB_B = "lib-1.0.0-BBBB"
 _LIB_2 = "lib-2.0.0-CCCC"
-_APP = "app-0.1.0-DDDD"
 
 def _index():
     return index_packages(
         {
-            _APP: {"name": "app", "version": "0.1.0", "deps": {"lib": _LIB_B, "lib2": _LIB_2}},
-            _LIB_A: {"name": "lib", "version": "1.0.0", "deps": {}},
-            _LIB_B: {"name": "lib", "version": "1.0.0", "deps": {}},
-            _LIB_2: {"name": "lib", "version": "2.0.0", "deps": {}},
+            _LIB_A: {"name": "lib", "version": "1.0.0"},
+            _LIB_B: {"name": "lib", "version": "1.0.0"},
+            _LIB_2: {"name": "lib", "version": "2.0.0"},
         },
-        {key: "@" + key + "//:files" for key in [_APP, _LIB_A, _LIB_B, _LIB_2]},
+        {key: "@" + key + "//:files" for key in [_LIB_A, _LIB_B, _LIB_2]},
     )
 
 def _index_packages_test_impl(ctx):
@@ -50,7 +48,6 @@ def _index_packages_test_impl(ctx):
     # Packages sharing a name and version stay separate entries.
     asserts.equals(env, "@" + _LIB_A + "//:files", packages[_LIB_A]["files"])
     asserts.equals(env, "@" + _LIB_B + "//:files", packages[_LIB_B]["files"])
-    asserts.equals(env, {"lib": _LIB_B, "lib2": _LIB_2}, packages[_APP]["deps"])
     asserts.equals(env, {"1.0.0": [_LIB_A, _LIB_B], "2.0.0": [_LIB_2]}, versions["lib"])
 
     return unittest.end(env)

@@ -4,14 +4,13 @@ def index_packages(graph, package_files):
     """Build the hub's package tables.
 
     Args:
-      graph: map from each package's Zig hash key to its `{name, version, deps}`.
+      graph: map from each package's Zig hash key to its `{name, version}`.
       package_files: map from each package's Zig hash key to its `files` label.
 
     Returns:
       `(packages, versions)`: `packages` maps each hash key to its `{name,
-      version, files, deps}`; `versions` maps a package name to a map from
-      version to the sorted hash keys of the packages with that name and
-      version.
+      version, files}`; `versions` maps a package name to a map from version
+      to the sorted hash keys of the packages with that name and version.
     """
     packages = {}
     versions = {}
@@ -21,7 +20,6 @@ def index_packages(graph, package_files):
             "name": info["name"],
             "version": info["version"],
             "files": package_files[key],
-            "deps": info["deps"],
         }
         versions.setdefault(info["name"], {}).setdefault(info["version"], []).append(key)
     return packages, versions

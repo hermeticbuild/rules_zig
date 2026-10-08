@@ -1,0 +1,10 @@
+load("@rules_zig//zig:defs.bzl", "zig_library")
+load("@zig_deps//:defs.bzl", "zig_deps")
+
+zig_library(
+    name = "child_lib",
+    import_name = "child",
+    main = "src/child.zig",
+    visibility = ["//visibility:public"],
+    deps = zig_deps(),
+)

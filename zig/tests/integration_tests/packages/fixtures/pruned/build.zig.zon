@@ -1,0 +1,12 @@
+.{
+    .name = .pruned,
+    .version = "0.0.0",
+    .fingerprint = 0x750f93ea2c71346e,
+    // `extra.zig` and `tests/` are deliberately omitted so the packer must prune
+    // them from the tarball and the hash, matching `zig fetch`.
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

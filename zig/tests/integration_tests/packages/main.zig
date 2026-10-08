@@ -5,6 +5,10 @@ const top = @import("top");
 const lib = @import("lib");
 const libfork = @import("libfork");
 const lib2 = @import("lib2");
+const pruned = @import("pruned");
+const symlinked = @import("symlinked");
+const lazyhost = @import("lazyhost");
+const child = @import("child");
 
 pub fn main() void {
     std.debug.assert(leaf.value == 7);
@@ -13,4 +17,15 @@ pub fn main() void {
     std.debug.assert(lib.v1 == 1);
     std.debug.assert(libfork.fork == 3);
     std.debug.assert(lib2.v2 == 2);
+    // Its `extra.zig` and `tests/` were pruned; only the declared paths were
+    // packed, so the module still resolves.
+    std.debug.assert(pruned.value == 13);
+    // `src/aliased.zig` is a symlink to `real.zig`; the packer followed it.
+    std.debug.assert(symlinked.value == 3000);
+    // 2000 + 1: the `lazy = true` `lazyleaf` dependency is fetched eagerly and
+    // resolved through `b.lazyDependency`.
+    std.debug.assert(lazyhost.value == 2001);
+    // 7 + 2 + 100: `child_module` resolves its own manifest, importing `lib` at
+    // v2 (a separate repository from the root's `lib` v1).
+    std.debug.assert(child.value == 109);
 }

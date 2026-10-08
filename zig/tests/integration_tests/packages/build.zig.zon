@@ -27,6 +27,22 @@
             .url = "__LIBV2_URL__",
             .hash = "__LIBV2_HASH__",
         },
+        .multi = .{
+            .url = "__MULTI_URL__",
+            .hash = "__MULTI_HASH__",
+        },
+        .pruned = .{
+            .url = "__PRUNED_URL__",
+            .hash = "__PRUNED_HASH__",
+        },
+        .symlinked = .{
+            .url = "__SYMLINKED_URL__",
+            .hash = "__SYMLINKED_HASH__",
+        },
+        .lazyhost = .{
+            .url = "__LAZYHOST_URL__",
+            .hash = "__LAZYHOST_HASH__",
+        },
     },
     .paths = .{
         "build.zig.zon",

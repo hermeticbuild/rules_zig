@@ -1,0 +1,36 @@
+load("@bazel_skylib//rules:build_test.bzl", "build_test")
+load("@bazel_skylib//rules:diff_test.bzl", "diff_test")
+load("@rules_zig//zig:defs.bzl", "zig_binary")
+load("@zig_deps//:defs.bzl", "zig_deps")
+
+# The binary imports the fetched `clap` package resolved through `zig_deps()`.
+zig_binary(
+    name = "app",
+    main = "src/main.zig",
+    # `clap` requires Zig 0.17+.
+    target_compatible_with = select({
+        "@zig_toolchains//:0.16.0": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    deps = zig_deps(),
+)
+
+genrule(
+    name = "output",
+    outs = ["output.actual"],
+    cmd = "$(execpath :app) > $(OUTS)",
+    tools = [":app"],
+)
+
+diff_test(
+    name = "output_test",
+    size = "small",
+    file1 = ":output.expected",
+    file2 = ":output.actual",
+)
+
+build_test(
+    name = "build_test",
+    size = "small",
+    targets = [":app"],
+)

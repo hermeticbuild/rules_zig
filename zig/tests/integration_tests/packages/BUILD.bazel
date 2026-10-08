@@ -1,68 +1,24 @@
-load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_library")
-load("@zig_deps//:defs.bzl", "zig_package_deps", "zig_package_file")
+load("@bazel_skylib//rules:diff_test.bzl", "diff_test")
+load("@rules_zig//zig:defs.bzl", "zig_binary")
+load("@zig_deps//:defs.bzl", "zig_deps", "zig_import_names", "zig_package_file")
 
-# Manual imports of the fetched packages: one `zig_library` per package in the
-# resolved graph, with `deps` derived from the exposed dependency edges (a
-# dependency's target here is named after the name it is imported under).
-[
-    zig_library(
-        name = pkg,
-        import_name = pkg,
-        main = zig_package_file(
-            pkg,
-            "src/" + pkg + ".zig",
-            version = "0.0.0",
-        ),
-        deps = [":" + dep for dep in zig_package_deps(
-            pkg,
-            version = "0.0.0",
-        )],
-    )
-    for pkg in [
-        "leaf",
-        "base",
-        "bottom",
-        "left",
-        "right",
-        "top",
-    ]
-]
-
-# Several copies of the package `lib` coexist: v1 and a fork sharing its name
-# and version, addressed by the manifest's dependency names, and v2, addressed
-# by version.
-zig_library(
-    name = "libv1",
-    import_name = "lib",
-    main = zig_package_file("lib", "src/lib.zig"),
-)
-
-zig_library(
-    name = "libfork",
-    import_name = "libfork",
-    main = zig_package_file("libfork", "src/lib.zig"),
-)
-
-zig_library(
-    name = "libv2",
-    import_name = "lib",
-    main = zig_package_file(
-        "lib",
-        "src/lib.zig",
-        version = "2.0.0",
-    ),
-)
-
+# The binary wires every dependency the manifest declares. `top` pulls its
+# diamond (`left`/`right`/`bottom`/`base`) transitively; the copies of `lib`
+# (declared `lib`, `libfork` and `lib2`) all expose a module named `lib`, so
+# `zig_import_names` remaps the latter two to their declared names.
 zig_binary(
     name = "binary",
-    import_names = {":libv2": "lib2"},
+    import_names = zig_import_names(),
     main = "main.zig",
-    deps = [
-        ":bottom",
-        ":leaf",
-        ":libfork",
-        ":libv1",
-        ":libv2",
-        ":top",
-    ],
+    # `@child_module//:child_lib` is imported as `child`; its own dependencies
+    # resolve through the `child_module`'s separate `from_file` manifest.
+    deps = zig_deps() + ["@child_module//:child_lib"],
+)
+
+# The extracted module graph of the multi-module fixture: two registered
+# modules plus an anonymous one under a synthesized stable name.
+diff_test(
+    name = "multi_manifest_test",
+    file1 = "multi_manifest.expected.json",
+    file2 = zig_package_file("multi", "module_manifest.json"),
 )

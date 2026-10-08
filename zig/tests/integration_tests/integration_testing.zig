@@ -123,6 +123,14 @@ pub const BitContext = struct {
         try writer.interface.flush();
     }
 
+    /// Replaces any existing entry at `sym_link_sub_path`.
+    pub fn symLinkWorkspaceFile(self: BitContext, target: []const u8, sym_link_sub_path: []const u8) !void {
+        var workspace = try self.openWorkspace();
+        defer closeWorkspaceDir(&workspace);
+        workspace.deleteFile(std.testing.io, sym_link_sub_path) catch {};
+        try workspace.symLink(std.testing.io, target, sym_link_sub_path, .{});
+    }
+
     /// Replace each `needle` with its `replacement` in a workspace file, writing
     /// a fresh file so the original source (a symlink in the test sandbox) is
     /// never modified.

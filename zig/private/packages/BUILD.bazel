@@ -1,9 +1,23 @@
 load("//zig:defs.bzl", "zig_test")
 
+# The configurer is compiled per package by the `zig_package` repository rule;
+# no target in this repository consumes it.
+exports_files(["configurer.zig"])
+
 zig_test(
     name = "resolver_test",
     size = "small",
     main = "resolver.zig",
+    target_compatible_with = select({
+        "@zig_toolchains//:0.17.0": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+)
+
+zig_test(
+    name = "module_graph_test",
+    size = "small",
+    main = "module_graph.zig",
     target_compatible_with = select({
         "@zig_toolchains//:0.17.0": [],
         "//conditions:default": ["@platforms//:incompatible"],
@@ -15,6 +29,8 @@ filegroup(
     name = "all_files",
     srcs = [
         ":BUILD.bazel",
+        ":configurer.zig",
+        ":module_graph.zig",
         ":resolver.zig",
     ],
     visibility = ["//zig/private:__pkg__"],

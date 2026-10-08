@@ -16,8 +16,11 @@
 //!
 //!     {
 //!       "roots": [{"deps": {"<name>": "<key>"}}],
-//!       "packages": {"<key>": {"url": ..., "path": ..., "paths": [...], "deps": {"<name>": "<key>"}}}
+//!       "packages": {"<key>": {"url": ..., "path": ..., "paths": [...], "deps": {"<name>": "<key>"}, "lazy": ["<name>"]}}
 //!     }
+//!
+//! A package's `lazy` lists its dependencies that Zig fetches only once its
+//! `build.zig` requests them.
 
 const std = @import("std");
 const Zoir = std.zig.Zoir;
@@ -29,6 +32,7 @@ pub const Dep = struct {
     url: ?[]const u8 = null,
     hash: ?[]const u8 = null,
     path: ?[]const u8 = null,
+    lazy: bool = false,
 };
 
 pub const Manifest = struct {
@@ -81,6 +85,8 @@ fn parseDeps(arena: Allocator, zoir: Zoir, index: Zoir.Node.Index, deps: *std.Ar
                     dep.hash = stringOf(zoir, value);
                 } else if (std.mem.eql(u8, field, "path")) {
                     dep.path = stringOf(zoir, value);
+                } else if (std.mem.eql(u8, field, "lazy")) {
+                    dep.lazy = value.get(&zoir) == .true;
                 }
             },
             else => {},
@@ -117,6 +123,9 @@ fn readManifest(arena: Allocator, io: Io, path: []const u8) !Manifest {
 const Edge = struct {
     name: []const u8,
     key: []const u8,
+    /// Only a URL dependency is fetched lazily; a path dependency is always
+    /// present.
+    lazy: bool,
 };
 
 const Package = struct {
@@ -187,7 +196,7 @@ const Walker = struct {
         var edges: std.ArrayList(Edge) = .empty;
         for (manifest.deps) |dep| {
             const resolved = try walker.resolveDep(dep, dir);
-            try edges.append(walker.arena, .{ .name = dep.name, .key = resolved.key });
+            try edges.append(walker.arena, .{ .name = dep.name, .key = resolved.key, .lazy = dep.lazy and dep.url != null });
             try walker.walk(resolved);
         }
         return edges.items;
@@ -283,6 +292,12 @@ pub fn main(init: std.process.Init) !void {
         try json.write(package.paths);
         try json.objectField("deps");
         try writeEdges(&json, package.deps);
+        try json.objectField("lazy");
+        try json.beginArray();
+        for (package.deps) |edge| {
+            if (edge.lazy) try json.write(edge.name);
+        }
+        try json.endArray();
         try json.endObject();
     }
     try json.endObject();
@@ -338,12 +353,14 @@ test "parses url and path dependencies" {
     try std.testing.expectEqualStrings("https://example.com/clap.tar.gz", clap.url.?);
     try std.testing.expectEqualStrings("clap-0.10.0-jv8oCwXlAQBW3ZgQlZ_cLSlp8AR8DBhCoryxNZgUW9ZS", clap.hash.?);
     try std.testing.expectEqual(null, clap.path);
+    try std.testing.expect(clap.lazy);
 
     const local = manifest.deps[1];
     try std.testing.expectEqualStrings("local", local.name);
     try std.testing.expectEqual(null, local.url);
     try std.testing.expectEqual(null, local.hash);
     try std.testing.expectEqualStrings("../local", local.path.?);
+    try std.testing.expect(!local.lazy);
 
     try std.testing.expectEqual(3, manifest.paths.len);
     try std.testing.expectEqualStrings("build.zig", manifest.paths[0]);

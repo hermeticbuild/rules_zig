@@ -6,7 +6,9 @@ DOC = """\
 The `@zig_deps` hub repository of the `zig_packages` module extension.
 
 Exposes the resolved Zig package dependency graph: `defs.bzl` provides
-accessors that address a package's files and its dependencies.
+accessors that address a package's files and generated targets, and resolve a
+consumer manifest's declared dependencies with `zig_dep`/`zig_deps` (with
+`zig_import_names` for the import-name overrides).
 """
 
 ATTRS = {
@@ -16,11 +18,7 @@ ATTRS = {
     ),
     "graph": attr.string(
         mandatory = True,
-        doc = """\
-JSON map from each package's Zig hash key to its `{name, version, deps}`,
-where `deps` maps a dependency name to the dependency's hash key (URL
-dependencies only).
-""",
+        doc = "JSON map from each package's Zig hash key to its `{name, version}`.",
     ),
     "manifests": attr.string(
         default = "[]",
@@ -74,14 +72,40 @@ def zig_package_file(name, path, version = None):
     """The label of the file at `path` inside a Zig package, see `zig_package_files`."""
     return zig_package_files(name, version).same_package_label(path)
 
-def zig_package_deps(name, version = None):
-    """A Zig package's dependencies, see `zig_package_files`.
+def zig_package_target(name, module = None, version = None):
+    """The label of a generated `zig_library` of a Zig package, see `zig_package_files`.
 
-    Returns:
-      dict from the name the package imports the dependency under to the
-      dependency's Zig hash key.
+    Defaults to the module of the same name as the package; pass `module` to
+    select another module the package exposes.
     """
-    return dict(_package(name, version)["deps"])
+    package = _package(name, version)
+    return Label(package["files"]).same_package_label(module or package["name"])
+
+def zig_dep(name, module = None):
+    """The label of the dependency `name` declared by the enclosing manifest.
+
+    Resolves to the dependency's module of the same name as its package; pass
+    `module` to select another module the dependency exposes.
+    """
+    return zig_package_target(name, module = module)
+
+def zig_deps():
+    """The labels of every dependency declared by the enclosing manifest."""
+    return [zig_dep(name) for name in _enclosing_deps()]
+
+def zig_import_names():
+    """The `import_names` remapping each dependency to its declared name.
+
+    Pair with `zig_deps()`. A dependency declared under a name that differs
+    from its package's module is imported under the declared name, which
+    resolves clashes between packages that expose an identically named module.
+    """
+    deps = _enclosing_deps()
+    remap = {}
+    for name in deps:
+        if name != _PACKAGES[deps[name]["key"]]["name"]:
+            remap[zig_dep(name)] = name
+    return remap
 '''
 
 def _zig_deps_hub_impl(repository_ctx):

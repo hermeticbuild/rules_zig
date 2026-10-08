@@ -1,0 +1,10 @@
+.{
+    .name = .multi,
+    .version = "0.0.0",
+    .fingerprint = 0xc5914305857f07ef,
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

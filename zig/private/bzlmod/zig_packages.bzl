@@ -20,6 +20,10 @@ def package_name_version(key):
     name, _, rest = key.partition("-")
     return name, rest[:-(_HASH_DIGEST_LEN + 1)]
 
+def _dep_edges(package):
+    """A resolved package's dependency edges as `[name, key, lazy]` lists."""
+    return [[name, key, name in package["lazy"]] for name, key in package["deps"].items()]
+
 from_file = tag_class(
     doc = "Resolve the Zig package dependencies declared in a `build.zig.zon` manifest.",
     attrs = {
@@ -69,24 +73,42 @@ def _zig_packages_impl(module_ctx):
             if graph["packages"][key]["url"] == None:
                 fail("Zig dependency '{}' is a path dependency, which is not supported; declared by".format(name), tag)
 
+    # `graph["packages"]` is topologically ordered, so each dependency's
+    # reachable set is already known by the time we reach a package: accumulate
+    # in one pass. A package is configured against its full closure, since its
+    # `build.zig` runs those of its dependencies.
+    reachable = {}
     hub_graph = {}
     for key, package in graph["packages"].items():
         if package["url"] == None:
             continue
         name, version = package_name_version(key)
-        hub_graph[key] = {
-            "name": name,
-            "version": version,
-            "deps": {
-                dep_name: dep_key
-                for dep_name, dep_key in package["deps"].items()
-                if graph["packages"][dep_key]["url"] != None
-            },
-        }
+
+        reached = {}
+        for dep_name, dep_key in package["deps"].items():
+            if graph["packages"][dep_key]["url"] == None:
+                fail("Zig package '{}' has a path dependency '{}', which is not supported inside fetched packages.".format(
+                    key,
+                    dep_name,
+                ))
+            reached[dep_key] = True
+            for dep in reachable[dep_key]:
+                reached[dep] = True
+        reachable[key] = reached
+
+        hub_graph[key] = {"name": name, "version": version}
         zig_package(
             name = key,
             url = package["url"],
             zig_hash = key,
+            deps = json.encode({
+                "root_deps": _dep_edges(package),
+                "packages": {
+                    dep: {"deps": _dep_edges(graph["packages"][dep])}
+                    for dep in reached
+                },
+            }),
+            dep_build_files = {dep: "@{}//:build.zig".format(dep) for dep in reached},
         )
 
     manifests = [
@@ -135,18 +157,36 @@ via `from_file` tags and generates two kinds of repositories:
   that several versions of a package coexist. Spokes are internal; their names
   are not part of the API.
 - The `@zig_deps` *hub*, the only repository consumers use. Its `defs.bzl`
-  provides functions that address the spokes: `zig_package_files` and
-  `zig_package_file` name a package's files, `zig_package_deps` lists its
-  dependencies. Each takes a package `name` and an optional `version`. Without
-  `version`, `name` is a dependency declared by the `from_file` manifest of
-  the calling Bazel package or its nearest ancestor. With `version`, `name` is
-  a package name, and the lookup fails if several packages share that name and
-  version.
+  provides functions that address the spokes. `zig_dep` resolves a dependency
+  declared by the `from_file` manifest of the calling Bazel package or its
+  nearest ancestor, `zig_deps` resolves all of them, and `zig_import_names`
+  imports each under its declared name. `zig_package_target` names the
+  `zig_library` generated for a module of a package, `zig_package_files` and
+  `zig_package_file` name its files. Each takes a package `name` and an
+  optional `version`. Without `version`, `name` is a dependency declared by
+  the manifest, as for `zig_dep`. With `version`, `name` is a package name,
+  and the lookup fails if several packages share that name and version.
+
+In `MODULE.bazel`:
 
 ```starlark
 zig_packages = use_extension("@rules_zig//zig:packages.bzl", "zig_packages")
 zig_packages.from_file(build_zig_zon = "//:build.zig.zon")
 use_repo(zig_packages, "zig_deps")
+```
+
+In `BUILD.bazel`, next to `build.zig.zon`:
+
+```starlark
+load("@rules_zig//zig:defs.bzl", "zig_binary")
+load("@zig_deps//:defs.bzl", "zig_deps", "zig_import_names")
+
+zig_binary(
+    name = "main",
+    main = "main.zig",
+    import_names = zig_import_names(),
+    deps = zig_deps(),
+)
 ```
 """,
     tag_classes = {
