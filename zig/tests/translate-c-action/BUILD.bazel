@@ -14,6 +14,18 @@ zig_c_library(
     visibility = ["//zig/tests:__pkg__"],
 )
 
+zig_c_library(
+    name = "c_module_copts",
+    cdeps = [":c"],
+    copts = [
+        "-DCOPTS_DEFINE=1",
+        "-include",
+        "$(execpath copts_include.h)",
+    ],
+    data = ["copts_include.h"],
+    visibility = ["//zig/tests:__pkg__"],
+)
+
 fake_translate_c(
     name = "fake_translate_c",
 )

@@ -76,7 +76,7 @@ zig_binary(
 <pre>
 load("@rules_zig//zig:defs.bzl", "zig_c_library")
 
-zig_c_library(<a href="#zig_c_library-name">name</a>, <a href="#zig_c_library-data">data</a>, <a href="#zig_c_library-cdeps">cdeps</a>, <a href="#zig_c_library-import_name">import_name</a>)
+zig_c_library(<a href="#zig_c_library-name">name</a>, <a href="#zig_c_library-data">data</a>, <a href="#zig_c_library-cdeps">cdeps</a>, <a href="#zig_c_library-copts">copts</a>, <a href="#zig_c_library-import_name">import_name</a>)
 </pre>
 
 Defines a Zig C module.
@@ -111,6 +111,7 @@ zig_c_library(
 | <a id="zig_c_library-name"></a>name |  A unique name for this target.   | <a href="https://bazel.build/concepts/labels#target-names">Name</a> | required |  |
 | <a id="zig_c_library-data"></a>data |  Files required by the module during runtime.   | <a href="https://bazel.build/concepts/labels">List of labels</a> | optional |  `[]`  |
 | <a id="zig_c_library-cdeps"></a>cdeps |  C dependencies to translate their headers from.   | <a href="https://bazel.build/concepts/labels">List of labels</a> | required |  |
+| <a id="zig_c_library-copts"></a>copts |  C compiler flags passed to `translate-c`. Subject to location and Make variable expansion.   | List of strings | optional |  `[]`  |
 | <a id="zig_c_library-import_name"></a>import_name |  The import name of the module.   | String | optional |  `""`  |
 
 
