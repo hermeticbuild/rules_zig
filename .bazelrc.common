@@ -1,3 +1,5 @@
+startup --windows_enable_symlinks
+
 # docs: https://bazel.build/reference/command-line-reference#flag--enable_bzlmod
 common --enable_bzlmod
 # docs: https://bazel.build/reference/command-line-reference#flag--enable_workspace

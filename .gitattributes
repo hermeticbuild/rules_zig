@@ -1,1 +1,4 @@
 docs/*.md linguist-generated=true
+
+# Force Git auto-detects as text gets normalized and checked out as LF
+* text=auto eol=lf

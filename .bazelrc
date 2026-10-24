@@ -16,7 +16,12 @@ import %workspace%/.bazelrc.flags
 import %workspace%/.bazelrc.remote
 
 # docs: https://bazel.build/reference/command-line-reference#flag--workspace_status_command
-build --workspace_status_command=$(pwd)/workspace_status.sh
+# Set per platform rather than overriding a global default: the global value
+# was not overridden by build:windows, so Windows ran the `$(pwd)` form in cmd.
+build:linux --workspace_status_command=$(pwd)/workspace_status.sh
+build:macos --workspace_status_command=$(pwd)/workspace_status.sh
+build:windows --workspace_status_command="bash workspace_status.sh"
+build:windows --shell_executable=c:/msys64/usr/bin/bash.exe
 
 # Deleted packages for integration tests.
 # To update these lines, execute

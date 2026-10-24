@@ -76,13 +76,21 @@ fn canonicalizePath(allocator: std.mem.Allocator, io: std.Io, path: []const u8) 
     return std.Io.Dir.realPathFileAbsoluteAlloc(io, path, allocator) catch path;
 }
 
+// Escapes a value for insertion inside a JSON string literal.
+// Needed on Windows, where paths contain backslashes that are invalid
+// (or wrongly interpreted) escape sequences in JSON.
+fn jsonEscapeLeaky(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
+    const step1 = try std.mem.replaceOwned(u8, allocator, value, "\\", "\\\\");
+    return std.mem.replaceOwned(u8, allocator, step1, "\"", "\\\"");
+}
+
 fn readBuildConfig(
     allocator: std.mem.Allocator,
     io: std.Io,
     init: std.process.Init,
     arg_path: []const u8,
 ) ![]u8 {
-    if (std.fs.path.isAbsolutePosix(arg_path)) {
+    if (std.fs.path.isAbsolute(arg_path)) {
         return std.Io.Dir.cwd().readFileAlloc(io, arg_path, allocator, .unlimited);
     }
 
@@ -143,26 +151,33 @@ pub fn main(init: std.process.Init) !void {
         init,
         args[1],
     );
+
+    // The placeholders sit inside JSON string literals, so the substituted
+    // values must be JSON-escaped (Windows paths contain backslashes).
+    const workspace_escaped = try jsonEscapeLeaky(arena.allocator(), build_workspace_directory);
+    const execution_root_escaped = try jsonEscapeLeaky(arena.allocator(), execution_root);
+
     output = try std.mem.replaceOwned(
         u8,
         arena.allocator(),
         output,
         "__BUILD_WORKSPACE_DIRECTORY__",
-        build_workspace_directory,
+        workspace_escaped,
     );
     output = try std.mem.replaceOwned(
         u8,
         arena.allocator(),
         output,
         "__BAZEL_EXECUTION_ROOT__",
-        execution_root,
+        execution_root_escaped,
     );
 
     var stdout_buf: [4096]u8 = undefined;
     var writer = std.Io.File.stdout().writer(io, &stdout_buf);
     if (processConfigLeaky(arena.allocator(), io, output)) |config| {
         try std.json.Stringify.value(config, .{}, &writer.interface);
-    } else |_| {
+    } else |err| {
+        std.log.warn("config processing failed: {s}", .{@errorName(err)});
         try writer.interface.writeAll(output);
     }
     try writer.flush();
