@@ -51,6 +51,9 @@ load(
 load(
     "//zig/private/providers:zig_toolchain_info.bzl",
     "zig_toolchain_executable",
+    "zig_toolchain_executable_path",
+    "zig_toolchain_lib_dir",
+    "zig_toolchain_lib_dir_path",
 )
 
 ATTRS = {
@@ -254,12 +257,13 @@ def _references_auto_c(root_module):
                 return True
     return False
 
-def zig_build_impl(ctx, *, kind):
+def zig_build_impl(ctx, *, kind, incremental_worker = None):
     """Common implementation for Zig build rules.
 
     Args:
       ctx: Bazel rule context object.
       kind: String; The kind of the rule, one of `zig_binary`, `zig_static_library`, `zig_shared_library`, `zig_test`.
+      incremental_worker: Optional executable for the private incremental prototype.
 
     Returns:
       List of providers.
@@ -283,6 +287,13 @@ def zig_build_impl(ctx, *, kind):
 
     settings = ctx.attr._settings[ZigSettingsInfo]
     use_cc_common_link = settings.use_cc_common_link
+    if incremental_worker:
+        if zigtoolchaininfo.zig_version != "0.17.0" or zigtoolchaininfo.mode != "file":
+            fail("The incremental prototype requires the hermetic Zig 0.17.0 toolchain.")
+        if zigtargetinfo.triple.arch != "x86_64" or zigtargetinfo.triple.os != "linux":
+            fail("The incremental prototype currently supports x86_64-linux targets only.")
+        if kind != "zig_binary" or use_cc_common_link or ctx.attr.csrcs or ctx.attr.copts or ctx.attr.linkopts or ctx.file.linker_script or ctx.attr.emit_asm or ctx.attr.emit_llvm_ir or ctx.attr.emit_llvm_bc:
+            fail("The incremental prototype supports Zig binaries with one binary output and Zig linking only.")
 
     cc_toolchain = None
     feature_configuration = None
@@ -318,6 +329,10 @@ def zig_build_impl(ctx, *, kind):
 
     global_args = ctx.actions.args()
     global_args.use_param_file("@%s")
+    if incremental_worker:
+        for worker_args in [global_args, args]:
+            worker_args.use_param_file("@%s", use_always = True)
+            worker_args.set_param_file_format("multiline")
 
     if use_cc_common_link:
         global_args.add_all([
@@ -468,6 +483,9 @@ def zig_build_impl(ctx, *, kind):
         args = global_args,
     )
 
+    if incremental_worker and root_module.cc_info and (need_translate_c(root_module.cc_info) or root_module.cc_info.linking_context.linker_inputs.to_list()):
+        fail("The incremental prototype does not support native dependencies.")
+
     zig_target_platform(
         target = zigtargetinfo,
         args = global_args,
@@ -603,14 +621,28 @@ def zig_build_impl(ctx, *, kind):
             )
         else:
             args.add(bin_output, format = "-femit-bin=%s")
+            worker_kwargs = {}
+            if incremental_worker:
+                worker_kwargs = {
+                    "tools": [zig_toolchain_executable(zigtoolchaininfo), zig_toolchain_lib_dir(zigtoolchaininfo)],
+                }
+                zig_build_kwargs["execution_requirements"] |= {
+                    "supports-workers": "1",
+                    "requires-worker-protocol": "json",
+                    "no-remote-exec": "1",
+                    "no-remote-cache": "1",
+                }
             ctx.actions.run(
                 outputs = [bin_output] + auxiliary_outputs,
                 inputs = inputs,
-                executable = zig_toolchain_executable(zigtoolchaininfo),
-                arguments = ["build-exe", global_args, args],
-                mnemonic = "ZigBuildExe",
+                executable = incremental_worker or zig_toolchain_executable(zigtoolchaininfo),
+                arguments = ([
+                    "--zig=" + zig_toolchain_executable_path(zigtoolchaininfo),
+                    "--lib=" + zig_toolchain_lib_dir_path(zigtoolchaininfo),
+                ] if incremental_worker else ["build-exe"]) + [global_args, args],
+                mnemonic = "ZigIncrementalCompile" if incremental_worker else "ZigBuildExe",
                 progress_message = "zig build-exe %{label}",
-                **zig_build_kwargs
+                **(zig_build_kwargs | worker_kwargs)
             )
     elif kind == "zig_test":
         if use_cc_common_link:
