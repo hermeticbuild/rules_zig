@@ -1,6 +1,55 @@
-load("@rules_zig//zig:defs.bzl", "zig_test")
+load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_library", "zig_test")
+load(":incremental_generated.bzl", "incremental_generated")
+
+exports_files(["incremental_external.zig"])
 
 zig_test(
     name = "test",
     main = "test.zig",
+)
+
+zig_library(
+    name = "incremental_module",
+    srcs = ["incremental_leaf.zig"],
+    extra_srcs = ["incremental_message.txt"],
+    main = "incremental_module.zig",
+)
+
+zig_binary(
+    name = "incremental",
+    main = "incremental_main.zig",
+    tags = ["manual"],
+    deps = [
+        ":external_module",
+        ":generated_module",
+        ":incremental_module",
+    ],
+)
+
+zig_binary(
+    name = "incremental_generator",
+    main = "incremental_generator.zig",
+    tags = ["manual"],
+)
+
+incremental_generated(
+    name = "generated",
+    source = "incremental_generated.txt",
+)
+
+filegroup(
+    name = "generated_assets",
+    srcs = [":generated"],
+    output_group = "assets",
+)
+
+zig_library(
+    name = "generated_module",
+    extra_srcs = [":generated_assets"],
+    main = ":generated",
+)
+
+zig_library(
+    name = "external_module",
+    main = "@incremental_dep//:value.zig",
 )

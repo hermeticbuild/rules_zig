@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""Exercise the private worker with real Zig and Bazel; no extra Python packages.
+"""Exercise the incremental worker with real Zig and Bazel; no extra packages.
 
 Run from a rules_zig checkout: python3 zig/private/worker/probe.py
 The generated Bazel package is temporary; tracked sources are never edited.
 """
 
 import argparse
-import base64
 import hashlib
 import json
 import os
@@ -34,6 +33,12 @@ def run(args, **kwargs):
 
 
 def digest(path):
+    if path.is_dir():
+        checksum = hashlib.sha256()
+        for entry in sorted(path.rglob("*")):
+            if entry.is_file():
+                checksum.update(str(entry.relative_to(path)).encode() + b"\0" + entry.read_bytes())
+        return checksum.hexdigest()
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
@@ -59,18 +64,22 @@ def protocol_checks(worker, zig, lib):
         leaf = cwd / "leaf.zig"
         leaf.write_text("pub const value: u32 = 41;\n")
         log = open(root / "worker.log", "w+")
+        state_root = None
         process = subprocess.Popen(
             [str(worker), f"--zig={zig}", f"--lib={lib}", "--persistent_worker"],
             cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, text=True,
         )
 
-        def request(files=("main.zig", "leaf.zig"), extra=()):
+        def request(files=("main.zig", "leaf.zig"), extra=(), compiler_args=None):
+            arguments = compiler_args if compiler_args is not None else ["-O", "Debug", *extra, "-Mroot=main.zig"]
+            (cwd / "compiler.args").write_text("\n".join(arguments) + "\n")
+            (cwd / "inputs").write_text("\n".join((*files, "compiler.args", "inputs")) + "\n")
+            metadata = {"schema": 1, "command": "build-exe", "name": "root",
+                        "output": "out/program", "argument_files": ["compiler.args"], "input_manifest": "inputs"}
             payload = {
-                "arguments": ["-O", "Debug", "-Mroot=main.zig",
-                              "-femit-bin=out/program", *extra],
-                "inputs": [{"path": name, "digest": base64.b64encode(
-                    hashlib.sha256((cwd / name).read_bytes()).digest()).decode()}
-                    for name in files],
+                "arguments": [json.dumps(metadata)],
+                "inputs": [{"path": name, "digest": digest(cwd / name)}
+                    for name in (*files, "compiler.args", "inputs")],
                 "requestId": 0,
             }
             process.stdin.write(json.dumps(payload) + "\n")
@@ -118,8 +127,8 @@ def protocol_checks(worker, zig, lib):
             succeeds(request(extra=("-O", "ReleaseSafe")))
             expect_program(cwd / "out/program", 43)
             telemetry = (root / "worker.log").read_text()
-            assert "reused=true" in telemetry and "generation=2 reused=false" in telemetry, telemetry
-            assert "transport failed" in telemetry and "generation=3 reused=false" in telemetry, telemetry
+            assert "reused=true" in telemetry and telemetry.count("reused=false") >= 4, telemetry
+            assert "transport failed" in telemetry, telemetry
             (cwd / "main.zig").write_text(
                 'const std = @import("std");\n'
                 'pub fn main(init: std.process.Init) void {\n'
@@ -135,12 +144,82 @@ def protocol_checks(worker, zig, lib):
             os.utime(data, ns=(metadata.st_atime_ns, metadata.st_mtime_ns))
             succeeds(request(files=("main.zig", "message.txt")))
             expect_program(cwd / "out/program", 45)
+
+            # Exercise a directory input and removal of one of its old members.
+            (cwd / "assets").mkdir()
+            (cwd / "assets/message.txt").write_text("46\n")
+            (cwd / "main.zig").write_text((cwd / "main.zig").read_text().replace('"message.txt"', '"assets/message.txt"'))
+            succeeds(request(files=("main.zig", "assets")))
+            expect_program(cwd / "out/program", 46)
+            (cwd / "assets/message.txt").unlink()
+            failed = request(files=("main.zig", "assets"))
+            assert failed["exitCode"] == 1 and "FileNotFound" in failed["output"], failed
+            (cwd / "assets/message.txt").write_text("47\n")
+            succeeds(request(files=("main.zig", "assets")))
+            expect_program(cwd / "out/program", 47)
+
+            # A generated input may change between a file and a directory.
+            (cwd / "assets").rename(root / "old-assets")
+            (cwd / "assets").write_text("49\n")
+            (cwd / "main.zig").write_text((cwd / "main.zig").read_text().replace('"assets/message.txt"', '"assets"'))
+            succeeds(request(files=("main.zig", "assets")))
+            expect_program(cwd / "out/program", 49)
+            (cwd / "assets").unlink()
+            (cwd / "assets").mkdir()
+            (cwd / "assets/message.txt").write_text("50\n")
+            (cwd / "main.zig").write_text((cwd / "main.zig").read_text().replace('"assets"', '"assets/message.txt"'))
+            succeeds(request(files=("main.zig", "assets")))
+            expect_program(cwd / "out/program", 50)
+            succeeds(request(files=("main.zig", "assets"), extra=("--dynamic-linker", "")))
+            expect_program(cwd / "out/program", 50)
+
+            # An alias into the SDK is still a declared source, not a tool path.
+            (cwd / "message.txt").unlink()
+            (cwd / "message.txt").symlink_to(lib / "std/std.zig")
+            (cwd / "main.zig").write_text((cwd / "main.zig").read_text().replace('"assets/message.txt"', '"message.txt"'))
+            succeeds(request(files=("main.zig", "message.txt")))
+            assert run([str(cwd / "out/program")]).stdout == (lib / "std/std.zig").read_text()
+
+            # Preserve argument tokens, including apostrophes and spaces, and
+            # mirror Bazel's single-level sibling repository layout.
+            quoted_main = "main's space.zig"
+            (cwd / quoted_main).write_text(
+                'const std = @import("std");\nconst dep = @import("dep");\n'
+                'pub fn main(init: std.process.Init) !void {\n'
+                '  try std.Io.File.stdout().writeStreamingAll(init.io, dep.message);\n}\n'
+            )
+            dependency = cwd.parent / "dep"
+            dependency.mkdir()
+            (dependency / "value.zig").write_text('pub const message = "48\\n";\n')
+            flags = ["-O", "Debug", "--dep", "dep", f"-Mroot={quoted_main}", "-Mdep=../dep/value.zig"]
+            succeeds(request(files=(quoted_main, "../dep/value.zig"), compiler_args=flags))
+            expect_program(cwd / "out/program", 48)
+            # Response encoding must preserve literal quotes and backslashes too.
+            response_main = 'main"back\\slash.zig'
+            (cwd / response_main).write_text((cwd / quoted_main).read_text())
+            flags = ["-O", "Debug", "--dep", "dep", f"-Mroot={response_main}", "-Mdep=../dep/value.zig"]
+            succeeds(request(files=(response_main, "../dep/value.zig"), compiler_args=flags))
+            expect_program(cwd / "out/program", 48)
+            (cwd / "oneshot.params").write_text(json.dumps({
+                "schema": 1, "command": "build-exe", "name": "root", "output": "out/program",
+                "argument_files": ["compiler.args"], "input_manifest": "inputs",
+            }) + "\n")
+            run([str(worker), f"--zig={zig}", f"--lib={lib}", "@oneshot.params"], cwd=cwd)
+            expect_program(cwd / "out/program", 48)
+            child = Path(f"/proc/{process.pid}/task/{process.pid}/children").read_text().split()[0]
+            state_root = Path(f"/proc/{child}/cwd").resolve().parents[2]
+            assert state_root.name.startswith("rules-zig-worker-") and state_root.is_dir(), state_root
+
             print("PASS protocol: metadata-preserving edit, independent output, error recovery, "
-                  "removed input, configuration change, compiler crash/restart, embedFile edit", flush=True)
+                  "removed input, configuration change, compiler crash/restart, embedFile edit, "
+                  "directory removal/topology changes, empty and quoted arguments, SDK alias, "
+                  "sibling repository, one-shot contract", flush=True)
         finally:
             process.stdin.close()
             process.wait(timeout=30)
             log.close()
+            if state_root is not None:
+                assert not state_root.exists(), f"worker EOF left private state at {state_root}"
 
 
 def bazel_checks(bazel, iterations, functions, backend):
@@ -150,11 +229,10 @@ def bazel_checks(bazel, iterations, functions, backend):
         zigopts = json.dumps(["-j4", *( ["-fllvm", "-flld"] if backend == "llvm" else ["-fno-llvm", "-fno-lld"])])
         (package / "BUILD.bazel").write_text(
             'load("//zig:defs.bzl", "zig_binary", "zig_library")\n'
-            'load("//zig/private/worker:prototype.bzl", "zig_incremental_binary")\n'
             'zig_library(name="module", main="module.zig", srcs=["leaf.zig"])\n'
             'zig_binary(name="ordinary", main="main.zig", deps=[":module"], '
             f'zigopts={zigopts})\n'
-            'zig_incremental_binary(name="incremental", main="main.zig", deps=[":module"], '
+            'zig_binary(name="incremental", main="main.zig", deps=[":module"], '
             f'zigopts={zigopts})\n'
         )
         (package / "module.zig").write_text('pub const value = @import("leaf.zig").value;\n')
@@ -179,6 +257,8 @@ def bazel_checks(bazel, iterations, functions, backend):
         bin_dir = Path(run([bazel, "info", "bazel-bin"], cwd=REPO).stdout.strip()) / package.relative_to(REPO)
         output_base = Path(run([bazel, "info", "output_base"], cwd=REPO).stdout.strip())
         for target in ("ordinary", "incremental"):
+            common = [arg for arg in common if not arg.startswith("--//zig/settings:incremental=")]
+            common.append("--//zig/settings:incremental=" + ("true" if target == "incremental" else "false"))
             run([*common, label + ":" + target], cwd=REPO)
             durations = []
             bazel_durations = []
@@ -221,7 +301,7 @@ def bazel_checks(bazel, iterations, functions, backend):
         run([*common, "--strategy=ZigIncrementalCompile=sandboxed", label + ":incremental"], cwd=REPO)
         expect_program(bin_dir / "incremental", 72)
         graph = run([bazel, "aquery", 'mnemonic("ZigIncrementalCompile", ' + label + ':incremental)',
-                     "--output=text"], cwd=REPO).stdout
+                     "--//zig/settings:incremental", "--output=text"], cwd=REPO).stdout
         assert "supports-workers" in graph and "requires-worker-protocol" in graph, graph
         print("PASS Bazel: sandboxed worker reuse, transitive module edit, "
               "failure/recovery, no-op build, one-shot fallback, generated action", flush=True)

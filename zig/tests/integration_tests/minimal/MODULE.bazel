@@ -1,5 +1,12 @@
 module(name = "minimal")
 
+incremental_dependency = use_repo_rule("//:incremental_generated.bzl", "incremental_dependency")
+
+incremental_dependency(
+    name = "incremental_dep",
+    source = "//:incremental_external.zig",
+)
+
 bazel_dep(name = "rules_zig", version = "0.0.0")
 local_path_override(
     module_name = "rules_zig",
