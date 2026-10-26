@@ -86,6 +86,7 @@ load("@rules_zig//zig:toolchain.bzl", "zig_toolchain")
 
 zig_toolchain(
     name = "zig_toolchain",
+    exec_target = {exec_target},
     zig_exe = {zig_exe},
     zig_h = "lib/zig.h",
     zig_lib = "lib",
@@ -93,6 +94,7 @@ zig_toolchain(
     zig_cache = {zig_cache},
 )
 """.format(
+        exec_target = repr(repository_ctx.attr.platform + ("-musl" if repository_ctx.attr.platform.endswith("-linux") else "")),
         zig_cache = repr(cache_prefix),
         zig_exe = repr(zig_exe),
         zig_version = repr(repository_ctx.attr.zig_version),

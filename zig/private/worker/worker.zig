@@ -1,4 +1,4 @@
-//! Experimental singleplex Bazel worker for Zig 0.17's compiler protocol.
+//! Singleplex Bazel adapter for Zig 0.17's incremental compiler protocol.
 const std = @import("std");
 const Io = std.Io;
 const Dir = Io.Dir;
@@ -14,12 +14,106 @@ const Request = struct {
 };
 const Response = struct { requestId: i32, exitCode: u8, output: []const u8 };
 
+// These controls come from the action owner, never from a parsed compiler argv.
+const Compilation = struct {
+    schema: u32,
+    command: []const u8,
+    name: []const u8,
+    output: []const u8,
+    argument_files: []const []const u8,
+    input_manifest: []const u8,
+
+    fn parse(a: Allocator, data: []const []const u8) !Compilation {
+        if (data.len != 1) return error.InvalidCompilationRequest;
+        const parsed = try std.json.parseFromSlice(Compilation, a, data[0], .{});
+        const result = parsed.value;
+        if (result.schema != 1 or !std.mem.eql(u8, result.command, "build-exe"))
+            return error.UnsupportedCompilationRequest;
+        try safePath(result.output, false);
+        if (result.name.len == 0 or !std.mem.eql(u8, std.fs.path.basename(result.name), result.name))
+            return error.InvalidCompilationName;
+        return result;
+    }
+
+    fn compilerArgs(self: Compilation, a: Allocator, io: Io, diagnostics: *Io.Writer) ![]const []const u8 {
+        var result: std.array_list.Managed([]const u8) = .init(a);
+        for (self.argument_files) |path| try readLines(a, io, path, &result);
+        for (result.items) |arg| {
+            if (reserved(arg)) {
+                try diagnostics.print("zig incremental compilation: option {s} is owned by rules_zig\n", .{arg});
+                return error.ConflictingCompilerOption;
+            }
+        }
+        return result.items;
+    }
+};
+
+fn reserved(arg: []const u8) bool {
+    if (std.mem.startsWith(u8, arg, "@") or std.mem.startsWith(u8, arg, "-femit-") or std.mem.startsWith(u8, arg, "-fno-emit-")) return true;
+    inline for (.{ "--listen", "--cache-dir", "--global-cache-dir", "--zig-lib-dir", "--build-root", "--name", "-fincremental", "-fno-incremental", "--debug-incremental", "--show-builtin" }) |flag| {
+        if (std.mem.eql(u8, arg, flag) or (std.mem.startsWith(u8, arg, flag) and arg.len > flag.len and arg[flag.len] == '=')) return true;
+    }
+    return false;
+}
+
+fn readLines(a: Allocator, io: Io, path: []const u8, result: *std.array_list.Managed([]const u8)) !void {
+    const contents = try Dir.cwd().readFileAlloc(io, path, a, .limited(16 * 1024 * 1024));
+    if (contents.len == 0) return;
+    const end = contents.len - @intFromBool(contents[contents.len - 1] == '\n');
+    var lines = std.mem.splitScalar(u8, contents[0..end], '\n');
+    while (lines.next()) |line| try result.append(line);
+}
+
+fn appendResponseFile(argv: *std.array_list.Managed([]const u8), io: Io, root: []const u8, arguments: []const []const u8) !void {
+    if (arguments.len == 0) return;
+    const a = argv.allocator;
+    const path = try std.fs.path.join(a, &.{ root, "compiler.args" });
+    var flags: Io.Writer.Allocating = .init(a);
+    try writeResponseArguments(&flags.writer, arguments);
+    try Dir.cwd().writeFile(io, .{ .sub_path = path, .data = flags.written() });
+    try argv.append(try std.fmt.allocPrint(a, "@{s}", .{path}));
+}
+
+fn writeResponseArguments(writer: *Io.Writer, arguments: []const []const u8) !void {
+    for (arguments) |arg| {
+        try writer.writeByte('"');
+        var backslashes: usize = 0;
+        for (arg) |c| {
+            if (c == '\\') {
+                backslashes += 1;
+                continue;
+            }
+            // The response parser halves backslashes only before a quote.
+            const count = if (c == '"') backslashes * 2 + 1 else backslashes;
+            for (0..count) |_| try writer.writeByte('\\');
+            backslashes = 0;
+            try writer.writeByte(c);
+        }
+        for (0..backslashes * 2) |_| try writer.writeByte('\\');
+        try writer.writeAll("\"\n");
+    }
+}
+
+test "response arguments round trip through the compiler parser" {
+    const a = std.testing.allocator;
+    const arguments = [_][]const u8{ "", "plain", "a b", "tab\tvalue", "#literal", "\"", "\\", "trailing\\", "\\\"", "two\\\\\"quotes", "two\\\\path", "--dep", "dep", "-Mroot=a b.zig", "-Mdep=../dep/main.zig" };
+    var flags: Io.Writer.Allocating = .init(a);
+    defer flags.deinit();
+    try writeResponseArguments(&flags.writer, &arguments);
+    var parser = try std.process.Args.IteratorGeneral(.{ .comments = true, .single_quotes = true }).init(a, flags.written());
+    defer parser.deinit();
+    for (arguments) |expected| try std.testing.expectEqualStrings(expected, parser.next() orelse return error.MissingArgument);
+    try std.testing.expect(parser.next() == null);
+}
+
 const Session = struct {
     arena: std.heap.ArenaAllocator,
     key: []const u8,
     root: []const u8,
     cwd: []const u8,
     cache: []const u8,
+    stderr: Io.File,
+    stderr_offset: u64 = 0,
     inputs: std.StringHashMapUnmanaged([]const u8) = .empty,
     child: std.process.Child,
     reader: Io.File.Reader,
@@ -29,6 +123,7 @@ const Session = struct {
 
     fn destroy(self: *Session, gpa: Allocator, io: Io) void {
         self.child.kill(io);
+        self.stderr.close(io);
         Dir.cwd().deleteTree(io, self.root) catch {};
         self.clearInputs(gpa);
         self.arena.deinit();
@@ -50,6 +145,8 @@ const Worker = struct {
     io: Io,
     zig: []const u8,
     lib: []const u8,
+    zig_input: []const u8,
+    lib_input: []const u8,
     root: []const u8,
     session: ?*Session = null,
     generation: usize = 0,
@@ -59,7 +156,7 @@ const Worker = struct {
         self.session = null;
     }
 
-    fn start(self: *Worker, key: []const u8, arguments: []const []const u8, inputs: []const Input, request_allocator: Allocator) !*Session {
+    fn start(self: *Worker, compilation: Compilation, key: []const u8, arguments: []const []const u8, inputs: []const Input, request_allocator: Allocator) !*Session {
         self.reset();
         self.generation += 1;
         const s = try self.gpa.create(Session);
@@ -68,14 +165,32 @@ const Worker = struct {
         errdefer arena.deinit();
         const a = arena.allocator();
         const root = try std.fmt.allocPrint(a, "{s}/session-{d}", .{ self.root, self.generation });
-        const cwd = try std.fs.path.join(a, &.{ root, "inputs" });
+        const cwd = try std.fs.path.join(a, &.{ root, "execroot", "main" });
         try Dir.cwd().createDirPath(self.io, cwd);
         errdefer Dir.cwd().deleteTree(self.io, root) catch {};
+        // Expose the declared SDK at its logical input paths without copying it.
+        // Only these paths are tool-owned; source symlinks into the SDK are still
+        // ordinary declared inputs and must be materialized under their aliases.
+        for ([_][2][]const u8{ .{ self.zig_input, self.zig }, .{ self.lib_input, self.lib } }) |tool| {
+            if (std.fs.path.isAbsolute(tool[0])) continue;
+            try safePath(tool[0], true);
+            const destination = try std.fs.path.join(a, &.{ cwd, tool[0] });
+            try Dir.cwd().createDirPath(self.io, std.fs.path.dirname(destination).?);
+            try Dir.cwd().symLink(self.io, tool[1], destination, .{});
+        }
         const cache = try std.fs.path.join(a, &.{ root, "cache" });
         const global_cache = try std.fs.path.join(a, &.{ self.root, "global-cache" });
         var argv: std.array_list.Managed([]const u8) = .init(a);
-        try argv.appendSlice(&.{ self.zig, "build-exe", "--listen=-", "-fincremental", "--cache-dir", cache, "--global-cache-dir", global_cache, "--zig-lib-dir", self.lib });
-        try argv.appendSlice(arguments);
+        try argv.appendSlice(&.{ self.zig, compilation.command, "--listen=-", "-fincremental", "--name", compilation.name, "--cache-dir", cache, "--global-cache-dir", global_cache, "--zig-lib-dir", self.lib });
+        // Zig 0.17 cannot encode apostrophes in response files and consumes
+        // direct argv before response contents. Use one representation for the
+        // entire semantic vector so module dependency ordering stays intact.
+        const direct = for (arguments) |arg| {
+            if (std.mem.findScalar(u8, arg, '\'') != null) break true;
+        } else false;
+        if (direct) try argv.appendSlice(arguments) else try appendResponseFile(&argv, self.io, root, arguments);
+        const stderr = try Dir.cwd().createFile(self.io, try std.fs.path.join(a, &.{ root, "stderr" }), .{ .read = true });
+        errdefer stderr.close(self.io);
         const owned_key = try a.dupe(u8, key);
         s.* = .{
             .arena = arena,
@@ -83,20 +198,21 @@ const Worker = struct {
             .root = root,
             .cwd = cwd,
             .cache = cache,
+            .stderr = stderr,
             .child = undefined,
             .reader = undefined,
             .writer = undefined,
         };
         errdefer s.clearInputs(self.gpa);
         // The compiler resolves module roots during startup, before `update`.
-        _ = try self.materialize(s, inputs, request_allocator);
+        _ = try self.materialize(s, inputs, request_allocator, true);
         const child = try std.process.spawn(self.io, .{
             .argv = argv.items,
             .cwd = .{ .path = cwd },
             .stdin = .pipe,
             .stdout = .pipe,
-            // Keep stdout exclusively for the binary compiler protocol.
-            .stderr = .inherit,
+            // A file avoids pipe backpressure while the compiler protocol is read.
+            .stderr = .{ .file = stderr },
         });
         s.child = child;
         s.reader = child.stdout.?.readerStreaming(self.io, &s.read_buffer);
@@ -119,35 +235,22 @@ const Worker = struct {
     fn compile(self: *Worker, request: Request, a: Allocator, diagnostics: *Io.Writer) !u8 {
         if (request.requestId != 0 or request.cancel or request.sandboxDir.len != 0)
             return error.OnlySingleplexSupported;
-        var arguments: std.array_list.Managed([]const u8) = .init(a);
-        var output: ?[]const u8 = null;
-        var skip_next = false;
-        for (request.arguments) |arg| {
-            if (skip_next) {
-                skip_next = false;
-                continue;
-            }
-            if (std.mem.eql(u8, arg, "--cache-dir") or std.mem.eql(u8, arg, "--global-cache-dir") or std.mem.eql(u8, arg, "--zig-lib-dir")) {
-                skip_next = true;
-                continue;
-            }
-            if (std.mem.startsWith(u8, arg, "-femit-bin=")) {
-                if (output != null) return error.MultipleOutputs;
-                output = arg["-femit-bin=".len..];
-                continue;
-            }
-            if (std.mem.eql(u8, arg, "-fno-incremental") or std.mem.startsWith(u8, arg, "--listen"))
-                return error.ConflictingCompilerOption;
-            try arguments.append(arg);
-        }
-        const output_path = output orelse return error.MissingOutput;
-        try safePath(output_path);
-        try arguments.appendSlice(&.{ "--name", std.fs.path.basename(output_path) });
-        const key = try std.json.Stringify.valueAlloc(a, .{ output_path, arguments.items }, .{});
-        const reused = self.session != null and std.mem.eql(u8, self.session.?.key, key);
+        const compilation = try Compilation.parse(a, request.arguments);
+        const arguments = try compilation.compilerArgs(a, self.io, diagnostics);
+        const output_path = compilation.output;
+        const key = try std.json.Stringify.valueAlloc(a, .{ compilation.command, compilation.name, output_path, arguments }, .{});
+        var reused = self.session != null and std.mem.eql(u8, self.session.?.key, key);
         const started_at = Io.Clock.awake.now(self.io);
-        const s = if (reused) self.session.? else try self.start(key, arguments.items, request.inputs, a);
-        const copied = if (reused) try self.materialize(s, request.inputs, a) else s.inputs.count();
+        var s = if (reused) self.session.? else try self.start(compilation, key, arguments, request.inputs, a);
+        const copied = if (reused) self.materialize(s, request.inputs, a, false) catch |err| blk: {
+            if (err != error.InputSetChanged) return err;
+            // Zig may report historical inputs after they become unreachable.
+            // A changed declared set gets a clean compiler and filesystem view.
+            reused = false;
+            s = try self.start(compilation, key, arguments, request.inputs, a);
+            break :blk s.inputs.count();
+        } else s.inputs.count();
+        defer self.appendStderr(s, diagnostics) catch {};
         const inputs_ready_at = Io.Clock.awake.now(self.io);
         // Artifact names are under our control, independent of Bazel's output path.
         try s.writer.interface.writeStruct(std.zig.Client.Message.Header{ .tag = .update, .bytes_len = 0 }, .little);
@@ -180,20 +283,27 @@ const Worker = struct {
                         // cwd inputs must belong to this request. SDK and
                         // compiler-generated cache inputs have other prefixes.
                         if (path[0] == 1) {
-                            safePath(path[1..]) catch {
+                            // Zig can report sibling module roots as absolute
+                            // paths. Normalize lexically against the staged cwd
+                            // before checking membership and containment.
+                            const relative = try std.fs.path.relativeAllocPosix(a, s.cwd, s.cwd, path[1..]);
+                            safePath(relative, true) catch {
+                                try diagnostics.print("zig incremental compilation: unsafe compiler input {s}\n", .{path[1..]});
                                 undeclared_input = true;
                                 continue;
                             };
-                            if (!s.inputs.contains(path[1..])) undeclared_input = true;
-                        }
+                            if (!s.inputs.contains(relative) and !self.isToolInput(relative)) {
+                                try diagnostics.print("zig incremental compilation: undeclared compiler input {s}\n", .{path[1..]});
+                                undeclared_input = true;
+                            }
+                        } else if (path[0] < 2 or path[0] > 5) return error.InvalidCompilerInputPrefix;
                     }
                 },
                 else => {},
             }
         }
-        const basename = std.fs.path.basename(output_path);
         const compiled_at = Io.Clock.awake.now(self.io);
-        const artifact = try std.fs.path.join(a, &.{ s.cache, "o", digest orelse return error.MissingEmitDigest, basename });
+        const artifact = try std.fs.path.join(a, &.{ s.cache, "o", digest orelse return error.MissingEmitDigest, compilation.name });
         // Atomic copy, never a hard link: Zig mutates the private artifact in place.
         try Dir.cwd().copyFile(artifact, .cwd(), output_path, self.io, .{ .make_path = true });
         const ms = started_at.untilNow(self.io, .awake).toMilliseconds();
@@ -209,58 +319,91 @@ const Worker = struct {
         return 0;
     }
 
-    fn materialize(self: *Worker, s: *Session, inputs: []const Input, a: Allocator) !usize {
+    fn materialize(self: *Worker, s: *Session, inputs: []const Input, a: Allocator, fresh: bool) !usize {
         var present: std.StringHashMapUnmanaged(void) = .empty;
-        var copied: usize = 0;
+        var files: std.array_list.Managed(Input) = .init(a);
         for (inputs) |input| {
-            try safePath(input.path);
+            try safePath(input.path, true);
             // Toolchain files belong to the worker key, not mutable source state.
-            const real = try Dir.cwd().realPathFileAlloc(self.io, input.path, a);
-            if (std.mem.eql(u8, real, self.zig) or std.mem.eql(u8, real, self.lib) or
-                (std.mem.startsWith(u8, real, self.lib) and real.len > self.lib.len and real[self.lib.len] == std.fs.path.sep)) continue;
-            try present.put(a, input.path, {});
-            if (s.inputs.get(input.path)) |previous| {
-                if (input.digest.len != 0 and std.mem.eql(u8, previous, input.digest)) continue;
-            }
-            const destination = try std.fs.path.join(a, &.{ s.cwd, input.path });
-            // copyFile uses an atomic replacement with a new inode. This invalidates
-            // Zig's size/inode/mtime shortcut even for metadata-preserving edits.
-            try Dir.cwd().copyFile(input.path, .cwd(), destination, self.io, .{ .make_path = true });
-            const new_digest = try self.gpa.dupe(u8, input.digest);
-            errdefer self.gpa.free(new_digest);
-            if (s.inputs.getPtr(input.path)) |previous| {
-                self.gpa.free(previous.*);
-                previous.* = new_digest;
+            if (self.isToolInput(input.path)) continue;
+            const stat = try Dir.cwd().statFile(self.io, input.path, .{});
+            if (stat.kind == .directory) {
+                var dir = try Dir.cwd().openDir(self.io, input.path, .{ .iterate = true });
+                defer dir.close(self.io);
+                var walker = try dir.walk(a);
+                defer walker.deinit();
+                while (try walker.next(self.io)) |entry| {
+                    if (entry.kind == .directory) continue;
+                    const path = try std.fs.path.join(a, &.{ input.path, entry.path });
+                    try present.put(a, path, {});
+                    try files.append(.{ .path = path, .digest = input.digest });
+                }
             } else {
-                const new_path = try self.gpa.dupe(u8, input.path);
-                errdefer self.gpa.free(new_path);
-                try s.inputs.put(self.gpa, new_path, new_digest);
+                try present.put(a, input.path, {});
+                try files.append(input);
             }
-            copied += 1;
         }
-        var removed: std.array_list.Managed([]const u8) = .init(a);
-        var keys = s.inputs.keyIterator();
-        while (keys.next()) |path| {
-            if (!present.contains(path.*)) try removed.append(path.*);
+        if (!fresh) {
+            if (present.count() != s.inputs.count()) return error.InputSetChanged;
+            for (files.items) |input| if (!s.inputs.contains(input.path)) return error.InputSetChanged;
         }
-        for (removed.items) |path| {
-            const destination = try std.fs.path.join(a, &.{ s.cwd, path });
-            try Dir.cwd().deleteFile(self.io, destination);
-            const entry = s.inputs.fetchRemove(path).?;
-            self.gpa.free(entry.key);
-            self.gpa.free(entry.value);
-        }
+        var copied: usize = 0;
+        for (files.items) |input| copied += try self.materializeFile(s, input, a);
         return copied;
+    }
+
+    fn isToolInput(self: *const Worker, path: []const u8) bool {
+        return std.mem.eql(u8, path, self.zig_input) or std.mem.eql(u8, path, self.lib_input) or
+            (std.mem.startsWith(u8, path, self.lib_input) and path.len > self.lib_input.len and path[self.lib_input.len] == '/');
+    }
+
+    fn materializeFile(self: *Worker, s: *Session, input: Input, a: Allocator) !usize {
+        if (s.inputs.get(input.path)) |previous| {
+            if (input.digest.len != 0 and std.mem.eql(u8, previous, input.digest)) return 0;
+        }
+        const destination = try std.fs.path.join(a, &.{ s.cwd, input.path });
+        // copyFile uses an atomic replacement with a new inode. This invalidates
+        // Zig's size/inode/mtime shortcut even for metadata-preserving edits.
+        try Dir.cwd().copyFile(input.path, .cwd(), destination, self.io, .{ .make_path = true });
+        const new_digest = try self.gpa.dupe(u8, input.digest);
+        errdefer self.gpa.free(new_digest);
+        if (s.inputs.getPtr(input.path)) |previous| {
+            self.gpa.free(previous.*);
+            previous.* = new_digest;
+        } else {
+            const new_path = try self.gpa.dupe(u8, input.path);
+            errdefer self.gpa.free(new_path);
+            try s.inputs.put(self.gpa, new_path, new_digest);
+        }
+        return 1;
+    }
+
+    fn appendStderr(self: *Worker, s: *Session, diagnostics: *Io.Writer) !void {
+        var buffer: [4096]u8 = undefined;
+        while (true) {
+            const n = try s.stderr.readPositional(self.io, &.{&buffer}, s.stderr_offset);
+            if (n == 0) return;
+            s.stderr_offset += n;
+            try diagnostics.writeAll(buffer[0..n]);
+        }
     }
 };
 
-fn safePath(path: []const u8) !void {
+fn safePath(path: []const u8, sibling: bool) !void {
     if (path.len == 0 or std.fs.path.isAbsolute(path)) return error.InvalidInputPath;
-    var parts = std.mem.tokenizeAny(u8, path, "/\\");
+    // A single leading '..' is Bazel's sibling repository layout. The session
+    // cwd is a child of its private execroot, so this remains worker-owned.
+    const relative = if (sibling and std.mem.startsWith(u8, path, "../")) path[3..] else path;
+    if (relative.len == 0) return error.InvalidInputPath;
+    var parts = std.mem.tokenizeAny(u8, relative, "/\\");
     while (parts.next()) |part| if (std.mem.eql(u8, part, "..")) return error.InvalidInputPath;
 }
 
 pub fn main(init: std.process.Init) !void {
+    std.process.exit(try run(init));
+}
+
+fn run(init: std.process.Init) !u8 {
     const a = init.arena.allocator();
     const io = init.io;
     const args = try init.minimal.args.toSlice(a);
@@ -283,24 +426,32 @@ pub fn main(init: std.process.Init) !void {
     }
     const zig = try Dir.cwd().realPathFileAlloc(io, zig_path orelse return error.MissingZigPath, a);
     const lib = try Dir.cwd().realPathFileAlloc(io, lib_path orelse return error.MissingLibPath, a);
-    if (!persistent) {
-        var argv: std.array_list.Managed([]const u8) = .init(a);
-        try argv.appendSlice(&.{ zig, "build-exe" });
-        try argv.appendSlice(flags.items);
-        var child = try std.process.spawn(io, .{ .argv = argv.items });
-        const term = try child.wait(io);
-        std.process.exit(if (term.success()) 0 else 1);
-    }
-    const cwd = try std.process.currentPathAlloc(io, a);
-    var nonce: [8]u8 = undefined;
+    var nonce: [16]u8 = undefined;
     io.random(&nonce);
-    // WorkerExecRoot cleans cwd and its parent between requests. Keep private
-    // state one level above that traversal, still under Bazel's output base.
-    const root = try std.fmt.allocPrint(a, "{s}/.zig-worker-{x}", .{ std.fs.path.dirname(std.fs.path.dirname(cwd).?).?, &nonce });
-    var worker: Worker = .{ .gpa = std.heap.page_allocator, .io = io, .zig = zig, .lib = lib, .root = root };
+    // Linux's hardened worker sandbox supplies a worker-private persistent
+    // /tmp. Do not derive paths from Bazel's internal worker directory layout,
+    // or use an inherited TMPDIR that might point outside the writable sandbox.
+    const root = try std.fmt.allocPrint(a, "/tmp/rules-zig-worker-{x}", .{&nonce});
+    try Dir.cwd().createDir(io, root, .fromMode(0o700));
+    var worker: Worker = .{ .gpa = std.heap.page_allocator, .io = io, .zig = zig, .lib = lib, .zig_input = zig_path.?, .lib_input = lib_path.?, .root = root };
     defer {
         worker.reset();
         Dir.cwd().deleteTree(io, root) catch {};
+    }
+    if (!persistent) {
+        const compilation = try Compilation.parse(a, flags.items);
+        var paths: std.array_list.Managed([]const u8) = .init(a);
+        try readLines(a, io, compilation.input_manifest, &paths);
+        var inputs: std.array_list.Managed(Input) = .init(a);
+        for (paths.items) |path| try inputs.append(.{ .path = path });
+        var diagnostics: Io.Writer.Allocating = .init(a);
+        const code = worker.execute(.{ .arguments = flags.items, .inputs = inputs.items }, a, &diagnostics.writer) catch |err| blk: {
+            try diagnostics.writer.print("zig incremental compilation: {t}\n", .{err});
+            break :blk 1;
+        };
+        try Io.File.stderr().writeStreamingAll(io, diagnostics.written());
+        // Return through the cleanup defers, including on a failed request.
+        return code;
     }
     const in_buffer = try a.alloc(u8, 16 * 1024 * 1024);
     var out_buffer: [8192]u8 = undefined;
@@ -326,4 +477,5 @@ pub fn main(init: std.process.Init) !void {
         try stdout.interface.writeByte('\n');
         try stdout.interface.flush();
     }
+    return 0;
 }

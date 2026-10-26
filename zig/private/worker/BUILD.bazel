@@ -1,19 +1,23 @@
-load("@bazel_skylib//:bzl_library.bzl", "bzl_library")
-load("//zig:defs.bzl", "zig_binary")
+load("//zig:defs.bzl", "zig_binary", "zig_test")
+
+filegroup(
+    name = "sources",
+    srcs = ["worker.zig"],
+    visibility = ["//zig/private:__pkg__"],
+)
 
 zig_binary(
     name = "worker",
     main = "worker.zig",
+    tags = ["manual"],
     visibility = ["//zig:__subpackages__"],
 )
 
-bzl_library(
-    name = "prototype",
-    srcs = ["prototype.bzl"],
-    deps = [
-        "//zig/private:zig_binary",
-        "//zig/private/common:zig_build",
-    ],
+zig_test(
+    name = "worker_test",
+    size = "small",
+    main = "worker.zig",
+    visibility = ["//zig/tests:__pkg__"],
 )
 
 filegroup(
@@ -21,8 +25,8 @@ filegroup(
     srcs = [
         "BUILD.bazel",
         "DESIGN.md",
+        "PLAN.md",
         "probe.py",
-        "prototype.bzl",
         "worker.zig",
     ],
     visibility = ["//zig/private:__pkg__"],

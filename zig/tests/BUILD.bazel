@@ -5,6 +5,7 @@ load(":config_test.bzl", "config_test_suite")
 load(":dsym_test.bzl", "dsym_test_suite")
 load(":emit_attr_test.bzl", "emit_attr_test_suite")
 load(":host_toolchain_test.bzl", "host_toolchain_test_suite")
+load(":incremental_test.bzl", "incremental_test_suite")
 load(":mode_test.bzl", "mode_test_suite")
 load(":module_info_test.bzl", "module_info_test_suite")
 load(":path_toolchain_test.bzl", "path_toolchain_test_suite")
@@ -34,6 +35,13 @@ dsym_test_suite(name = "dsym_test")
 emit_attr_test_suite(name = "emit_attr_test")
 
 host_toolchain_test_suite(name = "host_toolchain_test")
+
+incremental_test_suite(name = "incremental_test")
+
+test_suite(
+    name = "incremental_worker_test",
+    tests = ["//zig/private/worker:worker_test"],
+)
 
 use_cc_common_link_test_suite(name = "use_cc_common_link_test")
 

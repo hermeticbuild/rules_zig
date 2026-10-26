@@ -257,13 +257,12 @@ def _references_auto_c(root_module):
                 return True
     return False
 
-def zig_build_impl(ctx, *, kind, incremental_worker = None):
+def zig_build_impl(ctx, *, kind):
     """Common implementation for Zig build rules.
 
     Args:
       ctx: Bazel rule context object.
       kind: String; The kind of the rule, one of `zig_binary`, `zig_static_library`, `zig_shared_library`, `zig_test`.
-      incremental_worker: Optional executable for the private incremental prototype.
 
     Returns:
       List of providers.
@@ -287,13 +286,16 @@ def zig_build_impl(ctx, *, kind, incremental_worker = None):
 
     settings = ctx.attr._settings[ZigSettingsInfo]
     use_cc_common_link = settings.use_cc_common_link
+    incremental_worker = zigtoolchaininfo.incremental_worker if settings.incremental and kind == "zig_binary" else None
+    if settings.incremental and kind == "zig_binary" and not incremental_worker:
+        fail("Incremental compilation requires a hermetic Zig 0.17.0 toolchain with a POSIX worker adapter.")
     if incremental_worker:
         if zigtoolchaininfo.zig_version != "0.17.0" or zigtoolchaininfo.mode != "file":
-            fail("The incremental prototype requires the hermetic Zig 0.17.0 toolchain.")
+            fail("Incremental compilation requires the hermetic Zig 0.17.0 toolchain.")
         if zigtargetinfo.triple.arch != "x86_64" or zigtargetinfo.triple.os != "linux":
-            fail("The incremental prototype currently supports x86_64-linux targets only.")
-        if kind != "zig_binary" or use_cc_common_link or ctx.attr.csrcs or ctx.attr.copts or ctx.attr.linkopts or ctx.file.linker_script or ctx.attr.emit_asm or ctx.attr.emit_llvm_ir or ctx.attr.emit_llvm_bc:
-            fail("The incremental prototype supports Zig binaries with one binary output and Zig linking only.")
+            fail("Incremental compilation currently supports x86_64-linux targets only.")
+        if use_cc_common_link or ctx.attr.csrcs or ctx.attr.copts or ctx.attr.linkopts or ctx.file.linker_script or ctx.attr.emit_asm or ctx.attr.emit_llvm_ir or ctx.attr.emit_llvm_bc:
+            fail("Incremental compilation supports binaries with one executable output, no native dependencies, and Zig linking only.")
 
     cc_toolchain = None
     feature_configuration = None
@@ -329,10 +331,6 @@ def zig_build_impl(ctx, *, kind, incremental_worker = None):
 
     global_args = ctx.actions.args()
     global_args.use_param_file("@%s")
-    if incremental_worker:
-        for worker_args in [global_args, args]:
-            worker_args.use_param_file("@%s", use_always = True)
-            worker_args.set_param_file_format("multiline")
 
     if use_cc_common_link:
         global_args.add_all([
@@ -355,15 +353,15 @@ def zig_build_impl(ctx, *, kind, incremental_worker = None):
         if not settings.strip:
             args.add("-fstrip")
 
-    zig_lib_dir(
-        zigtoolchaininfo = zigtoolchaininfo,
-        args = global_args,
-    )
-
-    zig_cache_output(
-        zigtoolchaininfo = zigtoolchaininfo,
-        args = global_args,
-    )
+    if not incremental_worker:
+        zig_lib_dir(
+            zigtoolchaininfo = zigtoolchaininfo,
+            args = global_args,
+        )
+        zig_cache_output(
+            zigtoolchaininfo = zigtoolchaininfo,
+            args = global_args,
+        )
 
     location_targets = ctx.attr.data
 
@@ -484,7 +482,7 @@ def zig_build_impl(ctx, *, kind, incremental_worker = None):
     )
 
     if incremental_worker and root_module.cc_info and (need_translate_c(root_module.cc_info) or root_module.cc_info.linking_context.linker_inputs.to_list()):
-        fail("The incremental prototype does not support native dependencies.")
+        fail("Incremental compilation does not support native dependencies.")
 
     zig_target_platform(
         target = zigtargetinfo,
@@ -620,9 +618,41 @@ def zig_build_impl(ctx, *, kind, incremental_worker = None):
                 **cc_link_kwargs
             )
         else:
-            args.add(bin_output, format = "-femit-bin=%s")
             worker_kwargs = {}
+            action_args = ["build-exe", global_args, args]
             if incremental_worker:
+                # Keep adapter controls separate from the existing ordered Args.
+                # One worker flagfile also supports Bazel's strict flagfile mode.
+                argument_files = []
+                for suffix, compiler_args in [("global", global_args), ("module", args)]:
+                    argument_file = ctx.actions.declare_file(ctx.label.name + ".zig-" + suffix + ".args")
+                    compiler_args.set_param_file_format("multiline")
+                    ctx.actions.write(argument_file, compiler_args)
+                    argument_files.append(argument_file)
+                manifest = ctx.actions.declare_file(ctx.label.name + ".zig-inputs")
+                manifest_args = ctx.actions.args()
+                manifest_args.add_all(inputs)
+                manifest_args.add_all(argument_files)
+                manifest_args.add(manifest)
+                manifest_args.set_param_file_format("multiline")
+                ctx.actions.write(manifest, manifest_args)
+                request_args = ctx.actions.args()
+                request_args.add(json.encode({
+                    "schema": 1,
+                    "command": "build-exe",
+                    "name": root_module.canonical_name,
+                    "output": bin_output.path,
+                    "argument_files": [file.path for file in argument_files],
+                    "input_manifest": manifest.path,
+                }))
+                request_args.use_param_file("@%s", use_always = True)
+                request_args.set_param_file_format("multiline")
+                inputs = depset(argument_files + [manifest], transitive = [inputs])
+                action_args = [
+                    "--zig=" + zig_toolchain_executable_path(zigtoolchaininfo),
+                    "--lib=" + zig_toolchain_lib_dir_path(zigtoolchaininfo),
+                    request_args,
+                ]
                 worker_kwargs = {
                     "tools": [zig_toolchain_executable(zigtoolchaininfo), zig_toolchain_lib_dir(zigtoolchaininfo)],
                 }
@@ -632,14 +662,13 @@ def zig_build_impl(ctx, *, kind, incremental_worker = None):
                     "no-remote-exec": "1",
                     "no-remote-cache": "1",
                 }
+            else:
+                args.add(bin_output, format = "-femit-bin=%s")
             ctx.actions.run(
                 outputs = [bin_output] + auxiliary_outputs,
                 inputs = inputs,
                 executable = incremental_worker or zig_toolchain_executable(zigtoolchaininfo),
-                arguments = ([
-                    "--zig=" + zig_toolchain_executable_path(zigtoolchaininfo),
-                    "--lib=" + zig_toolchain_lib_dir_path(zigtoolchaininfo),
-                ] if incremental_worker else ["build-exe"]) + [global_args, args],
+                arguments = action_args,
                 mnemonic = "ZigIncrementalCompile" if incremental_worker else "ZigBuildExe",
                 progress_message = "zig build-exe %{label}",
                 **(zig_build_kwargs | worker_kwargs)

@@ -11,6 +11,7 @@ FIELDS = {
     "zig_version": "String, The Zig toolchain's version.",
     "zig_cache": "String, The Zig cache directory prefix used for the global and local cache.",
     "validation": "File, Validation output ensuring that the configured Zig version matches.",
+    "incremental_worker": "File or None, Native adapter for the toolchain's incremental compiler protocol.",
 }
 
 ZigToolchainInfo = provider(
@@ -18,7 +19,7 @@ ZigToolchainInfo = provider(
     fields = FIELDS,
 )
 
-def zig_file_toolchain_info(*, zig_exe, zig_h, zig_lib, zig_version, zig_cache, validation):
+def zig_file_toolchain_info(*, zig_exe, zig_h, zig_lib, zig_version, zig_cache, validation, incremental_worker = None):
     return ZigToolchainInfo(
         mode = "file",
         zig_exe = struct(
@@ -33,6 +34,7 @@ def zig_file_toolchain_info(*, zig_exe, zig_h, zig_lib, zig_version, zig_cache, 
         zig_version = zig_version,
         zig_cache = zig_cache,
         validation = validation,
+        incremental_worker = incremental_worker,
     )
 
 def zig_path_toolchain_info(*, zig_exe_path, zig_lib_path, zig_version, zig_cache, validation):
@@ -50,6 +52,7 @@ def zig_path_toolchain_info(*, zig_exe_path, zig_lib_path, zig_version, zig_cach
         zig_version = zig_version,
         zig_cache = zig_cache,
         validation = validation,
+        incremental_worker = None,
     )
 
 def zig_toolchain_executable(zigtoolchaininfo):

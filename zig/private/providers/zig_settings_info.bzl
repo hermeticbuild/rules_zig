@@ -5,6 +5,7 @@ Collection of all active Zig build settings.
 """
 
 FIELDS = {
+    "incremental": "Whether target binaries use experimental incremental compilation.",
     "mode": "The Zig build mode.",
     "use_cc_common_link": "Whether to use cc_common.link to link zig binaries, tests and shared libraries.",
     "threaded": "The Zig multi- or single-threaded setting.",

@@ -39,6 +39,10 @@ THREADED_VALUES = ["multi", "single"]
 STRIP_VALUES = ["always", "never", "sometimes"]
 
 ATTRS = {
+    "incremental": attr.label(
+        doc = "Whether to use experimental incremental compilation for target binaries.",
+        mandatory = True,
+    ),
     "mode": attr.label(
         doc = "The build mode setting.",
         mandatory = True,
@@ -143,6 +147,7 @@ def _settings_impl(ctx):
     args.extend(ctx.attr.host_zigopt[BuildSettingInfo].value if is_exec_configuration else ctx.attr.zigopt[BuildSettingInfo].value)
 
     settings_info = ZigSettingsInfo(
+        incremental = not is_exec_configuration and ctx.attr.incremental[BuildSettingInfo].value,
         mode = mode,
         threaded = threaded,
         use_cc_common_link = use_cc_common_link,
