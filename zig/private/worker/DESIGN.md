@@ -127,17 +127,55 @@ the adapter and compatible compiler. Bootstrap the adapter through a deliberate
 one-shot compilation path so that enabling workers cannot make the adapter
 depend recursively on itself.
 
-Use a structured compilation request containing compiler identity, normalized
-options/module graph, declared inputs, and output mappings. Avoid making the
-upstream implementation reconstruct that structure by stripping arbitrary flags
-from a compiler command line, as this prototype does. Keep Bazel's ordinary
-action identity separate from the identity of a mutable incremental session.
+Pass explicit adapter metadata for compiler identity, compilation kind, and
+output mappings alongside the existing ordered compiler arguments. Preserve those
+arguments rather than reconstructing Zig's module graph or duplicating its option
+parser. Reserve adapter-owned protocol, incremental-mode, SDK, cache, and output
+controls; conflicting `zigopts` are unsupported and should produce a clear error,
+not be silently stripped. Do not accommodate combinations that violate the rule's
+declared action contract. Persistent and one-shot execution must consume the same
+request contract. Keep Bazel's ordinary action identity separate from the identity
+of a mutable incremental session.
 
 Build bounded session management behind that adapter, independently of the
 public rules. Measure a per-target session pool before choosing multiplexing;
 one active session proves the mechanism but performs poorly if many final
 targets repeatedly evict one another. Preserve the immutable output-publication
 boundary in every execution mode.
+
+## Worker sandbox compatibility
+
+Include three execution modes in the initial Linux compatibility plan:
+unsandboxed singleplex workers, ordinary worker sandboxing, and hardened worker
+sandboxing with `--worker_sandboxing --experimental_worker_sandbox_hardening`.
+Hardening is selected by Bazel, not a new rules_zig worker protocol capability.
+Keep enabling it under the consuming workspace's control.
+
+Bazel 9.2 has an explicit hardened-worker integration test that also compiles and
+runs Java code through rules_java. This establishes a concrete precedent beyond
+the synthetic example worker. The inspected Swift, Kotlin, and Scala rulesets did
+not provide explicit hardening test configurations; ordinary worker sandboxing
+alone does not establish hardened compatibility.
+
+Sources: [Bazel integration test variants](https://github.com/bazelbuild/bazel/blob/9.2.0/src/test/shell/integration/BUILD#L592),
+[Java worker integration scenarios](https://github.com/bazelbuild/bazel/blob/9.2.0/src/test/shell/integration/bazel_worker_test.sh#L91),
+and [worker construction](https://github.com/bazelbuild/bazel/blob/9.2.0/src/main/java/com/google/devtools/build/lib/worker/WorkerFactory.java#L96).
+
+Replace the prototype's parent-directory traversal with a deliberate temporary
+storage policy. In hardened singleplex mode Bazel provides a private `/tmp` that
+persists for the worker lifetime and is removed when Bazel destroys the worker.
+A unique directory in that namespace is a candidate for retained state; verify
+temporary-directory selection rather than assuming an inherited `TMPDIR` points
+there. Ordinary workers still need explicit cleanup and crash-debris handling.
+Do not require broad writable-path exceptions to make the integration work.
+See [Bazel's hardened worker lifecycle](https://github.com/bazelbuild/bazel/blob/9.2.0/src/main/java/com/google/devtools/build/lib/worker/SandboxedWorker.java).
+
+Acceptance checks must establish that hardening actually ran, that the compiler
+subprocess remains inside it, and that changed inputs, failure recovery, session
+replacement, and immutable output publication still work. Warm edits must retain
+the same compiler and useful state across request cleanup. Check the expected
+write restrictions and worker teardown as well as successful compilation.
+These checks are planned, not demonstrated by the existing prototype.
 
 ## Upstream design questions
 
