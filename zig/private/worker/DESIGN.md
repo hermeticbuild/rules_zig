@@ -1,8 +1,12 @@
-# Incremental worker experiment
+# Incremental worker investigation
 
-Private prototype, not a supported rules_zig API or an upstream-ready proposal.
-The experiment answers whether Bazel can retain Zig compiler state across source
-edits while preserving Bazel's action boundary.
+The experiment below established whether Bazel can retain Zig compiler state
+across source edits while preserving Bazel's action boundary. Its original
+private rule, option stripping, and storage layout have since been replaced.
+See [PLAN.md](PLAN.md) for the upstream implementation plan and
+[the feature documentation](../../../docs/incremental-compilation.md) for the
+current interface and supported configurations. Measurements below describe the
+original prototype, not additional application performance guarantees.
 
 ## Contract and ownership
 
