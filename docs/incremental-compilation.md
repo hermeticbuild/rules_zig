@@ -1,24 +1,50 @@
 # Experimental incremental compilation
 
-Enable incremental compilation for existing `zig_binary` targets:
+Enable incremental compilation for existing compilation rules:
 
 ```sh
 bazel build --@rules_zig//zig/settings:incremental //app:app
 ```
 
-The default remains ordinary compilation. Libraries, tests, documentation actions,
-and execution tools retain their existing compilation paths. A binary's imported
-Zig modules participate in its retained compiler session; they do not need a
-different library rule.
+The default remains ordinary compilation. The setting applies to `zig_binary`,
+`zig_test`, `zig_static_library`, and `zig_shared_library`. A compilation's imported
+Zig modules participate in its retained compiler session; source-only `zig_library`
+targets do not need a different rule. Documentation, `translate-c`, and execution
+tools retain their existing paths.
 
 ## Supported configurations
 
 The initial implementation supports hermetic Zig 0.17.0, POSIX execution tools,
-x86_64 Linux targets, Zig linking, and one executable output. Native dependencies,
+x86_64 Linux targets, Zig linking, and one primary output. Native dependencies,
 C sources, linker options/scripts, auxiliary outputs, path toolchains, and other
-compiler versions or targets are rejected for incremental binaries. The Linux
-integration tests cover both generated sources and directory inputs, source
+compiler versions or targets are rejected for incremental compilations. Static
+libraries require `emit_bin = True`; C/C++ linking and test-object pipelines using
+`use_cc_common_link` are unsupported. Unsupported configurations fail explicitly;
+they do not silently use ordinary compilation. The Linux integration tests
+cover both generated sources and directory inputs, source
 file symlinks, external repositories, and the sibling repository layout.
+
+Binaries, test executables, and static libraries support both the self-hosted and
+LLVM backends. Shared libraries require explicit effective `-fllvm` and `-flld`:
+
+```sh
+bazel build --@rules_zig//zig/settings:incremental \
+  --@rules_zig//zig/settings:zigopt=-fllvm \
+  --@rules_zig//zig/settings:zigopt=-flld //lib:shared
+```
+
+The adapter checks those switches without rewriting arguments. Missing flags,
+or a later `-fno-llvm` or `-fno-lld`, fail before starting the compiler.
+Option operands are skipped when checking the backend, so an rpath named `-flld`
+does not enable LLD. Versioned shared libraries (`--version`) and native compiler
+flag groups remain unsupported and fail explicitly.
+
+Zig 0.17's self-hosted incremental shared-library output failed execution in
+qualification. LLVM still retains frontend state; LLD performs a full relink.
+
+For `zig_test`, the worker compiles with `zig test --test-no-exec`. Bazel executes
+the published test executable in its normal, separate test action. The worker
+does not execute tests through Zig's compiler-server protocol.
 
 Downloaded SDK toolchains provide the adapter automatically. Manually declared
 hermetic toolchains must supply `exec_target`, a portable SDK execution triple
@@ -27,7 +53,8 @@ for baseline CPU features rather than those of the machine compiling it.
 
 Adapter-owned controls are reserved: compiler server mode, incremental mode, SDK
 and cache directories, compilation naming, build root, response files, and output
-selection. Conflicting `zigopts` fail with a diagnostic. Other compiler arguments
+selection. For libraries, `-static` and `-dynamic` are also adapter-owned.
+Conflicting `zigopts` fail with a diagnostic. Other compiler arguments
 retain their original order. Invalid options or options that undermine Bazel's
 declared input/output model are not a supported interface.
 
@@ -46,7 +73,7 @@ bazel build --@rules_zig//zig/settings:incremental \
 ```
 
 Each worker retains one Zig compiler session. Changing its compilation options
-or building a different executable replaces that session. Bazel's worker pool
+or building a different output replaces that session. Bazel's worker pool
 can start several workers, so resource use and target scheduling affect how
 often a warm compiler is available. `--worker_max_instances=ZigIncrementalCompile=1`
 is useful when evaluating a single binary; it is not a universal performance
@@ -61,7 +88,8 @@ historical dependencies, so retaining a session across membership changes is
 deliberately deferred. Content edits with unchanged membership retain the session.
 Compiler artifacts remain private; successful outputs are copied into Bazel's
 declared locations so later compilations cannot mutate previously published
-executables.
+artifacts. Static libraries retain their normal `CcInfo` exports; shared libraries
+retain their configured filename and matching SONAME.
 
 Ordinary compiler errors keep the session available for recovery. A broken
 compiler connection is retried once with fresh state. Normal adapter EOF and
@@ -92,7 +120,7 @@ Multiplex workers are not advertised.
 ## Current limitations
 
 The largest measured savings are warm edits to an existing compiler session.
-Cold builds still construct semantic state, and several executable targets can
+Cold builds still construct semantic state, and several compilation targets can
 evict each other's sessions. Compiler memory remains live between builds. The
 development probe records representative costs for its synthetic workload;
 application performance should be measured separately.
@@ -100,11 +128,11 @@ application performance should be measured separately.
 Unstripped debug information contains absolute compiler input paths. Ordinary
 sandboxed Zig actions already contain transient sandbox paths; incremental
 actions contain private staged paths instead. Debuggers may require source-path
-substitution. This implementation does not promise byte-identical executables
+substitution. This implementation does not promise byte-identical artifacts
 across compilation histories, worker restarts, or execution strategies, and it
 does not rewrite DWARF. General compiler-side debug-prefix mapping and broader
 artifact reproducibility remain follow-up work.
 
 The compiler protocol is internal to Zig and admitted only for the tested SDK
 version. Additional compiler versions, native targets, remote-worker support,
-other rule kinds, and auxiliary outputs require separate compatibility work.
+additional output kinds, and auxiliary outputs require separate compatibility work.

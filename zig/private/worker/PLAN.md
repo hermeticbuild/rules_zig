@@ -2,14 +2,17 @@
 
 ## Contract
 
-A successful action publishes an independent executable for its current declared
+A successful action publishes an independent artifact for its current declared
 inputs, compiler, environment, and options. Removing retained state changes only
 performance. Bazel owns action invalidation; Zig owns semantic incremental work.
 
 ## Accepted scope
 
-- Existing `zig_binary`, opt-in `//zig/settings:incremental`; default unchanged.
-- Hermetic Zig 0.17.0, x86_64 Linux target, Zig linking, one executable output.
+- Existing `zig_binary`, `zig_test`, `zig_static_library`, and `zig_shared_library`,
+  opt-in `//zig/settings:incremental`; default unchanged.
+- Hermetic Zig 0.17.0, x86_64 Linux target, Zig linking, one primary output.
+- Binaries, test executables, and static libraries support self-hosted and LLVM
+  compilation. Shared libraries require explicit effective LLVM and LLD options.
 - Singleplex JSON worker with one bounded active compiler session.
 - Adapter-owned protocol, cache, SDK, naming, and output controls are reserved.
   Conflicting `zigopts` fail clearly; arbitrary invalid compiler usage is outside
@@ -17,8 +20,9 @@ performance. Bazel owns action invalidation; Zig owns semantic incremental work.
 - Local execution; remote caching disabled pending artifact equivalence work.
 - Ordinary, sandboxed, and hardened Linux worker execution; one-shot fallback
   consumes the same compilation request and uses the same compiler settings.
-- Other rule kinds continue using their ordinary compilation paths. Unsupported
-  binary configurations fail explicitly when incremental mode is requested.
+- Documentation, `translate-c`, and execution tools keep their ordinary paths.
+  Unsupported compilation configurations fail when incremental mode is requested.
+  There is no ordinary-compilation worker mode or silent backend fallback.
 
 ## Implementation sequence
 
@@ -58,7 +62,7 @@ changed Bazel input digests; they cannot repair Bazel failing to detect an edit.
 ## Deferred, not prerequisites
 
 Multiplexing, target-affinity/LRU optimization, remote worker locality, macOS and
-Windows, native dependencies, libraries/tests/auxiliary outputs, additional Zig
+Windows, native dependencies, object pipelines/auxiliary outputs, additional Zig
 protocol versions, and remote-cache eligibility. Measure representative multiple
 target workloads before expanding session policy; synthetic results already
 justify implementing the narrow supported mode.
@@ -102,7 +106,7 @@ justify implementing the narrow supported mode.
 - **Bounded retention and publication.** One active compiler per worker; options,
   output identity, or input membership replace it. Broken transport retries once;
   ordinary compile errors can recover in place. Publication copies the private
-  executable rather than hard-linking it. Normal EOF/one-shot cleanup removes
+  artifact rather than hard-linking it. Normal EOF/one-shot cleanup removes
   private state; forced termination may leave ordinary `/tmp` debris. Hardened
   worker temporary storage belongs to Bazel's sandbox lifecycle.
 - **Artifact limits remain explicit.** No remote execution/cache admission, no
@@ -170,8 +174,83 @@ normalization. Execution evidence remains the checks above, not the review.
 ## Proposed PR description
 
 Warm Zig edits currently discard semantic and linker state between Bazel actions.
-Add opt-in incremental compilation to existing `zig_binary` targets for hermetic
+Add opt-in incremental compilation to binary, test, and library rules for hermetic
 Zig 0.17.0 and x86_64 Linux, preserving declared-input isolation and independent
-published outputs through a singleplex worker. Support sandboxed and hardened
-workers, reserve adapter-owned options explicitly, and document the initial
-configuration and artifact limitations.
+published outputs through a singleplex worker. Reject unsupported configurations,
+including self-hosted shared libraries, instead of silently compiling ordinarily.
+Support sandboxed and hardened workers and document the artifact limitations.
+
+## Compilation-kind extension
+
+### Acceptance criteria and ownership
+
+- With incremental enabled, all four compilation rules emit `ZigIncrementalCompile`
+  or a supported-configuration error. Without it, existing actions stay unchanged.
+- Tests compile with `test --test-no-exec`; Bazel retains test execution ownership.
+- Pure Zig archives and LLVM+LLD shared libraries retain compiler state on content
+  edits and publish independently usable outputs. Existing CcInfo, configured
+  shared filenames, and SONAME behavior stay with the rule that already owns them.
+- C sources/dependencies, cc_common linking (including test objects), auxiliary
+  outputs, non-emitting archives, other targets, and unqualified SDKs fail.
+- Documentation and translate-c are intentionally outside the incremental setting.
+
+The shared action helper belongs in `zig_build_impl`: that layer already owns
+the command, output type, SDK, and ordered module graph. It writes explicit
+command/output-kind metadata rather than inferring the kind from compiler flags.
+The adapter maps that metadata to server arguments and known Linux artifact names.
+No semantic arguments are stripped or rebuilt.
+
+The shared-library backend check is read-only and uses Zig 0.17's option arities
+to skip operands, then checks the last LLVM and LLD switches. Native flag groups
+and versioned shared-library names are explicitly rejected. The option-arity table
+is a compatibility obligation when admitting another SDK protocol version; it is
+not a general Zig command-line parser. Automatically forcing LLVM/LLD would hide
+unsupported user choices, while accepting the self-hosted path produced an unusable
+library in qualification. Supporting versioned names cleanly should use explicit
+compiler artifact metadata; silently guessing another cache file is excluded.
+
+The option-arity check was compared with Zig tag `0.17.0`, commit
+`7647adab80dd088f4de3610fd245915a912eb6ad`, `src/main.zig`'s compile-command
+argument loop. Artifact naming follows that SDK's `lib/std/zig.zig:binNameAlloc`.
+
+### Baseline evidence
+
+Before this extension, `bazel aquery --config=remote-cache --//zig/settings:incremental`
+on binary-only commit `681f61d` still reported `ZigBuildTest`, `ZigBuildStaticLib`,
+and `ZigBuildSharedLib` for the existing simple test and library fixtures. The
+setting was silently ineffective for those rules. Action analysis now checks
+their incremental command/output-kind metadata and declared request-file inputs.
+
+Direct Zig 0.17 compiler-server probes produced updated, executable test outputs
+and linkable archives with both backends. LLVM+LLD shared libraries loaded updated
+exports. Self-hosted incremental shared output crashed when loaded, while ordinary
+compilation of the same source/backend loaded successfully. This is a qualified
+implementation boundary, not a claim about every Zig release or shared-library
+configuration.
+
+### Extension verification
+
+The ordinary macOS regression command above passed all 206 tests, including 15
+incremental action/settings checks, the compiler parser/backend checks, generated
+documentation, and buildifier. The minimal consumer integration passed on Bazel
+8.4.1 and 9.2.0. A final `aquery` inspected all four incremental action kinds,
+their command/output-kind metadata, SDK adapter, and worker/local-only properties.
+
+The final Linux integration passed both native tests in 326.1 seconds with Bazel
+9.2.0 and Zig 0.17.0. The binary checks cover four sandbox/layout modes; test and
+library checks cover ordinary, sandboxed, and hardened workers. They execute
+updated passing/failing tests, assert compiler PID reuse, link and execute archive
+and shared-library consumers after edits, exercise one-shot library compilation,
+and verify the custom shared filename/SONAME through loading. Negative cases check
+missing/overridden backends, backend-looking rpath operands, versioned shared
+artifacts, and ARM targets; a final real `bazel test` verifies test execution.
+Read-only review found the versioned-name and operand-scanning boundaries; both
+were fixed and rechecked against the pinned source before this final execution.
+
+The consumer fixture declares its own ARM platform and direct `platforms`
+dependency. Referencing the ruleset's test platforms from a consumer reproduced
+an unavailable development-only `bazel_features` dependency; declaring a consumer
+platform without a direct `platforms` dependency reproduced another repository
+mapping error. Both were fixture issues, distinct from the production target gate.
+Keep consumer-platform fixtures self-contained rather than relying on root-module
+development repositories.
