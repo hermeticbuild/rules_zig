@@ -8,6 +8,8 @@ incremental_dependency(
 )
 
 bazel_dep(name = "rules_zig", version = "0.0.0")
+bazel_dep(name = "platforms", version = "1.1.0")
+
 local_path_override(
     module_name = "rules_zig",
     path = "../../../..",

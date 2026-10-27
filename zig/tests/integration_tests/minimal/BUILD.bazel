@@ -1,7 +1,15 @@
-load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_library", "zig_test")
+load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_library", "zig_shared_library", "zig_static_library", "zig_test")
 load(":incremental_generated.bzl", "incremental_generated")
 
 exports_files(["incremental_external.zig"])
+
+platform(
+    name = "aarch64_linux",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:aarch64",
+    ],
+)
 
 zig_test(
     name = "test",
@@ -52,4 +60,26 @@ zig_library(
 zig_library(
     name = "external_module",
     main = "@incremental_dep//:value.zig",
+)
+
+zig_test(
+    name = "incremental_test",
+    srcs = ["incremental_value.zig"],
+    main = "incremental_test.zig",
+    tags = ["manual"],
+)
+
+zig_static_library(
+    name = "incremental_static",
+    srcs = ["incremental_value.zig"],
+    main = "incremental_library.zig",
+    tags = ["manual"],
+)
+
+zig_shared_library(
+    name = "incremental_shared",
+    srcs = ["incremental_value.zig"],
+    main = "incremental_library.zig",
+    shared_lib_name = "libincremental_custom.so",
+    tags = ["manual"],
 )

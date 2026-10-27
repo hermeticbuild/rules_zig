@@ -15,9 +15,11 @@ const Request = struct {
 const Response = struct { requestId: i32, exitCode: u8, output: []const u8 };
 
 // These controls come from the action owner, never from a parsed compiler argv.
+const OutputKind = enum { executable, static_library, shared_library };
 const Compilation = struct {
     schema: u32,
     command: []const u8,
+    output_kind: OutputKind = .executable,
     name: []const u8,
     output: []const u8,
     argument_files: []const []const u8,
@@ -27,7 +29,11 @@ const Compilation = struct {
         if (data.len != 1) return error.InvalidCompilationRequest;
         const parsed = try std.json.parseFromSlice(Compilation, a, data[0], .{});
         const result = parsed.value;
-        if (result.schema != 1 or !std.mem.eql(u8, result.command, "build-exe"))
+        const valid_command = switch (result.output_kind) {
+            .executable => std.mem.eql(u8, result.command, "build-exe") or std.mem.eql(u8, result.command, "test"),
+            .static_library, .shared_library => std.mem.eql(u8, result.command, "build-lib"),
+        };
+        if (result.schema != 1 or !valid_command)
             return error.UnsupportedCompilationRequest;
         try safePath(result.output, false);
         if (result.name.len == 0 or !std.mem.eql(u8, std.fs.path.basename(result.name), result.name))
@@ -39,14 +45,83 @@ const Compilation = struct {
         var result: std.array_list.Managed([]const u8) = .init(a);
         for (self.argument_files) |path| try readLines(a, io, path, &result);
         for (result.items) |arg| {
-            if (reserved(arg)) {
+            if (reserved(arg) or (self.output_kind != .executable and (std.mem.eql(u8, arg, "-dynamic") or std.mem.eql(u8, arg, "-static")))) {
                 try diagnostics.print("zig incremental compilation: option {s} is owned by rules_zig\n", .{arg});
                 return error.ConflictingCompilerOption;
             }
         }
+        if (self.output_kind == .shared_library) try checkSharedLibraryArgs(result.items, diagnostics);
         return result.items;
     }
+
+    fn artifactName(self: Compilation, a: Allocator) ![]const u8 {
+        return switch (self.output_kind) {
+            .executable => self.name,
+            .static_library => std.fmt.allocPrint(a, "lib{s}.a", .{self.name}),
+            .shared_library => std.fmt.allocPrint(a, "lib{s}.so", .{self.name}),
+        };
+    }
 };
+
+fn checkSharedLibraryArgs(arguments: []const []const u8, diagnostics: *Io.Writer) !void {
+    var llvm = false;
+    var lld = false;
+    var i: usize = 0;
+    while (i < arguments.len) : (i += 1) {
+        const arg = arguments[i];
+        if (std.mem.eql(u8, arg, "--version")) {
+            try diagnostics.writeAll("zig incremental compilation: versioned shared-library artifacts (--version) are unsupported\n");
+            return error.UnsupportedSharedLibraryVersion;
+        }
+        if (std.mem.eql(u8, arg, "-cflags") or std.mem.eql(u8, arg, "-rcflags")) {
+            try diagnostics.writeAll("zig incremental compilation: native compiler flag groups are unsupported\n");
+            return error.UnsupportedNativeCompilerFlags;
+        }
+        // Zig 0.17 src/main.zig's build-command option arity. This read-only
+        // capability check must skip operands (even ones named '-flld'). It
+        // neither constructs nor changes the compiler's semantic argv.
+        const takes_value = for ([_][]const u8{
+            "--dep",              "--error-limit",          "-rcincludes",       "--color",
+            "--subsystem",        "-O",                     "--force_undefined", "--stack",
+            "--image-base",       "--name",                 "-rpath",            "--library-directory",
+            "-L",                 "-F",                     "-framework",        "-weak_framework",
+            "-needed_framework",  "-install_name",          "-pagezero_size",    "-headerpad",
+            "-T",                 "--script",               "-version-script",   "--version-script",
+            "--library",          "-l",                     "--needed-library",  "-needed-l",
+            "-needed_library",    "-weak_library",          "-weak-l",           "-D",
+            "-I",                 "-isystem",               "-iwithsysroot",     "-idirafter",
+            "-iframework",        "-iframeworkwithsysroot", "-target",           "-mcpu",
+            "-mcmodel",           "--dynamic-linker",       "--sysroot",         "--libc",
+            "--test-filter",      "--test-runner",          "--test-cmd",        "--cache-dir",
+            "--global-cache-dir", "--zig-lib-dir",          "--build-root",      "--debug-log",
+            "--listen",           "--entitlements",         "-z",                "-x",
+        }) |option| {
+            if (std.mem.eql(u8, arg, option)) break true;
+        } else false;
+        if (takes_value) {
+            i += 1;
+            continue;
+        }
+        // These global switches use their last occurrence, as in Zig itself.
+        if (std.mem.eql(u8, arg, "-fllvm")) llvm = true;
+        if (std.mem.eql(u8, arg, "-fno-llvm")) llvm = false;
+        if (std.mem.eql(u8, arg, "-flld")) lld = true;
+        if (std.mem.eql(u8, arg, "-fno-lld")) lld = false;
+    }
+    if (!llvm or !lld) {
+        try diagnostics.writeAll("zig incremental compilation: shared libraries require explicit -fllvm and -flld; the Zig 0.17 self-hosted shared-library configuration is unsupported\n");
+        return error.UnsupportedSharedLibraryBackend;
+    }
+}
+
+test "shared backend checks distinguish switches from option operands" {
+    var diagnostics: Io.Writer.Allocating = .init(std.testing.allocator);
+    defer diagnostics.deinit();
+    try std.testing.expectError(error.UnsupportedSharedLibraryBackend, checkSharedLibraryArgs(&.{ "-fllvm", "-fno-lld", "-rpath", "-flld" }, &diagnostics.writer));
+    try checkSharedLibraryArgs(&.{ "-fllvm", "-flld", "-rpath", "-fno-llvm" }, &diagnostics.writer);
+    try checkSharedLibraryArgs(&.{ "-fno-llvm", "-fno-lld", "-fllvm", "-flld" }, &diagnostics.writer);
+    try std.testing.expectError(error.UnsupportedSharedLibraryVersion, checkSharedLibraryArgs(&.{ "-fllvm", "-flld", "--version", "1.2.3" }, &diagnostics.writer));
+}
 
 fn reserved(arg: []const u8) bool {
     if (std.mem.startsWith(u8, arg, "@") or std.mem.startsWith(u8, arg, "-femit-") or std.mem.startsWith(u8, arg, "-fno-emit-")) return true;
@@ -182,6 +257,11 @@ const Worker = struct {
         const global_cache = try std.fs.path.join(a, &.{ self.root, "global-cache" });
         var argv: std.array_list.Managed([]const u8) = .init(a);
         try argv.appendSlice(&.{ self.zig, compilation.command, "--listen=-", "-fincremental", "--name", compilation.name, "--cache-dir", cache, "--global-cache-dir", global_cache, "--zig-lib-dir", self.lib });
+        switch (compilation.output_kind) {
+            .static_library => try argv.append("-static"),
+            .shared_library => try argv.append("-dynamic"),
+            .executable => if (std.mem.eql(u8, compilation.command, "test")) try argv.append("--test-no-exec"),
+        }
         // Zig 0.17 cannot encode apostrophes in response files and consumes
         // direct argv before response contents. Use one representation for the
         // entire semantic vector so module dependency ordering stays intact.
@@ -238,7 +318,7 @@ const Worker = struct {
         const compilation = try Compilation.parse(a, request.arguments);
         const arguments = try compilation.compilerArgs(a, self.io, diagnostics);
         const output_path = compilation.output;
-        const key = try std.json.Stringify.valueAlloc(a, .{ compilation.command, compilation.name, output_path, arguments }, .{});
+        const key = try std.json.Stringify.valueAlloc(a, .{ compilation.command, compilation.output_kind, compilation.name, output_path, arguments }, .{});
         var reused = self.session != null and std.mem.eql(u8, self.session.?.key, key);
         const started_at = Io.Clock.awake.now(self.io);
         var s = if (reused) self.session.? else try self.start(compilation, key, arguments, request.inputs, a);
@@ -303,7 +383,7 @@ const Worker = struct {
             }
         }
         const compiled_at = Io.Clock.awake.now(self.io);
-        const artifact = try std.fs.path.join(a, &.{ s.cache, "o", digest orelse return error.MissingEmitDigest, compilation.name });
+        const artifact = try std.fs.path.join(a, &.{ s.cache, "o", digest orelse return error.MissingEmitDigest, try compilation.artifactName(a) });
         // Atomic copy, never a hard link: Zig mutates the private artifact in place.
         try Dir.cwd().copyFile(artifact, .cwd(), output_path, self.io, .{ .make_path = true });
         const ms = started_at.untilNow(self.io, .awake).toMilliseconds();

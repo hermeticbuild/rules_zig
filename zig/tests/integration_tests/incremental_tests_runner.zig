@@ -15,13 +15,62 @@ fn expectProgram(ctx: BitContext, path: []const u8, expected: []const u8) !void 
 }
 
 fn build(ctx: BitContext, mode: []const []const u8, extra: []const []const u8) !BitContext.BazelResult {
+    return buildTarget(ctx, mode, extra, "//:incremental");
+}
+
+fn buildTarget(ctx: BitContext, mode: []const []const u8, extra: []const []const u8, target: []const u8) !BitContext.BazelResult {
     var argv: std.array_list.Managed([]const u8) = .init(a);
     defer argv.deinit();
     try argv.appendSlice(&.{ "build", "--@rules_zig//zig/settings:incremental", "--worker_max_instances=ZigIncrementalCompile=1", "--noworker_multiplex", "--experimental_worker_strict_flagfiles", "--worker_verbose" });
     try argv.appendSlice(mode);
     try argv.appendSlice(extra);
-    try argv.append("//:incremental");
+    try argv.append(target);
     return ctx.exec_bazel(.{ .argv = argv.items, .print_on_error = false });
+}
+
+fn expectTarget(ctx: BitContext, mode: []const []const u8, extra: []const []const u8, target: []const u8) !void {
+    const result = try buildTarget(ctx, mode, extra, target);
+    defer result.deinit();
+    if (!result.success) std.debug.print("{s}\n{s}\n", .{ result.stdout, result.stderr });
+    try std.testing.expect(result.success);
+}
+
+fn expectFailure(result: BitContext.BazelResult, message: []const u8) !void {
+    if (result.success or std.mem.find(u8, result.stderr, message) == null)
+        std.debug.print("Expected failure containing '{s}':\n{s}\n{s}\n", .{ message, result.stdout, result.stderr });
+    try std.testing.expect(!result.success);
+    try std.testing.expect(std.mem.find(u8, result.stderr, message) != null);
+}
+
+fn expectTestProgram(ctx: BitContext, success: bool) !void {
+    const program = try std.fs.path.join(a, &.{ ctx.workspace_path, "bazel-bin/incremental_test" });
+    defer a.free(program);
+    const result = try std.process.run(a, io, .{ .argv = &.{program} });
+    defer a.free(result.stdout);
+    defer a.free(result.stderr);
+    try std.testing.expectEqual(success, result.term.success());
+    try std.testing.expect(std.mem.find(u8, result.stderr, if (success) "All 1 tests passed" else "TestUnexpectedResult") != null);
+}
+
+fn expectLibrary(ctx: BitContext, sdk: []const u8, library: []const u8, expected: []const u8) !void {
+    const source = "const std = @import(\"std\");\nextern fn answer() u32;\npub fn main(init: std.process.Init) !void {var buffer: [32]u8 = undefined; const text = try std.fmt.bufPrint(&buffer, \"{d}\\n\", .{answer()}); try std.Io.File.stdout().writeStreamingAll(init.io, text);}\n";
+    try ctx.writeWorkspaceFile("library_consumer.zig", source);
+    const main = try std.fs.path.join(a, &.{ ctx.workspace_path, "library_consumer.zig" });
+    defer a.free(main);
+    const lib = try std.fs.path.join(a, &.{ ctx.workspace_path, library });
+    defer a.free(lib);
+    const sdk_lib = try std.fs.path.join(a, &.{ std.fs.path.dirname(sdk).?, "lib" });
+    defer a.free(sdk_lib);
+    const cache = try std.fs.path.join(a, &.{ ctx.workspace_path, "consumer-cache" });
+    defer a.free(cache);
+    const output = try std.fmt.allocPrint(a, "-femit-bin={s}/library_consumer", .{ctx.workspace_path});
+    defer a.free(output);
+    const result = try std.process.run(a, io, .{ .argv = &.{ sdk, "build-exe", main, lib, "-lc", "-j4", "-rpath", std.fs.path.dirname(lib).?, "--zig-lib-dir", sdk_lib, "--cache-dir", cache, "--global-cache-dir", cache, output } });
+    defer a.free(result.stdout);
+    defer a.free(result.stderr);
+    if (!result.term.success()) std.debug.print("Library consumer failed: {s}\n", .{result.stderr});
+    try std.testing.expect(result.term.success());
+    try expectProgram(ctx, "library_consumer", expected);
 }
 
 fn expectBuild(ctx: BitContext, mode: []const []const u8, extra: []const []const u8) !void {
@@ -252,4 +301,97 @@ test "incremental binaries retain current inputs and independent outputs in each
         try std.Io.sleep(io, .fromMilliseconds(25), .awake);
     }
     return error.CompilerSurvivedWorkerShutdown;
+}
+
+test "incremental tests and libraries preserve updates and reject unsupported configurations" {
+    if (builtin.os.tag != .linux or builtin.cpu.arch != .x86_64) return error.SkipZigTest;
+    const ctx = try BitContext.init();
+    defer ctx.deinit();
+    defer {
+        const shutdown = ctx.exec_bazel(.{ .argv = &.{"shutdown"} }) catch null;
+        if (shutdown) |result| result.deinit();
+    }
+    const info = try ctx.exec_bazel(.{ .argv = &.{ "info", "output_base" } });
+    defer info.deinit();
+    try std.testing.expect(info.success);
+    const output_base = std.mem.trim(u8, info.stdout, "\r\n");
+    const modes = [_][]const []const u8{
+        &.{"--noworker_sandboxing"},
+        &.{"--worker_sandboxing"},
+        &.{ "--worker_sandboxing", "--experimental_worker_sandbox_hardening" },
+    };
+    const self_backend = &.{ "--@rules_zig//zig/settings:zigopt=-fno-llvm", "--@rules_zig//zig/settings:zigopt=-fno-lld" };
+    const llvm_backend = &.{ "--@rules_zig//zig/settings:zigopt=-fllvm", "--@rules_zig//zig/settings:zigopt=-flld" };
+    for (modes, 0..) |mode, index| {
+        std.debug.print("Test/library worker mode {d}\n", .{index});
+        for ([_][]const []const u8{ self_backend, llvm_backend }) |backend| {
+            try ctx.writeWorkspaceFile("incremental_value.zig", "pub const value: u32 = 42;\n");
+            try expectTarget(ctx, mode, backend, "//:incremental_test");
+            try expectTestProgram(ctx, true);
+            const compiler = try compilerProcess(output_base);
+            defer a.free(compiler);
+            if (index == 2) try expectHardened(ctx, compiler);
+            try ctx.writeWorkspaceFile("incremental_value.zig", "pub const value: u32 = 44;\n");
+            try expectTarget(ctx, mode, backend, "//:incremental_test");
+            try expectTestProgram(ctx, true);
+            const reused = try compilerProcess(output_base);
+            defer a.free(reused);
+            try std.testing.expectEqualStrings(compiler, reused);
+            try ctx.writeWorkspaceFile("incremental_value.zig", "pub const value: u32 = 43;\n");
+            try expectTarget(ctx, mode, backend, "//:incremental_test");
+            try expectTestProgram(ctx, false);
+        }
+        const compiler = try compilerProcess(output_base);
+        defer a.free(compiler);
+        const cmd_path = try std.fs.path.join(a, &.{ compiler, "cmdline" });
+        defer a.free(cmd_path);
+        const command = try readProc(.cwd(), cmd_path);
+        defer a.free(command);
+        const sdk = command[0..std.mem.findScalar(u8, command, 0).?];
+        const targets = [_][]const u8{ "//:incremental_static", "//:incremental_static", "//:incremental_shared" };
+        const libraries = [_][]const u8{ "bazel-bin/libincremental_static.a", "bazel-bin/libincremental_static.a", "bazel-bin/libincremental_custom.so" };
+        const backends = [_][]const []const u8{ self_backend, llvm_backend, llvm_backend };
+        for (targets, libraries, backends) |target, library, backend| {
+            try ctx.writeWorkspaceFile("incremental_value.zig", "pub const value: u32 = 42;\n");
+            try expectTarget(ctx, mode, backend, target);
+            const first = try compilerProcess(output_base);
+            defer a.free(first);
+            try expectLibrary(ctx, sdk, library, "42\n");
+            try ctx.writeWorkspaceFile("incremental_value.zig", "pub const value: u32 = 44;\n");
+            try expectTarget(ctx, mode, backend, target);
+            const second = try compilerProcess(output_base);
+            defer a.free(second);
+            try std.testing.expectEqualStrings(first, second);
+            try expectLibrary(ctx, sdk, library, "44\n");
+            // The non-worker strategy still requests incremental compiler mode.
+            try ctx.writeWorkspaceFile("incremental_value.zig", "pub const value: u32 = 46;\n");
+            try expectTarget(ctx, mode, &.{ "--strategy=ZigIncrementalCompile=sandboxed", "--@rules_zig//zig/settings:zigopt=-fllvm", "--@rules_zig//zig/settings:zigopt=-flld" }, target);
+            try expectLibrary(ctx, sdk, library, "46\n");
+        }
+    }
+    const rejected = [_][]const []const u8{
+        &.{},
+        self_backend,
+        &.{"--@rules_zig//zig/settings:zigopt=-fllvm"},
+        &.{ "--@rules_zig//zig/settings:zigopt=-fllvm", "--@rules_zig//zig/settings:zigopt=-flld", "--@rules_zig//zig/settings:zigopt=-fno-lld" },
+        &.{ "--@rules_zig//zig/settings:zigopt=-fllvm", "--@rules_zig//zig/settings:zigopt=-flld", "--@rules_zig//zig/settings:zigopt=-fno-llvm" },
+        &.{ "--@rules_zig//zig/settings:zigopt=-fllvm", "--@rules_zig//zig/settings:zigopt=-fno-lld", "--@rules_zig//zig/settings:zigopt=-rpath", "--@rules_zig//zig/settings:zigopt=-flld" },
+    };
+    for (rejected) |backend| {
+        const result = try buildTarget(ctx, modes[2], backend, "//:incremental_shared");
+        defer result.deinit();
+        try expectFailure(result, "shared libraries require explicit -fllvm and -flld");
+    }
+    const platform = try buildTarget(ctx, modes[2], &.{"--platforms=//:aarch64_linux"}, "//:incremental_static");
+    defer platform.deinit();
+    try expectFailure(platform, "supports x86_64-linux targets only");
+    const versioned = try buildTarget(ctx, modes[2], &.{ "--@rules_zig//zig/settings:zigopt=-fllvm", "--@rules_zig//zig/settings:zigopt=-flld", "--@rules_zig//zig/settings:zigopt=--version", "--@rules_zig//zig/settings:zigopt=1.2.3" }, "//:incremental_shared");
+    defer versioned.deinit();
+    try expectFailure(versioned, "versioned shared-library artifacts (--version) are unsupported");
+    try expectTarget(ctx, modes[2], &.{ "--@rules_zig//zig/settings:zigopt=-fllvm", "--@rules_zig//zig/settings:zigopt=-flld", "--@rules_zig//zig/settings:zigopt=-rpath", "--@rules_zig//zig/settings:zigopt=-fno-llvm" }, "//:incremental_shared");
+    try expectTarget(ctx, modes[2], llvm_backend, "//:incremental_shared");
+    try ctx.writeWorkspaceFile("incremental_value.zig", "pub const value: u32 = 44;\n");
+    const bazel_test = try ctx.exec_bazel(.{ .argv = &.{ "test", "--@rules_zig//zig/settings:incremental", "--worker_sandboxing", "--experimental_worker_sandbox_hardening", "--test_output=errors", "//:incremental_test" } });
+    defer bazel_test.deinit();
+    try std.testing.expect(bazel_test.success);
 }

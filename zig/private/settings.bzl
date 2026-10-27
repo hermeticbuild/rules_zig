@@ -40,7 +40,7 @@ STRIP_VALUES = ["always", "never", "sometimes"]
 
 ATTRS = {
     "incremental": attr.label(
-        doc = "Whether to use experimental incremental compilation for target binaries.",
+        doc = "Whether to use experimental incremental compilation for target compilations.",
         mandatory = True,
     ),
     "mode": attr.label(
