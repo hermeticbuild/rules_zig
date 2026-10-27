@@ -5,7 +5,7 @@ load("@rules_cc//cc:find_cc_toolchain.bzl", "CC_TOOLCHAIN_TYPE")
 load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
 load(":semver.bzl", "semver")
 
-_MIN_ZIG_VERSION = "0.18.0-dev.624+b7f2c6d8f"
+_DIRECT_BITCODE_MIN_ZIG_VERSION = "0.18.0-dev.624+b7f2c6d8f"
 _OPTIMIZATION = {
     "debug": "-O0",
     "release_safe": "-O3",
@@ -15,8 +15,8 @@ _OPTIMIZATION = {
 
 def thin_lto_validate(ctx, *, kind, zigtoolchaininfo, settings, root_module):
     """Reject combinations which cannot preserve the raw-bitcode contract."""
-    if not semver.gte(zigtoolchaininfo.zig_version, _MIN_ZIG_VERSION):
-        fail("ThinLTO requires Zig {} or newer with -ofmt=llvmbc support.".format(_MIN_ZIG_VERSION))
+    if zigtoolchaininfo.zig_version != "0.17.0" and not semver.gte(zigtoolchaininfo.zig_version, _DIRECT_BITCODE_MIN_ZIG_VERSION):
+        fail("ThinLTO requires Zig 0.17.0 or {} or newer with -ofmt=llvmbc support.".format(_DIRECT_BITCODE_MIN_ZIG_VERSION))
     if kind != "zig_static_library" and not settings.use_cc_common_link:
         fail("ThinLTO requires --@rules_zig//zig/settings:use_cc_common_link=true.")
     if ctx.attr.csrcs or ctx.attr.copts:
@@ -31,8 +31,20 @@ def thin_lto_validate(ctx, *, kind, zigtoolchaininfo, settings, root_module):
     for module in [root_module.module_context] + root_module.transitive_module_contexts.to_list():
         options.extend(module.zigopts)
     for option in options:
-        if option in ["-fno-llvm", "-flibllvm", "-flld", "-fno-PIC", "-target", "-mcpu"] or option.startswith(("-ofmt=", "-flto", "-femit-", "-fno-emit-", "-mcpu=", "-O")):
+        if option in ["-fno-llvm", "-flibllvm", "-flld", "-fno-PIC", "-target", "-mcpu"] or option.startswith(("-ofmt=", "-flto", "-femit-", "-fno-emit-", "-mcpu=", "-O", "--verbose-llvm-bc")):
             fail("ThinLTO cannot be combined with Zig option '{}'.".format(option))
+
+def thin_lto_emit_args(*, zig_version, args, output):
+    """Emit raw bitcode without running libLLVM, using the SDK's output interface."""
+    args.add_all(["-fno-libllvm", "-fno-lld", "-fPIC"])
+    if zig_version == "0.17.0":
+        # 0.17 can dump the frontend module before libLLVM, but has no llvmbc
+        # output format. Disable normal output so compilation ends at the dump.
+        args.add_all(["-fllvm", "-fno-emit-bin"])
+        args.add(output, format = "--verbose-llvm-bc=%s")
+    else:
+        args.add("-ofmt=llvmbc")
+        args.add(output, format = "-femit-bin=%s")
 
 def _version(value):
     parts = value.split(".")

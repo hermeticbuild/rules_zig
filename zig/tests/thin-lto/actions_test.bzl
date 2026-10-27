@@ -11,7 +11,17 @@ def _impl(ctx):
     asserts.equals(env, 1, len(prepared), "Clang must prepare the full and minimized bitcode together")
     if raw and prepared:
         asserts.true(env, "build-obj" in raw[0].argv)
-        asserts.true(env, "-ofmt=llvmbc" in raw[0].argv)
+        asserts.equals(env, 1, len(raw[0].outputs.to_list()))
+        output = raw[0].outputs.to_list()[0]
+        if "-fno-emit-bin" in raw[0].argv:
+            asserts.true(env, "--verbose-llvm-bc=" + output.path in raw[0].argv)
+            asserts.true(env, "-fllvm" in raw[0].argv)
+            asserts.true(env, "-fno-emit-bin" in raw[0].argv)
+            asserts.false(env, "-ofmt=llvmbc" in raw[0].argv)
+            asserts.false(env, "-femit-bin=" + output.path in raw[0].argv)
+        else:
+            asserts.true(env, "-ofmt=llvmbc" in raw[0].argv)
+            asserts.true(env, "-femit-bin=" + output.path in raw[0].argv)
         asserts.true(env, "-fno-libllvm" in raw[0].argv)
         asserts.false(env, "-flto=thin" in raw[0].argv)
         asserts.true(env, "-flto=thin" in prepared[0].argv)
@@ -20,6 +30,13 @@ def _impl(ctx):
     return analysistest.end(env)
 
 thin_lto_actions_test = analysistest.make(_impl)
+
+def _output_override_impl(ctx):
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "ThinLTO cannot be combined with Zig option '--verbose-llvm-bc=other.bc'")
+    return analysistest.end(env)
+
+thin_lto_output_override_test = analysistest.make(_output_override_impl, expect_failure = True)
 
 def _disabled_impl(ctx):
     env = analysistest.begin(ctx)

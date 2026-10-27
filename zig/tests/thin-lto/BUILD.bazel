@@ -1,8 +1,8 @@
 load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
 load("//zig:defs.bzl", "zig_binary", "zig_shared_library", "zig_static_library", "zig_test")
-load(":actions_test.bzl", "thin_lto_actions_test", "thin_lto_backend_flags_test", "thin_lto_deployment_conflict_test", "thin_lto_disabled_test", "thin_lto_mismatch_test")
+load(":actions_test.bzl", "thin_lto_actions_test", "thin_lto_backend_flags_test", "thin_lto_deployment_conflict_test", "thin_lto_disabled_test", "thin_lto_mismatch_test", "thin_lto_output_override_test")
 
-# Run explicitly with the pinned nightly, patched rules_cc, a compatible Clang
+# Run explicitly with Zig 0.17.0 or the pinned nightly, patched rules_cc, a compatible Clang
 # toolchain, aligned targets, --features=thin_lto, and use_cc_common_link=true.
 package(default_visibility = ["//visibility:public"])
 
@@ -70,6 +70,19 @@ thin_lto_disabled_test(
     target_under_test = ":library",
 )
 
+zig_static_library(
+    name = "output_override",
+    main = "library.zig",
+    tags = ["manual"],
+    zigopts = ["--verbose-llvm-bc=other.bc"],
+)
+
+thin_lto_output_override_test(
+    name = "output_override_test",
+    tags = ["manual"],
+    target_under_test = ":output_override",
+)
+
 thin_lto_backend_flags_test(
     name = "backend_flags_test",
     tags = ["manual"],
@@ -103,6 +116,7 @@ test_suite(
         ":deployment_conflict_test",
         ":disabled_test",
         ":mismatch_test",
+        ":output_override_test",
         ":zig_test_calls_c",
     ],
 )

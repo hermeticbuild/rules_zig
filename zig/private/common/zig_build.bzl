@@ -30,7 +30,7 @@ load(
 )
 load("//zig/private/common:linker_script.bzl", "zig_linker_script")
 load("//zig/private/common:location_expansion.bzl", "location_expansion")
-load("//zig/private/common:thin_lto.bzl", "thin_lto_compile", "thin_lto_validate")
+load("//zig/private/common:thin_lto.bzl", "thin_lto_compile", "thin_lto_emit_args", "thin_lto_validate")
 load("//zig/private/common:translate_c.bzl", "zig_translate_c")
 load("//zig/private/common:zig_cache.bzl", "zig_cache_output")
 load("//zig/private/common:zig_lib_dir.bzl", "zig_lib_dir")
@@ -574,12 +574,10 @@ def zig_build_impl(ctx, *, kind):
         raw = ctx.actions.declare_file(ctx.label.name + ".raw.bc")
         raw_args = ctx.actions.args()
 
-        # -ofmt=llvmbc selects Zig's LLVM IR generator without loading libLLVM.
         # Object mode keeps requested compiler-rt in this same module.
-        raw_args.add_all(["-ofmt=llvmbc", "-fno-libllvm", "-fno-lld", "-fPIC"])
+        thin_lto_emit_args(zig_version = zigtoolchaininfo.zig_version, args = raw_args, output = raw)
         if kind == "zig_test":
             raw_args.add("--test-no-exec")
-        raw_args.add(raw, format = "-femit-bin=%s")
         ctx.actions.run(
             outputs = [raw],
             inputs = inputs,
