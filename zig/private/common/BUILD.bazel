@@ -33,6 +33,7 @@ bzl_library(
         ":filetypes",
         ":linker_script",
         ":location_expansion",
+        ":thin_lto",
         ":translate_c",
         ":zig_cache",
         ":zig_lib_dir",
@@ -46,6 +47,18 @@ bzl_library(
         "@rules_cc//cc:find_cc_toolchain_bzl",
         "@rules_cc//cc/common",
         "@rules_cc//cc/private/rules_impl:objc_common",  # keep
+    ],
+)
+
+bzl_library(
+    name = "thin_lto",
+    srcs = ["thin_lto.bzl"],
+    visibility = ["//zig:__subpackages__"],
+    deps = [
+        ":semver",
+        "@rules_cc//cc:action_names.bzl",
+        "@rules_cc//cc:find_cc_toolchain_bzl",
+        "@rules_cc//cc/common",
     ],
 )
 
@@ -178,6 +191,7 @@ filegroup(
         ":linker_script.bzl",
         ":location_expansion.bzl",
         ":semver.bzl",
+        ":thin_lto.bzl",
         ":translate_c.bzl",
         ":zig_build.bzl",
         ":zig_cache.bzl",

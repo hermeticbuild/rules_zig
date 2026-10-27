@@ -1,0 +1,108 @@
+load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
+load("//zig:defs.bzl", "zig_binary", "zig_shared_library", "zig_static_library", "zig_test")
+load(":actions_test.bzl", "thin_lto_actions_test", "thin_lto_backend_flags_test", "thin_lto_deployment_conflict_test", "thin_lto_disabled_test", "thin_lto_mismatch_test")
+
+# Run explicitly with the pinned nightly, patched rules_cc, a compatible Clang
+# toolchain, aligned targets, --features=thin_lto, and use_cc_common_link=true.
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "nightly-index.json",
+    "rules_cc.patch",
+])
+
+zig_static_library(
+    name = "library",
+    main = "library.zig",
+    tags = ["manual"],
+)
+
+zig_shared_library(
+    name = "shared",
+    main = "library.zig",
+    tags = ["manual"],
+)
+
+cc_test(
+    name = "c_calls_zig",
+    srcs = ["main.c"],
+    tags = ["manual"],
+    deps = [":library"],
+)
+
+cc_test(
+    name = "c_calls_shared_zig",
+    srcs = ["main.c"],
+    linkstatic = False,
+    tags = ["manual"],
+    deps = [":shared"],
+)
+
+cc_library(
+    name = "c_library",
+    srcs = ["library.c"],
+    tags = ["manual"],
+)
+
+zig_binary(
+    name = "zig_calls_c",
+    main = "main.zig",
+    tags = ["manual"],
+    deps = [":c_library"],
+)
+
+zig_test(
+    name = "zig_test_calls_c",
+    main = "test.zig",
+    tags = ["manual"],
+    deps = [":c_library"],
+)
+
+thin_lto_actions_test(
+    name = "actions_test",
+    tags = ["manual"],
+    target_under_test = ":library",
+)
+
+thin_lto_disabled_test(
+    name = "disabled_test",
+    tags = ["manual"],
+    target_under_test = ":library",
+)
+
+thin_lto_backend_flags_test(
+    name = "backend_flags_test",
+    tags = ["manual"],
+    target_under_test = ":zig_calls_c",
+)
+
+thin_lto_mismatch_test(
+    name = "mismatch_test",
+    tags = ["manual"],
+    target_under_test = ":library",
+)
+
+thin_lto_deployment_conflict_test(
+    name = "deployment_conflict_test",
+    tags = ["manual"],
+    target_compatible_with = [
+        "@platforms//os:macos",
+        "@platforms//cpu:aarch64",
+    ],
+    target_under_test = ":library",
+)
+
+test_suite(
+    name = "tests",
+    tags = ["manual"],
+    tests = [
+        ":actions_test",
+        ":backend_flags_test",
+        ":c_calls_shared_zig",
+        ":c_calls_zig",
+        ":deployment_conflict_test",
+        ":disabled_test",
+        ":mismatch_test",
+        ":zig_test_calls_c",
+    ],
+)

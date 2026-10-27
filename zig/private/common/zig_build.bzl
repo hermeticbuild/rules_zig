@@ -30,6 +30,7 @@ load(
 )
 load("//zig/private/common:linker_script.bzl", "zig_linker_script")
 load("//zig/private/common:location_expansion.bzl", "location_expansion")
+load("//zig/private/common:thin_lto.bzl", "thin_lto_compile", "thin_lto_validate")
 load("//zig/private/common:translate_c.bzl", "zig_translate_c")
 load("//zig/private/common:zig_cache.bzl", "zig_cache_output")
 load("//zig/private/common:zig_lib_dir.bzl", "zig_lib_dir")
@@ -237,7 +238,7 @@ def _shared_lib_extension(os):
         "windows": ".dll",
         "darwin": ".dylib",
         "macos": ".dylib",
-    }.get(os, ".so")
+    }.get(os.split(".")[0], ".so")
 
 def _executable_extension(os):
     return ".exe" if os == "windows" else ""
@@ -284,11 +285,15 @@ def zig_build_impl(ctx, *, kind):
     settings = ctx.attr._settings[ZigSettingsInfo]
     use_cc_common_link = settings.use_cc_common_link
 
-    cc_toolchain = None
-    feature_configuration = None
+    cc_toolchain, feature_configuration = find_cc_toolchain(ctx, mandatory = use_cc_common_link and kind != "zig_static_library")
+    thin_lto = cc_toolchain != None and cc_common.is_enabled(
+        feature_configuration = feature_configuration,
+        feature_name = "thin_lto",
+    )
+    if "thin_lto" in ctx.features and "thin_lto" not in ctx.disabled_features and not thin_lto:
+        fail("Zig ThinLTO requires a resolved C/C++ toolchain supporting the thin_lto feature.")
     generate_dsym_file = False
     if use_cc_common_link and kind != "zig_static_library":
-        cc_toolchain, feature_configuration = find_cc_toolchain(ctx, mandatory = True)
         generate_dsym_file = cc_common.is_enabled(
             feature_configuration = feature_configuration,
             feature_name = "generate_dsym_file",
@@ -468,6 +473,9 @@ def zig_build_impl(ctx, *, kind):
         args = global_args,
     )
 
+    if thin_lto:
+        thin_lto_validate(ctx, kind = kind, zigtoolchaininfo = zigtoolchaininfo, settings = settings, root_module = root_module)
+
     zig_target_platform(
         target = zigtargetinfo,
         args = global_args,
@@ -562,7 +570,62 @@ def zig_build_impl(ctx, *, kind):
         output_groups["llvm_bc"] = depset([llvm_bc_output])
         args.add(llvm_bc_output, format = "-femit-llvm-bc=%s")
 
-    if kind == "zig_binary":
+    if thin_lto:
+        raw = ctx.actions.declare_file(ctx.label.name + ".raw.bc")
+        raw_args = ctx.actions.args()
+
+        # -ofmt=llvmbc selects Zig's LLVM IR generator without loading libLLVM.
+        # Object mode keeps requested compiler-rt in this same module.
+        raw_args.add_all(["-ofmt=llvmbc", "-fno-libllvm", "-fno-lld", "-fPIC"])
+        if kind == "zig_test":
+            raw_args.add("--test-no-exec")
+        raw_args.add(raw, format = "-femit-bin=%s")
+        ctx.actions.run(
+            outputs = [raw],
+            inputs = inputs,
+            executable = zig_toolchain_executable(zigtoolchaininfo),
+            arguments = ["test-obj" if kind == "zig_test" else "build-obj", global_args, raw_args, args],
+            mnemonic = "ZigEmitBitcode",
+            progress_message = "Emitting Zig bitcode %{label}",
+            **zig_build_kwargs
+        )
+        compilation_outputs = thin_lto_compile(
+            ctx,
+            raw = raw,
+            cc_toolchain = cc_toolchain,
+            feature_configuration = feature_configuration,
+            zigtargetinfo = zigtargetinfo,
+            settings = settings,
+        )
+        if kind == "zig_static_library":
+            _, link_outputs = cc_common.create_linking_context_from_compilation_outputs(
+                actions = ctx.actions,
+                name = ctx.label.name,
+                feature_configuration = feature_configuration,
+                cc_toolchain = cc_toolchain,
+                compilation_outputs = compilation_outputs,
+                disallow_dynamic_library = True,
+            )
+            exported_library_to_link = link_outputs.library_to_link
+            archive = exported_library_to_link.static_library or exported_library_to_link.pic_static_library
+            if archive != bin_output:
+                ctx.actions.symlink(output = bin_output, target_file = archive)
+        else:
+            link_outputs = cc_common_link(
+                actions = ctx.actions,
+                feature_configuration = feature_configuration,
+                cc_toolchain = cc_toolchain,
+                name = ctx.label.name,
+                output_type = "dynamic_library" if kind == "zig_shared_library" else "executable",
+                main_output = bin_output,
+                compilation_outputs = compilation_outputs,
+                linking_contexts = [root_module.cc_info.linking_context],
+                user_link_flags = linkopts,
+                **cc_link_kwargs
+            )
+            if kind == "zig_shared_library":
+                exported_library_to_link = link_outputs.library_to_link
+    elif kind == "zig_binary":
         if use_cc_common_link:
             static_lib = ctx.actions.declare_file(ctx.label.name + _static_lib_extension(zigtargetinfo.triple.os))
             args.add(static_lib, format = "-femit-bin=%s")
