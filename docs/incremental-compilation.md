@@ -72,12 +72,41 @@ bazel build --@rules_zig//zig/settings:incremental \
   --strategy=ZigIncrementalCompile=worker //app:app
 ```
 
-Each worker retains one Zig compiler session. Changing its compilation options
-or building a different output replaces that session. Bazel's worker pool
+Each worker retains one Zig compiler session by default. Changing its compilation
+options or building a different output replaces that session. Bazel's worker pool
 can start several workers, so resource use and target scheduling affect how
 often a warm compiler is available. `--worker_max_instances=ZigIncrementalCompile=1`
 is useful when evaluating a single binary; it is not a universal performance
 recommendation.
+
+For builds that alternate between several targets, a worker can retain a bounded
+number of sessions:
+
+```sh
+bazel build --@rules_zig//zig/settings:incremental \
+  --worker_extra_flag=ZigIncrementalCompile=--max-sessions=2 //app:app
+```
+
+The limit counts active and idle compilers together. When full, the worker stops
+the least recently used compiler and removes its staged inputs and local cache.
+Its global cache remains private to the worker. Every reused session still checks
+the current request's inputs before compiling. This trades additional memory and
+disk space for reuse across outputs; the default stays at one. The bound applies
+per worker, not to the entire build. Bazel can create several workers and does not
+guarantee that a target returns to the same one. Changing startup flags can also
+leave a different worker pool alive until Bazel evicts it or shuts down.
+
+Direct and incremental compilations share action declaration and semantic argument
+construction. Incremental actions use one automatic parameter file containing
+versioned metadata, the output path, ordered compiler arguments, and the declared
+input paths. The same request is used for persistent and one-shot execution. The
+adapter does not reconstruct commands by stripping compiler options. Missing input
+digests conservatively cause a fresh copy; they never imply unchanged contents.
+
+Paths supplied as artifacts remain File-aware until the action expands its
+arguments. This removes the separate argument/manifest write actions, but does
+not advertise `supports-path-mapping`: location-expanded compiler options and
+Bazel's worker input-path namespace still need complete qualification.
 
 The adapter stages current declared inputs in a private `/tmp` directory. Changed
 Bazel input digests cause atomic file replacement, including when timestamps and

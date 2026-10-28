@@ -17,13 +17,16 @@ def _assert_incremental(env, command, output_kind):
     asserts.equals(env, 1, len(metadata_args), "The action must carry one explicit compilation request: " + str(action.argv))
     if metadata_args:
         metadata = json.decode(metadata_args[0])
-        asserts.equals(env, 1, metadata["schema"])
+        asserts.equals(env, 2, metadata["schema"])
         asserts.equals(env, command, metadata["command"])
         asserts.equals(env, output_kind, metadata["output_kind"])
-        asserts.true(env, metadata["output"] in [file.path for file in action.outputs.to_list()])
+        header_index = action.argv.index(metadata_args[0])
+        asserts.true(env, action.argv[header_index + 1] in [file.path for file in action.outputs.to_list()])
         input_paths = [file.path for file in action.inputs.to_list()]
-        for path in metadata["argument_files"] + [metadata["input_manifest"]]:
-            asserts.true(env, path in input_paths, "Request files must be declared action inputs.")
+        for arg in action.argv:
+            if arg.startswith("input="):
+                asserts.true(env, arg[len("input="):] in input_paths, "The framed request must name declared inputs.")
+        asserts.false(env, any([path.endswith(".zig-inputs") or path.endswith(".zig-global.args") or path.endswith(".zig-module.args") for path in input_paths]))
     asserts.false(env, any([arg.startswith("-femit-bin=") for arg in action.argv]))
     asserts.false(env, "--cache-dir" in action.argv)
     asserts.false(env, "--zig-lib-dir" in action.argv)

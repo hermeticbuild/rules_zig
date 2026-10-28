@@ -13,7 +13,7 @@ performance. Bazel owns action invalidation; Zig owns semantic incremental work.
 - Hermetic Zig 0.17.0, x86_64 Linux target, Zig linking, one primary output.
 - Binaries, test executables, and static libraries support self-hosted and LLVM
   compilation. Shared libraries require explicit effective LLVM and LLD options.
-- Singleplex JSON worker with one bounded active compiler session.
+- Singleplex JSON worker, one compiler session by default, optional bounded LRU.
 - Adapter-owned protocol, cache, SDK, naming, and output controls are reserved.
   Conflicting `zigopts` fail clearly; arbitrary invalid compiler usage is outside
   the contract. Semantic compiler arguments retain their original order.
@@ -61,7 +61,7 @@ changed Bazel input digests; they cannot repair Bazel failing to detect an edit.
 
 ## Deferred, not prerequisites
 
-Multiplexing, target-affinity/LRU optimization, remote worker locality, macOS and
+Multiplexing, target-affinity scheduling, remote worker locality, macOS and
 Windows, native dependencies, object pipelines/auxiliary outputs, additional Zig
 protocol versions, and remote-cache eligibility. Measure representative multiple
 target workloads before expanding session policy; synthetic results already
@@ -78,8 +78,10 @@ justify implementing the narrow supported mode.
 
 ## Final implementation decisions
 
-- **No request reconstruction or flag stripping.** The action owner writes schema-1
-  metadata, separate ordered global/module argument files, and an input manifest.
+- **No request reconstruction or flag stripping.** The action owner emits schema-2
+  metadata, the output File, ordered compiler arguments, and prefixed input File
+  records in one automatic parameter file. The final `--` frames the input list;
+  prefixed paths cannot collide with the delimiter, and empty operands survive.
   The adapter rejects reserved controls instead of interpreting or deleting them.
   Singleplex JSON and one-shot execution consume this same contract.
 - **Portable bootstrap.** The selected SDK compiles the adapter directly, using
@@ -103,8 +105,11 @@ justify implementing the narrow supported mode.
   an update after membership changed; restarting avoids stale filesystem entries
   and false undeclared-input failures. This sacrifices reuse on membership edits
   while preserving the common content-edit case.
-- **Bounded retention and publication.** One active compiler per worker; options,
-  output identity, or input membership replace it. Broken transport retries once;
+- **Bounded retention and publication.** One compiler per worker by default;
+  `--worker_extra_flag=ZigIncrementalCompile=--max-sessions=N` enables a bounded
+  LRU collection including the active compiler. Options and output identity select
+  a session; changed input membership replaces it. Eviction stops the compiler
+  and removes its private session tree. Broken transport retries once;
   ordinary compile errors can recover in place. Publication copies the private
   artifact rather than hard-linking it. Normal EOF/one-shot cleanup removes
   private state; forced termination may leave ordinary `/tmp` debris. Hardened
@@ -254,3 +259,70 @@ platform without a direct `platforms` dependency reproduced another repository
 mapping error. Both were fixture issues, distinct from the production target gate.
 Keep consumer-platform fixtures self-contained rather than relying on root-module
 development repositories.
+
+## Shared-action cleanup and bounded retention (2026-10-28)
+
+### Contract and implementation
+
+One compilation helper now owns action registration for both execution paths.
+Ordinary compilation keeps its executable, arguments, and environment. Incremental
+compilation selects the adapter and supplies one automatic parameter file containing
+schema-2 metadata, a File-valued output, ordered compiler arguments, and File-valued
+input records. The adapter uses the same request parser and execution logic for
+persistent and one-shot operation; it neither reconstructs nor strips compiler
+arguments. Module roots remain Files until argument expansion, including the ZLS
+consumer's explicit conversion to paths.
+
+Action-owned input records define membership; worker-protocol digests only optimize
+copying those inputs. A missing digest forces copying. This separates authority
+from the optional optimization and avoids depending on Bazel's current mismatch
+between mapped arguments and unmapped worker input paths. Full path-mapping support
+is still not advertised: location-expanded string options remain unqualified.
+
+Session retention defaults to one compiler. The startup option `--max-sessions=N`
+opts into a bounded LRU per worker; eviction terminates the compiler and removes
+its private session directory. Private global cache ownership, staged inputs,
+independent published outputs, and sandbox boundaries remain unchanged. A larger
+default or an unbounded worker key per output would impose an unmeasured memory
+cost. Bazel does not guarantee target affinity across worker processes.
+
+### Qualification
+
+- Compared ordinary action graphs before and after: all 207 compilation commands
+  and environments were identical. Inspected the incremental action graph for
+  schema-2 arguments, declared inputs, and execution requirements.
+- Broad macOS regression: 206 tests passed. After the final helper simplification,
+  all 17 focused checks passed and ordinary action equivalence was rechecked.
+- Minimal consumer integration passed on Bazel 8.4.1 and 9.2.0.
+- Native Linux integration: all three tests passed in 311.6 seconds, covering
+  existing compilation kinds/sandbox modes, empty one-shot arguments, and bounded
+  A/B/A/C/B retention with compiler reuse and eviction. Hardened execution used
+  the host's existing `linux-sandbox` AppArmor profile.
+- The standalone protocol probe passed metadata-preserving edits, independent
+  outputs, error recovery, removed inputs, configuration changes, compiler crash
+  recovery, embed edits, directory topology changes, empty/quoted arguments, SDK
+  aliases, sibling repositories, and the one-shot contract.
+- A forced path-mapping consumer with generated Zig sources built successfully
+  using `--experimental_output_paths=strip` and an explicit
+  `+supports-path-mapping` execution-info override. This was a macOS-to-Linux
+  cross-compilation check, not full path-mapping qualification.
+- Buildifier, Zig formatting, and whitespace checks passed. A narrow read-only
+  review found a probe telemetry attribution issue; per-log deltas and worker-key
+  filtering fixed it, and the follow-up review found no remaining issue.
+
+The final synthetic retention probe alternated two outputs with 2,000 exported
+functions and three rounds of edits. With one session, every switch restarted
+Zig: warm median Bazel elapsed time was 312 ms, with one compiler using 123,796 KiB
+RSS at the final sample. With two sessions, both compiler generations were reused:
+warm median was 125 ms, compiler updates took 7 ms, and two compilers used a combined
+385,856 KiB RSS at the final sample. The unmodified baseline's warm median was
+319.5 ms. These short synthetic runs demonstrate reuse and its memory tradeoff;
+they do not predict application-wide performance. The probe excludes old worker
+pools created with different session limits from its process measurements.
+
+### Cleanup PR description
+
+Share direct and incremental Zig compilation action construction and carry worker
+requests in one automatic parameter file, preserving ordinary command lines and
+sandboxed input isolation. Add opt-in bounded compiler-session retention so
+alternating targets can reuse Zig state without an unbounded worker per output.

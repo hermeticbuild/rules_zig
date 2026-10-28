@@ -17,23 +17,50 @@ const Response = struct { requestId: i32, exitCode: u8, output: []const u8 };
 // These controls come from the action owner, never from a parsed compiler argv.
 const OutputKind = enum { executable, static_library, shared_library };
 const Compilation = struct {
-    schema: u32,
     command: []const u8,
-    output_kind: OutputKind = .executable,
+    output_kind: OutputKind,
     name: []const u8,
     output: []const u8,
-    argument_files: []const []const u8,
-    input_manifest: []const u8,
+    arguments: []const []const u8,
+    input_paths: []const []const u8,
+
+    const Metadata = struct {
+        schema: u32,
+        command: []const u8,
+        output_kind: OutputKind,
+        name: []const u8,
+    };
 
     fn parse(a: Allocator, data: []const []const u8) !Compilation {
-        if (data.len != 1) return error.InvalidCompilationRequest;
-        const parsed = try std.json.parseFromSlice(Compilation, a, data[0], .{});
-        const result = parsed.value;
+        if (data.len < 3) return error.InvalidCompilationRequest;
+        const parsed = try std.json.parseFromSlice(Metadata, a, data[0], .{});
+        const metadata = parsed.value;
+        // Inputs are prefixed records, so the final '--' always frames them,
+        // independently of empty arguments or '--' in the compiler vector.
+        var boundary = data.len;
+        while (boundary > 2) {
+            boundary -= 1;
+            if (std.mem.eql(u8, data[boundary], "--")) break;
+        }
+        if (!std.mem.eql(u8, data[boundary], "--")) return error.InvalidCompilationRequest;
+        const paths = try a.alloc([]const u8, data.len - boundary - 1);
+        for (paths, data[boundary + 1 ..]) |*path, record| {
+            path.* = std.mem.cutPrefix(u8, record, "input=") orelse return error.InvalidCompilationRequest;
+            try safePath(path.*, true);
+        }
+        const result: Compilation = .{
+            .command = metadata.command,
+            .output_kind = metadata.output_kind,
+            .name = metadata.name,
+            .output = data[1],
+            .arguments = data[2..boundary],
+            .input_paths = paths,
+        };
         const valid_command = switch (result.output_kind) {
             .executable => std.mem.eql(u8, result.command, "build-exe") or std.mem.eql(u8, result.command, "test"),
             .static_library, .shared_library => std.mem.eql(u8, result.command, "build-lib"),
         };
-        if (result.schema != 1 or !valid_command)
+        if (metadata.schema != 2 or !valid_command)
             return error.UnsupportedCompilationRequest;
         try safePath(result.output, false);
         if (result.name.len == 0 or !std.mem.eql(u8, std.fs.path.basename(result.name), result.name))
@@ -41,17 +68,28 @@ const Compilation = struct {
         return result;
     }
 
-    fn compilerArgs(self: Compilation, a: Allocator, io: Io, diagnostics: *Io.Writer) ![]const []const u8 {
-        var result: std.array_list.Managed([]const u8) = .init(a);
-        for (self.argument_files) |path| try readLines(a, io, path, &result);
-        for (result.items) |arg| {
+    fn compilerArgs(self: Compilation, diagnostics: *Io.Writer) ![]const []const u8 {
+        for (self.arguments) |arg| {
             if (reserved(arg) or (self.output_kind != .executable and (std.mem.eql(u8, arg, "-dynamic") or std.mem.eql(u8, arg, "-static")))) {
                 try diagnostics.print("zig incremental compilation: option {s} is owned by rules_zig\n", .{arg});
                 return error.ConflictingCompilerOption;
             }
         }
-        if (self.output_kind == .shared_library) try checkSharedLibraryArgs(result.items, diagnostics);
-        return result.items;
+        if (self.output_kind == .shared_library) try checkSharedLibraryArgs(self.arguments, diagnostics);
+        return self.arguments;
+    }
+
+    fn inputs(self: Compilation, a: Allocator, supplied: []const Input) ![]const Input {
+        var digests: std.StringHashMapUnmanaged([]const u8) = .empty;
+        defer digests.deinit(a);
+        for (supplied) |input| try digests.put(a, input.path, input.digest);
+        const result = try a.alloc(Input, self.input_paths.len);
+        for (result, self.input_paths) |*input, path| {
+            // The action-owned list is authoritative in both execution modes.
+            // Missing/empty digests mean copy again, never assume unchanged.
+            input.* = .{ .path = path, .digest = digests.get(path) orelse "" };
+        }
+        return result;
     }
 
     fn artifactName(self: Compilation, a: Allocator) ![]const u8 {
@@ -112,6 +150,32 @@ fn checkSharedLibraryArgs(arguments: []const []const u8, diagnostics: *Io.Writer
         try diagnostics.writeAll("zig incremental compilation: shared libraries require explicit -fllvm and -flld; the Zig 0.17 self-hosted shared-library configuration is unsupported\n");
         return error.UnsupportedSharedLibraryBackend;
     }
+}
+
+test "request framing preserves empty operands and delimiter-shaped names" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const compilation = try Compilation.parse(arena.allocator(), &.{
+        "{\"schema\":2,\"command\":\"build-exe\",\"output_kind\":\"executable\",\"name\":\"root\"}",
+        "bazel-out/cfg/bin/program",
+        "--test-filter",
+        "",
+        "--",
+        "input=operand",
+        "--",
+        "input=--",
+        "input=bazel-out/cfg/bin/generated.zig",
+    });
+    try std.testing.expectEqualStrings("bazel-out/cfg/bin/program", compilation.output);
+    try std.testing.expectEqualSlices([]const u8, &.{ "--test-filter", "", "--", "input=operand" }, compilation.arguments);
+    const inputs = try compilation.inputs(arena.allocator(), &.{
+        .{ .path = "--", .digest = "opaque" },
+        .{ .path = "not-a-declared-input", .digest = "ignored" },
+    });
+    try std.testing.expectEqual(2, inputs.len);
+    try std.testing.expectEqualStrings("opaque", inputs[0].digest);
+    try std.testing.expectEqualStrings("bazel-out/cfg/bin/generated.zig", inputs[1].path);
+    try std.testing.expectEqualStrings("", inputs[1].digest);
 }
 
 test "shared backend checks distinguish switches from option operands" {
@@ -187,6 +251,7 @@ const Session = struct {
     root: []const u8,
     cwd: []const u8,
     cache: []const u8,
+    generation: usize,
     stderr: Io.File,
     stderr_offset: u64 = 0,
     inputs: std.StringHashMapUnmanaged([]const u8) = .empty,
@@ -224,11 +289,37 @@ const Worker = struct {
     lib_input: []const u8,
     root: []const u8,
     session: ?*Session = null,
+    idle_sessions: std.array_list.Managed(*Session),
+    max_sessions: usize = 1,
     generation: usize = 0,
 
     fn reset(self: *Worker) void {
         if (self.session) |s| s.destroy(self.gpa, self.io);
         self.session = null;
+    }
+
+    fn deinit(self: *Worker) void {
+        self.reset();
+        for (self.idle_sessions.items) |s| s.destroy(self.gpa, self.io);
+        self.idle_sessions.deinit();
+    }
+
+    fn selectSession(self: *Worker, key: []const u8) !void {
+        if (self.session) |s| {
+            if (std.mem.eql(u8, s.key, key)) return;
+            try self.idle_sessions.append(s);
+            self.session = null;
+        }
+        // Idle sessions are ordered least recently used first. The active
+        // compiler also counts toward the per-worker bound.
+        for (self.idle_sessions.items, 0..) |s, i| {
+            if (std.mem.eql(u8, s.key, key)) {
+                self.session = self.idle_sessions.orderedRemove(i);
+                return;
+            }
+        }
+        if (self.idle_sessions.items.len >= self.max_sessions)
+            self.idle_sessions.orderedRemove(0).destroy(self.gpa, self.io);
     }
 
     fn start(self: *Worker, compilation: Compilation, key: []const u8, arguments: []const []const u8, inputs: []const Input, request_allocator: Allocator) !*Session {
@@ -278,6 +369,7 @@ const Worker = struct {
             .root = root,
             .cwd = cwd,
             .cache = cache,
+            .generation = self.generation,
             .stderr = stderr,
             .child = undefined,
             .reader = undefined,
@@ -316,29 +408,31 @@ const Worker = struct {
         if (request.requestId != 0 or request.cancel or request.sandboxDir.len != 0)
             return error.OnlySingleplexSupported;
         const compilation = try Compilation.parse(a, request.arguments);
-        const arguments = try compilation.compilerArgs(a, self.io, diagnostics);
+        const arguments = try compilation.compilerArgs(diagnostics);
+        const inputs = try compilation.inputs(a, request.inputs);
         const output_path = compilation.output;
         const key = try std.json.Stringify.valueAlloc(a, .{ compilation.command, compilation.output_kind, compilation.name, output_path, arguments }, .{});
+        try self.selectSession(key);
         var reused = self.session != null and std.mem.eql(u8, self.session.?.key, key);
         const started_at = Io.Clock.awake.now(self.io);
-        var s = if (reused) self.session.? else try self.start(compilation, key, arguments, request.inputs, a);
-        const copied = if (reused) self.materialize(s, request.inputs, a, false) catch |err| blk: {
+        var s = if (reused) self.session.? else try self.start(compilation, key, arguments, inputs, a);
+        const copied = if (reused) self.materialize(s, inputs, a, false) catch |err| blk: {
             if (err != error.InputSetChanged) return err;
             // Zig may report historical inputs after they become unreachable.
             // A changed declared set gets a clean compiler and filesystem view.
             reused = false;
-            s = try self.start(compilation, key, arguments, request.inputs, a);
+            s = try self.start(compilation, key, arguments, inputs, a);
             break :blk s.inputs.count();
         } else s.inputs.count();
         defer self.appendStderr(s, diagnostics) catch {};
         const inputs_ready_at = Io.Clock.awake.now(self.io);
         // Artifact names are under our control, independent of Bazel's output path.
-        try s.writer.interface.writeStruct(std.zig.Client.Message.Header{ .tag = .update, .bytes_len = 0 }, .little);
-        try s.writer.interface.flush();
+        const client: std.zig.Client = .{ .in = &s.reader.interface, .out = &s.writer.interface };
+        try client.serveBodylessMessage(.update);
         var digest: ?[]const u8 = null;
         var undeclared_input = false;
         while (true) {
-            const hdr = try s.reader.interface.takeStruct(std.zig.Server.Message.Header, .little);
+            const hdr = try client.receiveMessage();
             if (hdr.bytes_len > 64 * 1024 * 1024) return error.CompilerMessageTooLarge;
             const body = try s.reader.interface.readAllocAll(a, hdr.bytes_len);
             switch (hdr.tag) {
@@ -388,7 +482,7 @@ const Worker = struct {
         try Dir.cwd().copyFile(artifact, .cwd(), output_path, self.io, .{ .make_path = true });
         const ms = started_at.untilNow(self.io, .awake).toMilliseconds();
         std.log.info("zig-worker generation={d} reused={} copied={d} duration_ms={d} input_ms={d} compile_ms={d} output_ms={d}", .{
-            self.generation,
+            s.generation,
             reused,
             copied,
             ms,
@@ -490,6 +584,7 @@ fn run(init: std.process.Init) !u8 {
     var zig_path: ?[]const u8 = null;
     var lib_path: ?[]const u8 = null;
     var persistent = false;
+    var max_sessions: usize = 1;
     var flags: std.array_list.Managed([]const u8) = .init(a);
     for (args[1..]) |arg| {
         if (std.mem.startsWith(u8, arg, "--zig=")) {
@@ -498,10 +593,11 @@ fn run(init: std.process.Init) !u8 {
             lib_path = arg[6..];
         } else if (std.mem.eql(u8, arg, "--persistent_worker")) {
             persistent = true;
+        } else if (std.mem.cutPrefix(u8, arg, "--max-sessions=")) |value| {
+            max_sessions = try std.fmt.parseInt(usize, value, 10);
+            if (max_sessions == 0) return error.InvalidSessionLimit;
         } else if (std.mem.startsWith(u8, arg, "@")) {
-            const contents = try Dir.cwd().readFileAlloc(io, arg[1..], a, .limited(16 * 1024 * 1024));
-            var lines = std.mem.splitScalar(u8, contents, '\n');
-            while (lines.next()) |line| if (line.len != 0) try flags.append(line);
+            try readLines(a, io, arg[1..], &flags);
         } else return error.InvalidStartupArgument;
     }
     const zig = try Dir.cwd().realPathFileAlloc(io, zig_path orelse return error.MissingZigPath, a);
@@ -513,19 +609,24 @@ fn run(init: std.process.Init) !u8 {
     // or use an inherited TMPDIR that might point outside the writable sandbox.
     const root = try std.fmt.allocPrint(a, "/tmp/rules-zig-worker-{x}", .{&nonce});
     try Dir.cwd().createDir(io, root, .fromMode(0o700));
-    var worker: Worker = .{ .gpa = std.heap.page_allocator, .io = io, .zig = zig, .lib = lib, .zig_input = zig_path.?, .lib_input = lib_path.?, .root = root };
+    var worker: Worker = .{
+        .gpa = std.heap.page_allocator,
+        .io = io,
+        .zig = zig,
+        .lib = lib,
+        .zig_input = zig_path.?,
+        .lib_input = lib_path.?,
+        .root = root,
+        .idle_sessions = .init(std.heap.page_allocator),
+        .max_sessions = max_sessions,
+    };
     defer {
-        worker.reset();
+        worker.deinit();
         Dir.cwd().deleteTree(io, root) catch {};
     }
     if (!persistent) {
-        const compilation = try Compilation.parse(a, flags.items);
-        var paths: std.array_list.Managed([]const u8) = .init(a);
-        try readLines(a, io, compilation.input_manifest, &paths);
-        var inputs: std.array_list.Managed(Input) = .init(a);
-        for (paths.items) |path| try inputs.append(.{ .path = path });
         var diagnostics: Io.Writer.Allocating = .init(a);
-        const code = worker.execute(.{ .arguments = flags.items, .inputs = inputs.items }, a, &diagnostics.writer) catch |err| blk: {
+        const code = worker.execute(.{ .arguments = flags.items }, a, &diagnostics.writer) catch |err| blk: {
             try diagnostics.writer.print("zig incremental compilation: {t}\n", .{err});
             break :blk 1;
         };

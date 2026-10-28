@@ -72,14 +72,11 @@ def protocol_checks(worker, zig, lib):
 
         def request(files=("main.zig", "leaf.zig"), extra=(), compiler_args=None):
             arguments = compiler_args if compiler_args is not None else ["-O", "Debug", *extra, "-Mroot=main.zig"]
-            (cwd / "compiler.args").write_text("\n".join(arguments) + "\n")
-            (cwd / "inputs").write_text("\n".join((*files, "compiler.args", "inputs")) + "\n")
-            metadata = {"schema": 1, "command": "build-exe", "name": "root",
-                        "output": "out/program", "argument_files": ["compiler.args"], "input_manifest": "inputs"}
+            metadata = {"schema": 2, "command": "build-exe", "name": "root", "output_kind": "executable"}
             payload = {
-                "arguments": [json.dumps(metadata)],
+                "arguments": [json.dumps(metadata), "out/program", *arguments, "--", *[f"input={name}" for name in files]],
                 "inputs": [{"path": name, "digest": digest(cwd / name)}
-                    for name in (*files, "compiler.args", "inputs")],
+                    for name in files],
                 "requestId": 0,
             }
             process.stdin.write(json.dumps(payload) + "\n")
@@ -200,10 +197,10 @@ def protocol_checks(worker, zig, lib):
             flags = ["-O", "Debug", "--dep", "dep", f"-Mroot={response_main}", "-Mdep=../dep/value.zig"]
             succeeds(request(files=(response_main, "../dep/value.zig"), compiler_args=flags))
             expect_program(cwd / "out/program", 48)
-            (cwd / "oneshot.params").write_text(json.dumps({
-                "schema": 1, "command": "build-exe", "name": "root", "output": "out/program",
-                "argument_files": ["compiler.args"], "input_manifest": "inputs",
-            }) + "\n")
+            (cwd / "oneshot.params").write_text("\n".join([
+                json.dumps({"schema": 2, "command": "build-exe", "name": "root", "output_kind": "executable"}),
+                "out/program", *flags, "--", f"input={response_main}", "input=../dep/value.zig",
+            ]) + "\n")
             run([str(worker), f"--zig={zig}", f"--lib={lib}", "@oneshot.params"], cwd=cwd)
             expect_program(cwd / "out/program", 48)
             child = Path(f"/proc/{process.pid}/task/{process.pid}/children").read_text().split()[0]
@@ -311,6 +308,68 @@ def bazel_checks(bazel, iterations, functions, backend):
         return report
 
 
+def multi_target_checks(bazel, iterations, functions, sessions):
+    """Measure alternating outputs, including retained compiler memory."""
+    with tempfile.TemporaryDirectory(prefix="probe-", dir=HERE) as directory:
+        package = Path(directory)
+        label = "//" + str(package.relative_to(REPO))
+        (package / "BUILD.bazel").write_text(
+            'load("//zig:defs.bzl", "zig_binary")\n' + ''.join(
+                f'zig_binary(name="{name}", main="main.zig", srcs=["leaf.zig"], '
+                'zigopts=["-j4", "-fno-llvm", "-fno-lld"])\n' for name in ("a", "b")))
+        (package / "main.zig").write_text(
+            'pub fn main() u8 { return @import("leaf.zig").value; }\n' + ''.join(
+                f'export fn func_{i}(x: u32) u32 {{ return x +% {i}; }}\n'
+                for i in range(functions)))
+        leaf = package / "leaf.zig"
+        output_base = Path(run([bazel, "info", "output_base"], cwd=REPO).stdout.strip())
+        bin_dir = Path(run([bazel, "info", "bazel-bin"], cwd=REPO).stdout.strip()) / package.relative_to(REPO)
+        common = [bazel, "build", "--config=remote-cache", "--//zig/settings:incremental",
+                  "--worker_sandboxing", "--worker_max_instances=ZigIncrementalCompile=1",
+                  "--experimental_worker_strict_flagfiles", "--strategy=ZigIncrementalCompile=worker"]
+        if sessions is not None:
+            common.append(f"--worker_extra_flag=ZigIncrementalCompile=--max-sessions={sessions}")
+        measurements = []
+        for i in range(2 + iterations * 2):
+            target = ("a", "b")[i % 2]
+            leaf.write_text(f"pub const value: u8 = {i + 1};\n")
+            previous_logs = {path: path.read_text() for path in (output_base / "bazel-workers").glob("*ZigIncrementalCompile.log")}
+            result = run([*common, label + ":" + target], cwd=REPO)
+            executed = subprocess.run([str(bin_dir / target)], check=False)
+            assert executed.returncode == i + 1, executed.returncode
+            records = []
+            for path in (output_base / "bazel-workers").glob("*ZigIncrementalCompile.log"):
+                content = path.read_text()
+                previous = previous_logs.get(path, "")
+                delta = content[len(previous):] if content.startswith(previous) else content
+                records.extend(re.findall(r"zig-worker generation=.*", delta))
+            assert len(records) == 1, records
+            telemetry = records[0]
+            memory_kib = 0
+            compilers = 0
+            for status in Path("/proc").glob("[0-9]*/status"):
+                try:
+                    command = (status.parent / "cmdline").read_bytes()
+                    if str(output_base).encode() in command and b"--listen=-" in command:
+                        parent = re.search(r"PPid:\s+(\d+)", status.read_text())[1]
+                        startup = Path(f"/proc/{parent}/cmdline").read_bytes().split(b"\0")
+                        limit_flags = [arg for arg in startup if arg.startswith(b"--max-sessions=")]
+                        expected_flags = [] if sessions is None else [f"--max-sessions={sessions}".encode()]
+                        if limit_flags != expected_flags:
+                            continue
+                        memory_kib += int(re.search(r"VmRSS:\s+(\d+)", status.read_text())[1])
+                        compilers += 1
+                except (FileNotFoundError, PermissionError, ProcessLookupError):
+                    pass
+            measurements.append({"target": target, "telemetry": telemetry,
+                                 "bazel_ms": 1000 * float(re.search(r"Elapsed time: ([0-9.]+)s", result.stderr)[1]),
+                                 "compiler_rss_kib": memory_kib, "compilers": compilers})
+        report = {"sessions": sessions, "functions": functions, "samples": measurements,
+                  "warm_median_ms": statistics.median(x["bazel_ms"] for x in measurements[2:])}
+        print(json.dumps(report, indent=2), flush=True)
+        return report
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bazel", default="bazel")
@@ -318,9 +377,16 @@ def main():
     parser.add_argument("--functions", type=int, default=2000)
     parser.add_argument("--backend", choices=("self-hosted", "llvm"), default="self-hosted")
     parser.add_argument("--report", type=Path)
+    parser.add_argument("--multi-target", action="store_true")
+    parser.add_argument("--sessions", type=int)
     args = parser.parse_args()
     if platform.system() != "Linux" or platform.machine() != "x86_64":
         parser.error("Run this probe on x86_64 Linux; native macOS incremental linking is not supported.")
+    if args.multi_target:
+        report = multi_target_checks(args.bazel, args.iterations, args.functions, args.sessions)
+        if args.report:
+            args.report.write_text(json.dumps(report, indent=2) + "\n")
+        return
     run([args.bazel, "build", "--config=remote-cache", "//zig/private/worker:worker"], cwd=REPO)
     output_base = Path(run([args.bazel, "info", "output_base"], cwd=REPO).stdout.strip())
     sdk = next((output_base / "external").glob("+zig+zig_0.17.0_*/zig"))

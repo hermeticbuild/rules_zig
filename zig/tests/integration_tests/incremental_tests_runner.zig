@@ -257,6 +257,9 @@ test "incremental binaries retain current inputs and independent outputs in each
 
         try expectBuild(ctx, mode, &.{ "--@rules_zig//zig/settings:zigopt=--dynamic-linker", "--@rules_zig//zig/settings:zigopt=" });
         try expectProgram(ctx, "bazel-bin/incremental", "44:world\n");
+        try ctx.writeWorkspaceFile("incremental_leaf.zig", "pub const value: u32 = 46;\n");
+        try expectBuild(ctx, mode, &.{ "--strategy=ZigIncrementalCompile=sandboxed", "--@rules_zig//zig/settings:zigopt=--dynamic-linker", "--@rules_zig//zig/settings:zigopt=" });
+        try expectProgram(ctx, "bazel-bin/incremental", "46:world\n");
 
         const conflict = try build(ctx, mode, &.{"--@rules_zig//zig/settings:zigopt=--cache-dir"});
         defer conflict.deinit();
@@ -301,6 +304,62 @@ test "incremental binaries retain current inputs and independent outputs in each
         try std.Io.sleep(io, .fromMilliseconds(25), .awake);
     }
     return error.CompilerSurvivedWorkerShutdown;
+}
+
+test "bounded sessions retain alternating targets and evict the least recently used compiler" {
+    if (builtin.os.tag != .linux or builtin.cpu.arch != .x86_64) return error.SkipZigTest;
+    const ctx = try BitContext.init();
+    defer ctx.deinit();
+    defer {
+        const shutdown = ctx.exec_bazel(.{ .argv = &.{"shutdown"} }) catch null;
+        if (shutdown) |result| result.deinit();
+    }
+    const info = try ctx.exec_bazel(.{ .argv = &.{ "info", "output_base" } });
+    defer info.deinit();
+    try std.testing.expect(info.success);
+    const output_base = std.mem.trim(u8, info.stdout, "\r\n");
+    // BitContext keeps one workspace for the test binary. The preceding
+    // sandbox test deliberately changes this module and its embed-file alias.
+    try ctx.writeWorkspaceFile("incremental_module.zig", "pub const value = @import(\"incremental_leaf.zig\").value;\npub const message = \"hello\\n\";\n");
+    try ctx.writeWorkspaceFile("incremental_generated.txt", "");
+    try ctx.writeWorkspaceFile("incremental_external.zig", "pub const bias: u32 = 0;\n");
+    const mode = &.{ "--worker_sandboxing", "--experimental_worker_sandbox_hardening" };
+    const extra = &.{"--worker_extra_flag=ZigIncrementalCompile=--max-sessions=2"};
+    const targets = [_][]const u8{ "//:incremental", "//:incremental_test", "//:incremental", "//:incremental_static", "//:incremental_test" };
+    const expected = [_][]const u8{
+        "generation=1 reused=false", "generation=2 reused=false", "generation=1 reused=true",
+        "generation=3 reused=false", "generation=4 reused=false",
+    };
+    var first_compiler: ?[]u8 = null;
+    defer if (first_compiler) |path| a.free(path);
+    for (targets, expected, 0..) |target, record, i| {
+        const source = try std.fmt.allocPrint(a, "pub const value: u32 = {d};\n", .{42 + 2 * i});
+        defer a.free(source);
+        try ctx.writeWorkspaceFile("incremental_leaf.zig", source);
+        try ctx.writeWorkspaceFile("incremental_value.zig", source);
+        try expectTarget(ctx, mode, extra, target);
+        const logs = try workerLogs(output_base);
+        defer a.free(logs);
+        const start = std.mem.lastIndexOf(u8, logs, "zig-worker generation=") orelse return error.MissingWorkerTelemetry;
+        try std.testing.expect(std.mem.startsWith(u8, logs[start..], "zig-worker "));
+        try std.testing.expect(std.mem.startsWith(u8, logs[start + "zig-worker ".len ..], record));
+        if (i == 0) first_compiler = try compilerProcess(output_base);
+        if (i == 2) {
+            const command = try std.fs.path.join(a, &.{ first_compiler.?, "cmdline" });
+            defer a.free(command);
+            const bytes = try readProc(.cwd(), command);
+            defer a.free(bytes);
+            try std.testing.expect(std.mem.find(u8, bytes, "--listen=-") != null);
+            try expectProgram(ctx, "bazel-bin/incremental", "46:hello\n");
+        }
+        if (std.mem.eql(u8, target, "//:incremental_test")) try expectTestProgram(ctx, true);
+    }
+    // A was least recently used when the final B arrived. Its process must
+    // have been reaped, rather than retained beyond the configured bound.
+    const old_command = try std.fs.path.join(a, &.{ first_compiler.?, "cmdline" });
+    defer a.free(old_command);
+    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().openFile(io, old_command, .{}));
+    try expectProgram(ctx, "bazel-bin/incremental", "46:hello\n");
 }
 
 test "incremental tests and libraries preserve updates and reject unsupported configurations" {
