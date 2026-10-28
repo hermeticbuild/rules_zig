@@ -14,6 +14,10 @@ tools retain their existing paths.
 
 ## Supported configurations
 
+Incremental execution is verified with Bazel 9.2.0. Bazel 8.4.1 crashes in its
+worker-file hashing when using the SDK directory as a worker tool; this also
+affects the earlier toolchain-built adapter. Ordinary compilation is unaffected.
+
 The initial implementation supports hermetic Zig 0.17.0, POSIX execution tools,
 x86_64 Linux targets, Zig linking, and one primary output. Native dependencies,
 C sources, linker options/scripts, auxiliary outputs, path toolchains, and other
@@ -46,10 +50,14 @@ For `zig_test`, the worker compiles with `zig test --test-no-exec`. Bazel execut
 the published test executable in its normal, separate test action. The worker
 does not execute tests through Zig's compiler-server protocol.
 
-Downloaded SDK toolchains provide the adapter automatically. Manually declared
-hermetic toolchains must supply `exec_target`, a portable SDK execution triple
-such as `x86_64-linux-musl`, to enable adapter bootstrapping. The adapter is built
-for baseline CPU features rather than those of the machine compiling it.
+The adapter is an ordinary `zig_binary`, built automatically for the Zig action's
+execution platform using the registered SDK and target toolchains. A private
+configuration transition disables incremental compilation for that binary; its
+configured worker dependency then resolves to an empty target, breaking the
+dependency cycle during analysis. The transition wrapper exposes the executable
+through a symlink. Ordinary builds have no dependency on the adapter binary.
+The adapter uses the normal execution-tool build settings and explicit baseline
+CPU features. Custom hermetic SDK toolchains need no worker-specific attributes.
 
 Adapter-owned controls are reserved: compiler server mode, incremental mode, SDK
 and cache directories, compilation naming, build root, response files, and output

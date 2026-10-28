@@ -55,6 +55,10 @@ load(
 )
 
 ATTRS = {
+    "_incremental_worker": attr.label(
+        default = "//zig/private/worker:tool",
+        cfg = config.exec("zig"),
+    ),
     "main": attr.label(
         allow_single_file = ZIG_SOURCE_EXTENSIONS,
         doc = """\
@@ -321,12 +325,13 @@ def zig_build_impl(ctx, *, kind):
 
     settings = ctx.attr._settings[ZigSettingsInfo]
     use_cc_common_link = settings.use_cc_common_link
-    incremental_worker = zigtoolchaininfo.incremental_worker if settings.incremental else None
-    if settings.incremental and not incremental_worker:
-        fail("Incremental compilation requires a hermetic Zig 0.17.0 toolchain with a POSIX worker adapter.")
-    if incremental_worker:
-        if zigtoolchaininfo.zig_version != "0.17.0" or zigtoolchaininfo.mode != "file":
-            fail("Incremental compilation requires the hermetic Zig 0.17.0 toolchain.")
+    incremental_worker = None
+    if settings.incremental:
+        if zigtoolchaininfo.zig_version != "0.17.0" or zigtoolchaininfo.mode != "file" or zigtoolchaininfo.zig_exe.file.basename.endswith(".exe"):
+            fail("Incremental compilation requires a hermetic Zig 0.17.0 toolchain with a POSIX worker adapter.")
+        incremental_worker = ctx.attr._incremental_worker[DefaultInfo].files_to_run
+        if not incremental_worker.executable:
+            fail("Incremental compilation requires the worker tool dependency.")
         if zigtargetinfo.triple.arch != "x86_64" or zigtargetinfo.triple.os != "linux":
             fail("Incremental compilation currently supports x86_64-linux targets only.")
         if use_cc_common_link or ctx.attr.csrcs or ctx.attr.copts or ctx.attr.linkopts or ctx.file.linker_script or ctx.attr.emit_asm or ctx.attr.emit_llvm_ir or ctx.attr.emit_llvm_bc:

@@ -26,7 +26,7 @@ performance. Bazel owns action invalidation; Zig owns semantic incremental work.
 
 ## Implementation sequence
 
-1. **Request and bootstrap boundary.** Toolchain builds the native adapter directly
+1. **Request and bootstrap boundary.** An ordinary `zig_binary` builds the adapter
    with its SDK, without recursively invoking an incremental Zig rule. Starlark
    emits versioned output metadata separately from ordered compiler arguments.
    Remove compiler-option stripping and the private parallel binary rule.
@@ -84,11 +84,11 @@ justify implementing the narrow supported mode.
   prefixed paths cannot collide with the delimiter, and empty operands survive.
   The adapter rejects reserved controls instead of interpreting or deleting them.
   Singleplex JSON and one-shot execution consume this same contract.
-- **Portable bootstrap.** The selected SDK compiles the adapter directly, using
-  an explicit execution target and baseline CPU features. This avoids recursive
-  toolchain resolution and machine-specific worker binaries in shared caches.
-  Downloaded toolchains provide the execution triple; custom hermetic toolchains
-  can supply the optional `exec_target` attribute.
+- **Portable bootstrap.** The adapter is an ordinary `zig_binary` dependency in
+  `config.exec("zig")`. A private transition disables incremental compilation;
+  the configured tool alias then selects an empty target, cutting the dependency
+  cycle. Registered target toolchains supply the execution-platform triple, and
+  the worker declares baseline CPU features. SDK toolchains only describe SDKs.
 - **Argument representation.** Zig 0.17 consumes direct argv before response
   contents and retains only the last response iterator. Use one response file
   for the whole semantic vector. Its parser cannot represent apostrophes, so
@@ -326,3 +326,86 @@ Share direct and incremental Zig compilation action construction and carry worke
 requests in one automatic parameter file, preserving ordinary command lines and
 sandboxed input isolation. Add opt-in bounded compiler-session retention so
 alternating targets can reuse Zig state without an unbounded worker per output.
+
+## Ordinary worker binary (2026-10-28)
+
+### Ownership and acceptance criteria
+
+The worker must use the existing `zig_binary` implementation, target the Zig
+execution platform, and have no recursive worker dependency. Disabling
+incremental compilation must remove the worker binary from the dependency graph.
+SDK toolchains must not compile the adapter or require worker-specific attributes.
+Ordinary compilation commands and existing incremental execution behavior must
+remain unchanged.
+
+The old `ZigWorkerBootstrap` action was already in Bazel's graph, but belonged to
+the SDK toolchain and duplicated command construction. An ordinary binary inside
+that toolchain would create a toolchain-to-binary-to-toolchain cycle. Moving the
+worker dependency to compilation rules makes it possible to cut the remaining
+binary-to-worker cycle through configuration instead.
+
+The execution-tool edge follows Bazel's documented
+[`config.exec` association with named execution groups](https://bazel.build/extending/exec-groups#defining-execution-groups).
+
+Compilation rules now depend on `//zig/private/worker:tool` through
+`config.exec("zig")`. Its alias selects an empty filegroup when incremental mode
+is off. Otherwise it selects a private wrapper whose incoming transition sets
+`//zig/settings:incremental` to false before analyzing the ordinary worker
+`zig_binary`. That binary's own tool alias therefore resolves to the empty target.
+This removes the dependency edge; merely skipping a worker action at execution
+time would not break an analysis cycle.
+
+The wrapper creates an executable symlink and forwards the binary's runfiles.
+Bazel requires an executable forwarding rule to own its executable artifact;
+returning the dependency's `DefaultInfo` directly failed analysis. Compilation
+still belongs entirely to `zig_binary`, and `ctx.actions.run` receives the
+wrapper's `FilesToRunProvider` so sandboxed execution includes its runfiles.
+The SDK toolchain loses `exec_target`, `_worker_sources`, the worker provider
+field, and the bespoke compilation action.
+
+Only incremental mode is overridden. The worker otherwise follows ordinary
+host-tool build settings and toolchain resolution, with baseline CPU features
+declared on the binary. Standard registrations retain the shared SDK version
+selection. Custom target-sensitive registrations may select a different SDK to
+build the adapter; the application action still passes its own selected SDK
+explicitly for the adapter to drive. This is normal tool dependency behavior,
+not a promise that both compilation steps use the identical SDK instance.
+
+### Evidence
+
+- A baseline ownership assertion failed on commit `1ae7285`: the adapter artifact
+  belonged to the SDK toolchain. The updated graph checks pass for binary, test,
+  static-library, and shared-library actions. They assert one ordinary
+  `zig_binary` worker compilation, disabled incremental mode in that compilation,
+  the execution-platform triple, baseline CPU features, and no worker compilation
+  when the feature is disabled.
+- Compared ordinary action graphs: all 207 commands and environments are unchanged.
+- Broad regression: 205 functional/documentation checks passed; the formatter
+  identified two style issues. Both were fixed, and the subsequent focused run
+  passed all 15 analysis checks, buildifier, and minimal consumers on Bazel 8.4.1
+  and 9.2.0 (18 checks total).
+- Native Linux integration on Bazel 9.2.0 passed all three suites in 474.2 seconds,
+  including ordinary/sandboxed/hardened workers, sibling repositories, one-shot
+  fallback, libraries/tests, and retained-session eviction. No worker protocol or
+  state-storage code changed.
+- A sandboxed worker built on aarch64 macOS successfully cross-compiled an x86_64
+  Linux ELF. The action graph shows `ZigBuildExe` for the worker with
+  `-target aarch64-macos-none -mcpu=baseline`, and `ZigIncrementalCompile` for the
+  application with `-target x86_64-linux-gnu.2.17`. No `ZigWorkerBootstrap` remains.
+- An additional Bazel 8.4.1 incremental consumer crashed in
+  `WorkerFilesHash.getCombinedHash`. The identical consumer and invocation also
+  crashed against an archived `1ae7285` snapshot. Bazel 8's worker hashing accepts
+  a null digest for the SDK source-directory tool and then attempts to hash it;
+  this is a pre-existing incremental limitation, distinct from ordinary consumer
+  compatibility. The feature documentation now states the verified Bazel version.
+  See [Bazel 8.4.1's worker-file hashing](https://github.com/bazelbuild/bazel/blob/8.4.1/src/main/java/com/google/devtools/build/lib/worker/WorkerFilesHash.java).
+- A narrow read-only review found no actionable defect in cycle breaking,
+  execution-group selection, or executable/runfiles forwarding.
+
+### PR description
+
+Build the incremental adapter with the existing `zig_binary` rule instead of a
+special compilation action inside `zig_toolchain`. A private configuration
+transition removes the worker's own worker dependency, while the named execution
+group selects its target platform. Ordinary builds retain their existing commands
+and acquire no worker binary dependency; custom SDKs no longer need `exec_target`.

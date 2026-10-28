@@ -10,9 +10,44 @@ _PLATFORMS = "//command_line_option:platforms"
 _LINUX = canonical_label("@//zig/tests/platforms:x86_64-linux")
 _EXEC_PLATFORMS = "//command_line_option:extra_execution_platforms"
 
+_WorkerGraphInfo = provider(
+    doc = "Worker compilations reached through the configured tool dependency.",
+    fields = ["compilations"],
+)
+
+def _worker_graph_impl(target, ctx):
+    compilations = []
+    if target.label == Label("//zig/private/worker:worker"):
+        compilations.append(struct(
+            kind = ctx.rule.kind,
+            incremental = ctx.rule.attr._settings[ZigSettingsInfo].incremental,
+            actions = target.actions,
+        ))
+    for name in ["_incremental_worker", "actual"]:
+        dependency = getattr(ctx.rule.attr, name, None)
+        if dependency and _WorkerGraphInfo in dependency:
+            compilations.extend(dependency[_WorkerGraphInfo].compilations)
+    return [_WorkerGraphInfo(compilations = compilations)]
+
+_worker_graph = aspect(
+    implementation = _worker_graph_impl,
+    attr_aspects = ["_incremental_worker", "actual"],
+)
+
 def _assert_incremental(env, command, output_kind):
     action = assert_find_action(env, "ZigIncrementalCompile")
-    asserts.true(env, action.argv[0].endswith(".worker"), "The adapter must come from the selected SDK toolchain.")
+    executables = [file for file in action.inputs.to_list() if file.path == action.argv[0]]
+    asserts.equals(env, [Label("//zig/private/worker:configured_worker")], [file.owner for file in executables], "The adapter must come through the worker configuration transition.")
+    workers = analysistest.target_under_test(env)[_WorkerGraphInfo].compilations
+    asserts.equals(env, 1, len(workers), "The graph must contain exactly one worker compilation.")
+    for worker in workers:
+        asserts.equals(env, "zig_binary", worker.kind)
+        asserts.false(env, worker.incremental)
+        builds = [action for action in worker.actions if action.mnemonic == "ZigBuildExe"]
+        asserts.equals(env, 1, len(builds))
+        for build in builds:
+            asserts.true(env, "-mcpu=baseline" in build.argv)
+            asserts.true(env, "x86_64-linux-gnu.2.17" in build.argv, "The worker must target the selected execution platform.")
     metadata_args = [arg for arg in action.argv if arg.startswith("{")]
     asserts.equals(env, 1, len(metadata_args), "The action must carry one explicit compilation request: " + str(action.argv))
     if metadata_args:
@@ -38,7 +73,7 @@ def _enabled_test_for(command, output_kind):
         assert_find_action(env, "ZigBuildDocs")
         return analysistest.end(env)
 
-    return analysistest.make(_impl, config_settings = {_INCREMENTAL: True, _PLATFORMS: _LINUX, _EXEC_PLATFORMS: [_LINUX]})
+    return analysistest.make(_impl, config_settings = {_INCREMENTAL: True, _PLATFORMS: _LINUX, _EXEC_PLATFORMS: [_LINUX]}, extra_target_under_test_aspects = [_worker_graph])
 
 _enabled_test = _enabled_test_for("build-exe", "executable")
 _test_compile_test = _enabled_test_for("test", "executable")
@@ -50,9 +85,10 @@ def _disabled_impl(ctx):
     action = assert_find_action(env, "ZigBuildExe")
     asserts.true(env, "--cache-dir" in action.argv)
     asserts.true(env, "--zig-lib-dir" in action.argv)
+    asserts.equals(env, [], analysistest.target_under_test(env)[_WorkerGraphInfo].compilations, "Ordinary builds must have no worker dependency.")
     return analysistest.end(env)
 
-_disabled_test = analysistest.make(_disabled_impl, config_settings = {_INCREMENTAL: False})
+_disabled_test = analysistest.make(_disabled_impl, config_settings = {_INCREMENTAL: False}, extra_target_under_test_aspects = [_worker_graph])
 
 def _exec_settings_impl(ctx):
     env = analysistest.begin(ctx)

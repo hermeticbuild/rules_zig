@@ -53,12 +53,6 @@ available on every execution machine that can run actions using this toolchain.
 """
 
 ATTRS = {
-    "exec_target": attr.string(
-        doc = "Portable Zig target triple for the SDK execution platform, e.g. x86_64-linux-musl. Required to bootstrap the optional incremental adapter.",
-    ),
-    "_worker_sources": attr.label(
-        default = "//zig/private/worker:sources",
-    ),
     "zig_exe": attr.label(
         doc = "A hermetically downloaded Zig executable for the target platform.",
         mandatory = True,
@@ -156,26 +150,6 @@ def _zig_toolchain_impl(ctx):
     # by Bazel. So, we need to make the validation output an input of Zig SDK
     # using actions to ensure that it takes place.
     tool_files = [zig_exe, zig_lib, validation]
-    incremental_worker = None
-    if zig_version == "0.17.0" and ctx.attr.exec_target and not zig_exe.basename.endswith(".exe"):
-        # Bootstrap directly from this SDK. A zig_binary dependency here would
-        # resolve this toolchain recursively, even with incremental mode off.
-        incremental_worker = ctx.actions.declare_file(ctx.label.name + ".worker")
-        worker_sources = ctx.attr._worker_sources[DefaultInfo].files
-        main = [file for file in worker_sources.to_list() if file.basename == "worker.zig"][0]
-        args = ctx.actions.args()
-        args.add_all(["build-exe", main, "-target", ctx.attr.exec_target, "-mcpu=baseline", "-O", "ReleaseSafe", "-fstrip"])
-        args.add_all(["--zig-lib-dir", zig_lib, "--cache-dir", zig_cache, "--global-cache-dir", zig_cache])
-        args.add(incremental_worker, format = "-femit-bin=%s")
-        ctx.actions.run(
-            executable = zig_exe,
-            arguments = [args],
-            tools = [zig_exe, zig_lib],
-            inputs = depset([validation], transitive = [worker_sources]),
-            outputs = [incremental_worker],
-            mnemonic = "ZigWorkerBootstrap",
-            progress_message = "bootstrap Zig incremental adapter %{label}",
-        )
     zigtoolchaininfo = zig_file_toolchain_info(
         zig_exe = zig_exe,
         zig_h = zig_h,
@@ -183,7 +157,6 @@ def _zig_toolchain_impl(ctx):
         zig_version = zig_version,
         zig_cache = zig_cache,
         validation = validation,
-        incremental_worker = incremental_worker,
     )
 
     # Make the $(tool_BIN) variable available in places like genrules.

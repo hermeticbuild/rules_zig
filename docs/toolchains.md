@@ -97,7 +97,7 @@ toolchain(
 <pre>
 load("@rules_zig//zig:toolchain.bzl", "zig_toolchain")
 
-zig_toolchain(<a href="#zig_toolchain-name">name</a>, <a href="#zig_toolchain-exec_target">exec_target</a>, <a href="#zig_toolchain-zig_cache">zig_cache</a>, <a href="#zig_toolchain-zig_exe">zig_exe</a>, <a href="#zig_toolchain-zig_h">zig_h</a>, <a href="#zig_toolchain-zig_lib">zig_lib</a>, <a href="#zig_toolchain-zig_version">zig_version</a>)
+zig_toolchain(<a href="#zig_toolchain-name">name</a>, <a href="#zig_toolchain-zig_cache">zig_cache</a>, <a href="#zig_toolchain-zig_exe">zig_exe</a>, <a href="#zig_toolchain-zig_h">zig_h</a>, <a href="#zig_toolchain-zig_lib">zig_lib</a>, <a href="#zig_toolchain-zig_version">zig_version</a>)
 </pre>
 
 Defines a Zig compiler toolchain.
@@ -129,7 +129,6 @@ See https://bazel.build/extending/toolchains#defining-toolchains.
 | Name  | Description | Type | Mandatory | Default |
 | :------------- | :------------- | :------------- | :------------- | :------------- |
 | <a id="zig_toolchain-name"></a>name |  A unique name for this target.   | <a href="https://bazel.build/concepts/labels#target-names">Name</a> | required |  |
-| <a id="zig_toolchain-exec_target"></a>exec_target |  Portable Zig target triple for the SDK execution platform, e.g. x86_64-linux-musl. Required to bootstrap the optional incremental adapter.   | String | optional |  `""`  |
 | <a id="zig_toolchain-zig_cache"></a>zig_cache |  The Zig cache directory prefix. Used for both the global and local cache.   | String | required |  |
 | <a id="zig_toolchain-zig_exe"></a>zig_exe |  A hermetically downloaded Zig executable for the target platform.   | <a href="https://bazel.build/concepts/labels">Label</a> | required |  |
 | <a id="zig_toolchain-zig_h"></a>zig_h |  The Zig header at the root of the Zig library directory.   | <a href="https://bazel.build/concepts/labels">Label</a> | required |  |
