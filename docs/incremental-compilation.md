@@ -106,10 +106,12 @@ leave a different worker pool alive until Bazel evicts it or shuts down.
 
 Direct and incremental compilations share action declaration and semantic argument
 construction. Incremental actions use one automatic parameter file containing
-versioned metadata, the output path, ordered compiler arguments, and the declared
-input paths. The same request is used for persistent and one-shot execution. The
-adapter does not reconstruct commands by stripping compiler options. Missing input
-digests conservatively cause a fresh copy; they never imply unchanged contents.
+metadata, the output path, ordered compiler arguments, and the declared input
+paths. The private format has no version negotiation or legacy decoding; its
+producer and adapter ship together. The same request is used for persistent and
+one-shot execution. The adapter does not reconstruct commands by stripping compiler
+options. Missing input digests conservatively cause a fresh copy; they never imply
+unchanged contents.
 
 Paths supplied as artifacts remain File-aware until the action expands its
 arguments. This removes the separate argument/manifest write actions, but does

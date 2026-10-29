@@ -28,7 +28,7 @@ performance. Bazel owns action invalidation; Zig owns semantic incremental work.
 
 1. **Request and bootstrap boundary.** An ordinary `zig_binary` builds the adapter
    with its SDK, without recursively invoking an incremental Zig rule. Starlark
-   emits versioned output metadata separately from ordered compiler arguments.
+   emits output metadata separately from ordered compiler arguments.
    Remove compiler-option stripping and the private parallel binary rule.
 2. **State and compiler lifecycle.** Unique worker temporary directory, no Bazel
    parent traversal. Stage digest changes with atomic replacement; restart when
@@ -78,7 +78,7 @@ justify implementing the narrow supported mode.
 
 ## Final implementation decisions
 
-- **No request reconstruction or flag stripping.** The action owner emits schema-2
+- **No request reconstruction or flag stripping.** The action owner emits explicit
   metadata, the output File, ordered compiler arguments, and prefixed input File
   records in one automatic parameter file. The final `--` frames the input list;
   prefixed paths cannot collide with the delimiter, and empty operands survive.
@@ -267,7 +267,7 @@ development repositories.
 One compilation helper now owns action registration for both execution paths.
 Ordinary compilation keeps its executable, arguments, and environment. Incremental
 compilation selects the adapter and supplies one automatic parameter file containing
-schema-2 metadata, a File-valued output, ordered compiler arguments, and File-valued
+metadata, a File-valued output, ordered compiler arguments, and File-valued
 input records. The adapter uses the same request parser and execution logic for
 persistent and one-shot operation; it neither reconstructs nor strips compiler
 arguments. Module roots remain Files until argument expansion, including the ZLS
@@ -290,7 +290,7 @@ cost. Bazel does not guarantee target affinity across worker processes.
 
 - Compared ordinary action graphs before and after: all 207 compilation commands
   and environments were identical. Inspected the incremental action graph for
-  schema-2 arguments, declared inputs, and execution requirements.
+  request metadata, declared inputs, and execution requirements.
 - Broad macOS regression: 206 tests passed. After the final helper simplification,
   all 17 focused checks passed and ordinary action equivalence was rechecked.
 - Minimal consumer integration passed on Bazel 8.4.1 and 9.2.0.

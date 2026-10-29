@@ -265,7 +265,7 @@ def _compile(ctx, *, worker, zigtoolchaininfo, command, global_args, args, outpu
     arguments = command + [global_args, args] + trailing_args
     tools = []
     if worker:
-        # Schema 2: metadata, output, ordered compiler arguments, then a framed
+        # Metadata, output, ordered compiler arguments, then a framed
         # input list. Prefixing input paths makes the final delimiter unambiguous,
         # even when a compiler operand or an input file is named "--".
         args.add("--")
@@ -447,7 +447,6 @@ def zig_build_impl(ctx, *, kind):
             "zig_shared_library": ("build-lib", "shared_library"),
         }[kind]
         args.add(json.encode({
-            "schema": 2,
             "command": command,
             "output_kind": output_kind,
             "name": ctx.attr.deps[0][ZigModuleInfo].canonical_name if root_module_is_only_dep else escape_label(label = ctx.label),

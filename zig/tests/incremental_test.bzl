@@ -52,7 +52,6 @@ def _assert_incremental(env, command, output_kind):
     asserts.equals(env, 1, len(metadata_args), "The action must carry one explicit compilation request: " + str(action.argv))
     if metadata_args:
         metadata = json.decode(metadata_args[0])
-        asserts.equals(env, 2, metadata["schema"])
         asserts.equals(env, command, metadata["command"])
         asserts.equals(env, output_kind, metadata["output_kind"])
         header_index = action.argv.index(metadata_args[0])

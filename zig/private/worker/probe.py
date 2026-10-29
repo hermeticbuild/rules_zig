@@ -72,7 +72,7 @@ def protocol_checks(worker, zig, lib):
 
         def request(files=("main.zig", "leaf.zig"), extra=(), compiler_args=None):
             arguments = compiler_args if compiler_args is not None else ["-O", "Debug", *extra, "-Mroot=main.zig"]
-            metadata = {"schema": 2, "command": "build-exe", "name": "root", "output_kind": "executable"}
+            metadata = {"command": "build-exe", "name": "root", "output_kind": "executable"}
             payload = {
                 "arguments": [json.dumps(metadata), "out/program", *arguments, "--", *[f"input={name}" for name in files]],
                 "inputs": [{"path": name, "digest": digest(cwd / name)}
@@ -198,7 +198,7 @@ def protocol_checks(worker, zig, lib):
             succeeds(request(files=(response_main, "../dep/value.zig"), compiler_args=flags))
             expect_program(cwd / "out/program", 48)
             (cwd / "oneshot.params").write_text("\n".join([
-                json.dumps({"schema": 2, "command": "build-exe", "name": "root", "output_kind": "executable"}),
+                json.dumps({"command": "build-exe", "name": "root", "output_kind": "executable"}),
                 "out/program", *flags, "--", f"input={response_main}", "input=../dep/value.zig",
             ]) + "\n")
             run([str(worker), f"--zig={zig}", f"--lib={lib}", "@oneshot.params"], cwd=cwd)

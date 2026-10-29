@@ -25,7 +25,6 @@ const Compilation = struct {
     input_paths: []const []const u8,
 
     const Metadata = struct {
-        schema: u32,
         command: []const u8,
         output_kind: OutputKind,
         name: []const u8,
@@ -60,7 +59,7 @@ const Compilation = struct {
             .executable => std.mem.eql(u8, result.command, "build-exe") or std.mem.eql(u8, result.command, "test"),
             .static_library, .shared_library => std.mem.eql(u8, result.command, "build-lib"),
         };
-        if (metadata.schema != 2 or !valid_command)
+        if (!valid_command)
             return error.UnsupportedCompilationRequest;
         try safePath(result.output, false);
         if (result.name.len == 0 or !std.mem.eql(u8, std.fs.path.basename(result.name), result.name))
@@ -156,7 +155,7 @@ test "request framing preserves empty operands and delimiter-shaped names" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const compilation = try Compilation.parse(arena.allocator(), &.{
-        "{\"schema\":2,\"command\":\"build-exe\",\"output_kind\":\"executable\",\"name\":\"root\"}",
+        "{\"command\":\"build-exe\",\"output_kind\":\"executable\",\"name\":\"root\"}",
         "bazel-out/cfg/bin/program",
         "--test-filter",
         "",
