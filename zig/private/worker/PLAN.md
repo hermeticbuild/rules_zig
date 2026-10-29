@@ -59,7 +59,7 @@ Pending items describe behavior to discuss, not an approved implementation.
 | 2 | Done: `0ba2f99` | Remove the private request schema field and version check. Update producer, decoder, existing fixtures and docs together. Retain required-field and structural validation; no compatibility decoder. |
 | 3 | Done: `c79fe48` | Distinguish compiler switches from operands when validating options. Reuse the existing option-arity table without changing argv. Actual worker-owned flags remain rejected; their ordinary action equivalents must stay out of worker requests. |
 | 4 | Deferred by agreement | Versioned shared-library cache filenames (`--version`). No demonstrated user need: rules_zig does not generate this option and already controls the published filename and SONAME. Retain the explicit unsupported diagnostic; reconsider when needed. |
-| 5a | Deferred for the current Linux scope | Do not add archive indexing for gold or other GNU-linker compatibility. Qualify Linux consumers with hermetic-llvm. Revisit indexing only if an in-scope consumer requires it, including the Apple linker when macOS targets are qualified. |
+| 5a | Deferred for the current Linux scope | Do not add archive indexing for gold or other GNU-linker compatibility. Qualify Linux C/C++ consumers with hermetic-llvm; direct Zig linking retains its qualified defaults. Revisit indexing only if an in-scope consumer requires it, including the Apple linker when macOS targets are qualified. |
 | 5b | Next discussion | Reject incremental archive-generation configurations that can publish corrupt external members, including compiler-rt. The downstream C/C++ linker cannot repair those bytes. Agree on the narrow backend gate before implementation. |
 | 6 | Pending | Support assembly, LLVM IR and bitcode outputs, including `emit_bin=False`. Describe and publish each requested artifact; preserve output groups and backend choices. |
 | 7 | Pending | Allow generated C bindings and header-only dependencies. Translation remains ordinary; its generated Zig source becomes a worker input. No provider change is needed merely to enable this feature. |
@@ -105,6 +105,10 @@ require a different order, explain and agree on the adjustment before proceeding
   compatibility work for other GNU linkers are outside this effort's scope.
   Consumer tests must use those selected toolchains and verify the actual link
   action instead of accidentally using a system GNU linker.
+- That toolchain scope concerns C/C++ linking, including `use_cc_common_link`.
+  With `use_cc_common_link=False`, Zig owns linking and its qualified Linux
+  defaults remain supported. Selecting a C/C++ toolchain does not select Zig's
+  internal backend. Existing per-output capability restrictions still apply.
 - This toolchain scope does not qualify macOS incremental targets. The current
   x86_64 Linux target restriction remains; Apple archive/link behavior needs
   qualification when macOS target support is undertaken. Item 5a is deferred
@@ -131,6 +135,29 @@ require a different order, explain and agree on the adjustment before proceeding
 - **Resume at item 5b's scope and implementation agreement.** Items 4 and 5a are
   deferred; item 5b and later feature extensions remain unapproved. Keeping an
   edge case unsupported is a valid outcome if explicitly agreed and recorded here.
+
+### Item 5b: evidence to recheck before implementation
+
+The earlier probes recorded in the preserved patch's `CAPABILITIES.md` used Zig
+0.17.0 (`7647adab80dd088f4de3610fd245915a912eb6ad`) on x86_64 Linux. These are
+previous observations, not a fresh reproduction during the rewrite discussion.
+
+- A self-hosted incremental static archive contained a 396,504-byte
+  `compiler_rt.o` member filled entirely with zeros. The same bytes were present
+  in Zig's private cache artifact before copying or indexing the published file.
+- A direct compiler-server probe reproduced this without Bazel or the adapter:
+  successive `build-lib --listen=- -fincremental -static -lc -fcompiler-rt`
+  sessions, each with its own local cache and a shared global cache, compiled
+  `pub export fn answer() u32 { return 41; }`. With `-fno-llvm -fno-lld`, one run
+  produced one healthy runtime member followed by four zero-filled members.
+  Five `-fllvm -flld` sessions produced valid ELF runtime members. Another
+  self-hosted run stayed healthy, so successful retries do not resolve the issue.
+- The suspected cause is deferred archive-member writes being skipped by the
+  pending-input bookkeeping in Zig's `Elf2` linker. The exact cause has not been
+  proved by instrumenting the compiler; the corrupt member itself was observed.
+- The concrete reproduction concerns compiler-rt. Extending a restriction to
+  other external members is a separate conservative choice when those inputs
+  are enabled. Item 5b is not approval to disable all self-hosted compilation.
 
 ## Contract
 
