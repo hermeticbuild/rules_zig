@@ -59,7 +59,8 @@ Pending items describe behavior to discuss, not an approved implementation.
 | 2 | Done: `0ba2f99` | Remove the private request schema field and version check. Update producer, decoder, existing fixtures and docs together. Retain required-field and structural validation; no compatibility decoder. |
 | 3 | Done: `c79fe48` | Distinguish compiler switches from operands when validating options. Reuse the existing option-arity table without changing argv. Actual worker-owned flags remain rejected; their ordinary action equivalents must stay out of worker requests. |
 | 4 | Deferred by agreement | Versioned shared-library cache filenames (`--version`). No demonstrated user need: rules_zig does not generate this option and already controls the published filename and SONAME. Retain the explicit unsupported diagnostic; reconsider when needed. |
-| 5 | Next discussion | Make incremental archives usable by native consumers. Keep archive indexing and the backend gate for observed external-member corruption as separate reviewable fixes. Index only the published copy when needed; leave the retained compiler artifact untouched. |
+| 5a | Deferred for the current Linux scope | Do not add archive indexing for gold or other GNU-linker compatibility. Qualify Linux consumers with hermetic-llvm. Revisit indexing only if an in-scope consumer requires it, including the Apple linker when macOS targets are qualified. |
+| 5b | Next discussion | Reject incremental archive-generation configurations that can publish corrupt external members, including compiler-rt. The downstream C/C++ linker cannot repair those bytes. Agree on the narrow backend gate before implementation. |
 | 6 | Pending | Support assembly, LLVM IR and bitcode outputs, including `emit_bin=False`. Describe and publish each requested artifact; preserve output groups and backend choices. |
 | 7 | Pending | Allow generated C bindings and header-only dependencies. Translation remains ordinary; its generated Zig source becomes a worker input. No provider change is needed merely to enable this feature. |
 | 8 | Pending | Support `use_cc_common_link`: incremental Zig source compilation followed by the existing ordinary C/C++ link. Binary/shared-library paths first; test-object compilation and ordinary archive packaging in a follow-up commit. Account for item 5 before enabling affected archive configurations. |
@@ -69,7 +70,7 @@ Pending items describe behavior to discuss, not an approved implementation.
 | 12 | Separate scope decision | Correct action ownership of files referenced by compiler/linker options. This affects ordinary rules too and needs its own reproduction and design. The rejected `_location_inputs` scanner is not an accepted implementation. |
 | 13 | Agreed final phase | Simplify the completed implementation and minimize the worker's knowledge of Zig flags. Revisit option-arity tables and capability checks; prefer explicit action-owned metadata or compiler-provided information where appropriate. Preserve compiler argv and supported-configuration correctness; do not grow a general Zig command-line parser. |
 
-Items 5 and 8 intentionally contain smaller commit boundaries. Do not combine
+Item 8 intentionally contains smaller commit boundaries. Do not combine
 them into a large patch merely because they share a numbered item. If dependencies
 require a different order, explain and agree on the adjustment before proceeding.
 
@@ -99,6 +100,15 @@ require a different order, explain and agree on the adjustment before proceeding
 
 ### Deferred scope and resume point
 
+- Native C/C++ consumer qualification is limited to hermetic-llvm, plus the
+  default Apple linker on macOS when hermetic-llvm is not used. GNU gold and
+  compatibility work for other GNU linkers are outside this effort's scope.
+  Consumer tests must use those selected toolchains and verify the actual link
+  action instead of accidentally using a system GNU linker.
+- This toolchain scope does not qualify macOS incremental targets. The current
+  x86_64 Linux target restriction remains; Apple archive/link behavior needs
+  qualification when macOS target support is undertaken. Item 5a is deferred
+  for the current Linux scope, not evidence that Apple needs no archive index.
 - `linker_script` with `use_cc_common_link` stays unsupported; Corentin explicitly
   does not need it. Retain the corresponding restriction when enabling item 8.
 - The rejected patch also implemented linker scripts for Zig linking. Deferring
@@ -118,9 +128,9 @@ require a different order, explain and agree on the adjustment before proceeding
   rejected it. Actual reserved switches still failed without creating their
   requested destinations. The generated worker action's argv/environment stayed
   unchanged, with ordinary cache/SDK flags absent. Read-only review found no issues.
-- **Resume at item 5's scope and implementation agreement.** Item 4 is deferred;
-  item 5 and later feature extensions remain unapproved. Keeping an edge case
-  unsupported is a valid outcome if explicitly agreed and recorded here.
+- **Resume at item 5b's scope and implementation agreement.** Items 4 and 5a are
+  deferred; item 5b and later feature extensions remain unapproved. Keeping an
+  edge case unsupported is a valid outcome if explicitly agreed and recorded here.
 
 ## Contract
 
