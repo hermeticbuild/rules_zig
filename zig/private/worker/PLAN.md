@@ -1,5 +1,117 @@
 # Upstream incremental compilation plan
 
+## Current rewrite plan (2026-10-29)
+
+This section governs the remaining rewrite. The sections below it record the
+earlier committed implementation and its evidence; they do not authorize further
+extensions. The previous uncommitted extension patch was rejected for excessive
+refactoring, unexplained provider changes, lost comments, and poor reviewability.
+Its feature goals remain candidates, but its implementation is not the template.
+
+### Checkpoint and preserved work
+
+- Branch: `cerisier/zig-incremental-prototype`.
+- Accepted starting point: `33c39ba` (`build the incremental worker with zig_binary`).
+- The rejected patch is saved in stash commit
+  `cc5e05cce6db85752b938c90d383f88f4ce529f4`, currently `stash@{0}`, named
+  `incremental worker extensions before agreed small-commit reimplementation`.
+  All 43 changed paths, including untracked fixtures and deletions, were verified
+  against the saved snapshot. Stash indices can change; use the commit to identify
+  it. Preserve this stash until the rewrite is finished or its removal is agreed.
+- The `forward_executable` extraction was undone before stashing. Forwarding stays
+  local to each rule, with the original implementation and comments.
+- Reimplement from the committed branch. Consult the stash for findings and
+  reproductions; do not apply the whole patch back onto the branch.
+
+### Working agreement
+
+1. Discuss each remaining item before implementing it. Corentin may decide that
+   particular inputs or modes are not worth supporting. Record those decisions
+   here instead of silently restoring the old patch's scope.
+2. Before editing, explain the intended behavior, affected files, necessary code
+   movement, and focused acceptance checks. Any provider or public API change
+   requires its own explicit explanation and agreement.
+3. Preserve comments verbatim when moving code. Explain any necessary comment
+   change, especially compiler workarounds and their rationale. Keep mechanical
+   moves separate from behavior changes so the diff remains easy to follow.
+4. Follow surrounding formatting. Avoid incidental one-line compression,
+   unnecessary small helpers, and callback-based argument builders. Duplication
+   is acceptable when it makes straightforward code easier to understand.
+5. Keep ordinary action behavior unchanged unless a separately agreed correctness
+   fix requires otherwise. Preserve ordered compiler arguments; do not reconstruct
+   them by stripping flags.
+6. Present each focused diff and verification, obtain agreement, then commit it
+   before starting the next item. Items 1 and 2 were explicitly authorized without
+   intermediate approval. Do not accumulate another uncommitted feature stack.
+   Push only when requested.
+7. Update this checkpoint with decisions, commits, and any remaining uncertainty
+   as work proceeds. Tests and feature documentation belong with each change;
+   existing large fixtures are reference material, not mandatory imports.
+
+### Ordered items
+
+The order favors small independent changes first while respecting dependencies.
+Pending items describe behavior to discuss, not an approved implementation.
+
+| Item | Status | Behavior and commit boundary |
+| --- | --- | --- |
+| 1 | Done: `eecd8d1` | Rename the private wrapper to `non_incremental_binary`. Rename only; implementation and comments preserved. |
+| 2 | Done: `0ba2f99` | Remove the private request schema field and version check. Update producer, decoder, existing fixtures and docs together. Retain required-field and structural validation; no compatibility decoder. |
+| 3 | Next discussion | Distinguish compiler switches from operands when validating options. Worker-only fix; preserve argv unchanged. Example: `--test-filter --cache-dir` currently mistakes the filter value for a reserved switch. Decide whether this edge case merits support now. |
+| 4 | Pending | Support versioned shared-library cache filenames. Change artifact lookup, preserving Bazel's declared destination and the existing SONAME behavior. Depends on interpreting the effective version option correctly. |
+| 5 | Pending | Make incremental archives usable by native consumers. Keep archive indexing and the backend gate for observed external-member corruption as separate reviewable fixes. Index only the published copy when needed; leave the retained compiler artifact untouched. |
+| 6 | Pending | Support assembly, LLVM IR and bitcode outputs, including `emit_bin=False`. Describe and publish each requested artifact; preserve output groups and backend choices. |
+| 7 | Pending | Allow generated C bindings and header-only dependencies. Translation remains ordinary; its generated Zig source becomes a worker input. No provider change is needed merely to enable this feature. |
+| 8 | Pending | Support `use_cc_common_link`: incremental Zig source compilation followed by the existing ordinary C/C++ link. Binary/shared-library paths first; test-object compilation and ordinary archive packaging in a follow-up commit. Account for item 5 before enabling affected archive configurations. |
+| 9 | Pending | Allow ordinary scalar linker options. Preserve their consumer, ordering, and existing static-library behavior. Do not bundle location-expansion changes. |
+| 10 | Design discussion required | Invalidate retained state when Zig consumes native libraries or objects. Native changes restart the compiler; Zig-only changes retain it. Agree on the supported inputs and their representation first. |
+| 11 | Design discussion required | Support `csrcs`, their options and relevant included files. Extend the restart policy only after agreeing on transitive headers and `extra_srcs` handling. |
+| 12 | Separate scope decision | Correct action ownership of files referenced by compiler/linker options. This affects ordinary rules too and needs its own reproduction and design. The rejected `_location_inputs` scanner is not an accepted implementation. |
+
+Items 5 and 8 intentionally contain smaller commit boundaries. Do not combine
+them into a large patch merely because they share a numbered item. If dependencies
+require a different order, explain and agree on the adjustment before proceeding.
+
+### Implementation choices to reconsider
+
+- `extra_srcs` already exists. The rejected patch added `extra_inputs` to the
+  module context carried by `ZigModuleInfo`, to identify transitive restart inputs.
+  That provider-content change is not approved for reintroduction. Establish what
+  existing data can express and discuss any required extension or conservative
+  tradeoff explicitly.
+- `library_files` / `library=` described selected dynamic/interface libraries for
+  the new library-search validation. They are not inherently required by the
+  restart mechanism. Decide whether that validation and extra representation are
+  needed for the supported scope before adding them.
+- `_location_inputs` attempted to turn option references into declared Files.
+  The underlying ownership issue and the proposed custom scanner are separate
+  questions. Do not silently change ordinary compilation or documentation actions
+  as worker plumbing.
+- Drop the callback design using `build_args`, `source_args`, and `archive_args`.
+  The direction to discuss for item 8 is to identify the actual Zig source-stage
+  command/output before constructing arguments, keep construction visible in
+  `zig_build_impl`, and pass concrete arguments and inputs to the existing action
+  helper. Keep test archive packaging local to its branch.
+- Do not automatically restore `_global_compile_args` or other small extractions.
+  Preserve the original libc/compiler-rt and StackProtector explanations. Any
+  necessary movement must be visible and justified.
+
+### Deferred scope and resume point
+
+- `linker_script` with `use_cc_common_link` stays unsupported; Corentin explicitly
+  does not need it. Retain the corresponding restriction when enabling item 8.
+- The rejected patch also implemented linker scripts for Zig linking. Deferring
+  that extension is proposed; do not reintroduce it without discussion.
+- Documentation and standalone translation remain ordinary actions. An ordinary
+  non-incremental worker mode, wider SDK/platform support, full path mapping and
+  remote execution/cache eligibility are outside this rewrite's agreed scope.
+- Items 1 and 2 passed the focused checks. After item 2, all 16 focused test
+  targets passed, a real persistent-worker build produced an x86-64 Linux ELF,
+  and its action metadata contained only `command`, `name`, and `output_kind`.
+- **Resume at item 3's go/no-go discussion.** No implementation of item 3 or any
+  later item has been approved. Keeping an edge case unsupported is a valid
+  outcome if explicitly agreed and recorded here.
+
 ## Contract
 
 A successful action publishes an independent artifact for its current declared
