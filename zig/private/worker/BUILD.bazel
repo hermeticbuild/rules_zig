@@ -1,6 +1,6 @@
 load("@bazel_skylib//:bzl_library.bzl", "bzl_library")
 load("//zig:defs.bzl", "zig_binary", "zig_test")
-load(":worker_configuration.bzl", "worker_configuration")
+load(":non_incremental_binary.bzl", "non_incremental_binary")
 
 config_setting(
     name = "incremental_enabled",
@@ -20,7 +20,7 @@ alias(
 
 filegroup(name = "disabled")
 
-worker_configuration(
+non_incremental_binary(
     name = "configured_worker",
     actual = "worker",
     tags = ["manual"],
@@ -35,8 +35,8 @@ zig_binary(
 )
 
 bzl_library(
-    name = "worker_configuration",
-    srcs = ["worker_configuration.bzl"],
+    name = "non_incremental_binary",
+    srcs = ["non_incremental_binary.bzl"],
 )
 
 zig_test(
@@ -52,9 +52,9 @@ filegroup(
         "BUILD.bazel",
         "DESIGN.md",
         "PLAN.md",
+        "non_incremental_binary.bzl",
         "probe.py",
         "worker.zig",
-        "worker_configuration.bzl",
     ],
     visibility = ["//zig/private:__pkg__"],
 )

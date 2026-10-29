@@ -9,7 +9,7 @@ _disable_incremental = transition(
     outputs = ["//zig/settings:incremental"],
 )
 
-def _worker_configuration_impl(ctx):
+def _non_incremental_binary_impl(ctx):
     actual = ctx.attr.actual[DefaultInfo]
 
     # Executable forwarding rules must own their executable artifact. The build
@@ -25,8 +25,8 @@ def _worker_configuration_impl(ctx):
         runfiles = ctx.runfiles(files = [actual.files_to_run.executable]).merge(actual.default_runfiles),
     )]
 
-worker_configuration = rule(
-    implementation = _worker_configuration_impl,
+non_incremental_binary = rule(
+    implementation = _non_incremental_binary_impl,
     executable = True,
     cfg = _disable_incremental,
     attrs = {
