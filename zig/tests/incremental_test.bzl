@@ -63,6 +63,7 @@ def _assert_incremental(env, command, output_kind):
         asserts.false(env, any([path.endswith(".zig-inputs") or path.endswith(".zig-global.args") or path.endswith(".zig-module.args") for path in input_paths]))
     asserts.false(env, any([arg.startswith("-femit-bin=") for arg in action.argv]))
     asserts.false(env, "--cache-dir" in action.argv)
+    asserts.false(env, "--global-cache-dir" in action.argv)
     asserts.false(env, "--zig-lib-dir" in action.argv)
 
 def _enabled_test_for(command, output_kind):

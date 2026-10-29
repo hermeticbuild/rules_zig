@@ -68,10 +68,17 @@ const Compilation = struct {
     }
 
     fn compilerArgs(self: Compilation, diagnostics: *Io.Writer) ![]const []const u8 {
-        for (self.arguments) |arg| {
+        var i: usize = 0;
+        while (i < self.arguments.len) : (i += 1) {
+            const arg = self.arguments[i];
             if (reserved(arg) or (self.output_kind != .executable and (std.mem.eql(u8, arg, "-dynamic") or std.mem.eql(u8, arg, "-static")))) {
                 try diagnostics.print("zig incremental compilation: option {s} is owned by rules_zig\n", .{arg});
                 return error.ConflictingCompilerOption;
+            }
+            // Check the switch before skipping its value: worker-owned controls
+            // must still fail if they reach the request.
+            if (optionTakesValue(arg)) {
+                i += 1;
             }
         }
         if (self.output_kind == .shared_library) try checkSharedLibraryArgs(self.arguments, diagnostics);
@@ -114,28 +121,7 @@ fn checkSharedLibraryArgs(arguments: []const []const u8, diagnostics: *Io.Writer
             try diagnostics.writeAll("zig incremental compilation: native compiler flag groups are unsupported\n");
             return error.UnsupportedNativeCompilerFlags;
         }
-        // Zig 0.17 src/main.zig's build-command option arity. This read-only
-        // capability check must skip operands (even ones named '-flld'). It
-        // neither constructs nor changes the compiler's semantic argv.
-        const takes_value = for ([_][]const u8{
-            "--dep",              "--error-limit",          "-rcincludes",       "--color",
-            "--subsystem",        "-O",                     "--force_undefined", "--stack",
-            "--image-base",       "--name",                 "-rpath",            "--library-directory",
-            "-L",                 "-F",                     "-framework",        "-weak_framework",
-            "-needed_framework",  "-install_name",          "-pagezero_size",    "-headerpad",
-            "-T",                 "--script",               "-version-script",   "--version-script",
-            "--library",          "-l",                     "--needed-library",  "-needed-l",
-            "-needed_library",    "-weak_library",          "-weak-l",           "-D",
-            "-I",                 "-isystem",               "-iwithsysroot",     "-idirafter",
-            "-iframework",        "-iframeworkwithsysroot", "-target",           "-mcpu",
-            "-mcmodel",           "--dynamic-linker",       "--sysroot",         "--libc",
-            "--test-filter",      "--test-runner",          "--test-cmd",        "--cache-dir",
-            "--global-cache-dir", "--zig-lib-dir",          "--build-root",      "--debug-log",
-            "--listen",           "--entitlements",         "-z",                "-x",
-        }) |option| {
-            if (std.mem.eql(u8, arg, option)) break true;
-        } else false;
-        if (takes_value) {
+        if (optionTakesValue(arg)) {
             i += 1;
             continue;
         }
@@ -149,6 +135,33 @@ fn checkSharedLibraryArgs(arguments: []const []const u8, diagnostics: *Io.Writer
         try diagnostics.writeAll("zig incremental compilation: shared libraries require explicit -fllvm and -flld; the Zig 0.17 self-hosted shared-library configuration is unsupported\n");
         return error.UnsupportedSharedLibraryBackend;
     }
+}
+
+fn optionTakesValue(arg: []const u8) bool {
+    // Zig 0.17 src/main.zig's build-command option arity. This read-only
+    // capability check must skip operands (even ones named '-flld'). It
+    // neither constructs nor changes the compiler's semantic argv.
+    for ([_][]const u8{
+        "--dep",              "--error-limit",          "-rcincludes",       "--color",
+        "--subsystem",        "-O",                     "--force_undefined", "--stack",
+        "--image-base",       "--name",                 "-rpath",            "--library-directory",
+        "-L",                 "-F",                     "-framework",        "-weak_framework",
+        "-needed_framework",  "-install_name",          "-pagezero_size",    "-headerpad",
+        "-T",                 "--script",               "-version-script",   "--version-script",
+        "--library",          "-l",                     "--needed-library",  "-needed-l",
+        "-needed_library",    "-weak_library",          "-weak-l",           "-D",
+        "-I",                 "-isystem",               "-iwithsysroot",     "-idirafter",
+        "-iframework",        "-iframeworkwithsysroot", "-target",           "-mcpu",
+        "-mcmodel",           "--dynamic-linker",       "--sysroot",         "--libc",
+        "--test-filter",      "--test-runner",          "--test-cmd",        "--cache-dir",
+        "--global-cache-dir", "--zig-lib-dir",          "--build-root",      "--debug-log",
+        "--listen",           "--entitlements",         "-z",                "-x",
+    }) |option| {
+        if (std.mem.eql(u8, arg, option)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 test "request framing preserves empty operands and delimiter-shaped names" {
@@ -184,6 +197,36 @@ test "shared backend checks distinguish switches from option operands" {
     try checkSharedLibraryArgs(&.{ "-fllvm", "-flld", "-rpath", "-fno-llvm" }, &diagnostics.writer);
     try checkSharedLibraryArgs(&.{ "-fno-llvm", "-fno-lld", "-fllvm", "-flld" }, &diagnostics.writer);
     try std.testing.expectError(error.UnsupportedSharedLibraryVersion, checkSharedLibraryArgs(&.{ "-fllvm", "-flld", "--version", "1.2.3" }, &diagnostics.writer));
+}
+
+test "reserved controls are rejected as switches, not option values" {
+    var diagnostics: Io.Writer.Allocating = .init(std.testing.allocator);
+    defer diagnostics.deinit();
+    var compilation: Compilation = .{
+        .command = "test",
+        .output_kind = .executable,
+        .name = "root",
+        .output = "out",
+        .arguments = &.{ "--test-filter", "--cache-dir", "-Mroot=main.zig" },
+        .input_paths = &.{"main.zig"},
+    };
+    try std.testing.expectEqualSlices([]const u8, compilation.arguments, try compilation.compilerArgs(&diagnostics.writer));
+
+    const rejected = [_][]const []const u8{
+        &.{ "--cache-dir", "cache" },
+        &.{"--cache-dir=cache"},
+        &.{ "--global-cache-dir", "cache" },
+        &.{ "--zig-lib-dir", "lib" },
+        &.{"--listen=-"},
+        &.{"-femit-bin=out"},
+        &.{ "--test-filter", "--cache-dir", "--cache-dir", "cache" },
+        &.{ "--test-filter", "", "--cache-dir", "cache" },
+        &.{ "-OReleaseFast", "--cache-dir", "cache" },
+    };
+    for (rejected) |arguments| {
+        compilation.arguments = arguments;
+        try std.testing.expectError(error.ConflictingCompilerOption, compilation.compilerArgs(&diagnostics.writer));
+    }
 }
 
 fn reserved(arg: []const u8) bool {

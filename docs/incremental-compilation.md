@@ -62,7 +62,9 @@ CPU features. Custom hermetic SDK toolchains need no worker-specific attributes.
 Adapter-owned controls are reserved: compiler server mode, incremental mode, SDK
 and cache directories, compilation naming, build root, response files, and output
 selection. For libraries, `-static` and `-dynamic` are also adapter-owned.
-Conflicting `zigopts` fail with a diagnostic. Other compiler arguments
+Conflicting `zigopts` fail with a diagnostic. These checks distinguish switches
+from their values: `--test-filter --cache-dir` uses `--cache-dir` as filter text,
+while an actual `--cache-dir` switch remains rejected. Other compiler arguments
 retain their original order. Invalid options or options that undermine Bazel's
 declared input/output model are not a supported interface.
 

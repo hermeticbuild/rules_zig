@@ -57,8 +57,8 @@ Pending items describe behavior to discuss, not an approved implementation.
 | --- | --- | --- |
 | 1 | Done: `eecd8d1` | Rename the private wrapper to `non_incremental_binary`. Rename only; implementation and comments preserved. |
 | 2 | Done: `0ba2f99` | Remove the private request schema field and version check. Update producer, decoder, existing fixtures and docs together. Retain required-field and structural validation; no compatibility decoder. |
-| 3 | Next discussion | Distinguish compiler switches from operands when validating options. Worker-only fix; preserve argv unchanged. Example: `--test-filter --cache-dir` currently mistakes the filter value for a reserved switch. Decide whether this edge case merits support now. |
-| 4 | Pending | Support versioned shared-library cache filenames. Change artifact lookup, preserving Bazel's declared destination and the existing SONAME behavior. Depends on interpreting the effective version option correctly. |
+| 3 | Done | Distinguish compiler switches from operands when validating options. Reuse the existing option-arity table without changing argv. Actual worker-owned flags remain rejected; their ordinary action equivalents must stay out of worker requests. |
+| 4 | Next discussion | Support versioned shared-library cache filenames. Change artifact lookup, preserving Bazel's declared destination and the existing SONAME behavior. Depends on interpreting the effective version option correctly. |
 | 5 | Pending | Make incremental archives usable by native consumers. Keep archive indexing and the backend gate for observed external-member corruption as separate reviewable fixes. Index only the published copy when needed; leave the retained compiler artifact untouched. |
 | 6 | Pending | Support assembly, LLVM IR and bitcode outputs, including `emit_bin=False`. Describe and publish each requested artifact; preserve output groups and backend choices. |
 | 7 | Pending | Allow generated C bindings and header-only dependencies. Translation remains ordinary; its generated Zig source becomes a worker input. No provider change is needed merely to enable this feature. |
@@ -67,6 +67,7 @@ Pending items describe behavior to discuss, not an approved implementation.
 | 10 | Design discussion required | Invalidate retained state when Zig consumes native libraries or objects. Native changes restart the compiler; Zig-only changes retain it. Agree on the supported inputs and their representation first. |
 | 11 | Design discussion required | Support `csrcs`, their options and relevant included files. Extend the restart policy only after agreeing on transitive headers and `extra_srcs` handling. |
 | 12 | Separate scope decision | Correct action ownership of files referenced by compiler/linker options. This affects ordinary rules too and needs its own reproduction and design. The rejected `_location_inputs` scanner is not an accepted implementation. |
+| 13 | Agreed final phase | Simplify the completed implementation and minimize the worker's knowledge of Zig flags. Revisit option-arity tables and capability checks; prefer explicit action-owned metadata or compiler-provided information where appropriate. Preserve compiler argv and supported-configuration correctness; do not grow a general Zig command-line parser. |
 
 Items 5 and 8 intentionally contain smaller commit boundaries. Do not combine
 them into a large patch merely because they share a numbered item. If dependencies
@@ -108,9 +109,18 @@ require a different order, explain and agree on the adjustment before proceeding
 - Items 1 and 2 passed the focused checks. After item 2, all 16 focused test
   targets passed, a real persistent-worker build produced an x86-64 Linux ELF,
   and its action metadata contained only `command`, `name`, and `output_kind`.
-- **Resume at item 3's go/no-go discussion.** No implementation of item 3 or any
-  later item has been approved. Keeping an edge case unsupported is a valid
-  outcome if explicitly agreed and recorded here.
+- Item 3 remains approved and implemented. The request to minimize flag knowledge
+  adds a final simplification phase; it does not withdraw this fix. Reserved
+  switches remain rejected, while their use as option values is allowed.
+- Item 3 evidence: the new unit regression failed before the fix, then all 16
+  focused targets passed. A Linux comparison ran exactly the same selected test
+  with direct Zig, the persistent worker and one-shot execution; the old worker
+  rejected it. Actual reserved switches still failed without creating their
+  requested destinations. The generated worker action's argv/environment stayed
+  unchanged, with ordinary cache/SDK flags absent. Read-only review found no issues.
+- **Resume at item 4's scope and implementation agreement.** Item 4 and later
+  feature extensions remain unapproved. Keeping an edge case unsupported is a
+  valid outcome if explicitly agreed and recorded here.
 
 ## Contract
 
