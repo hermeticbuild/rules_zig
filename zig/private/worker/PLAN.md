@@ -57,9 +57,9 @@ Pending items describe behavior to discuss, not an approved implementation.
 | --- | --- | --- |
 | 1 | Done: `eecd8d1` | Rename the private wrapper to `non_incremental_binary`. Rename only; implementation and comments preserved. |
 | 2 | Done: `0ba2f99` | Remove the private request schema field and version check. Update producer, decoder, existing fixtures and docs together. Retain required-field and structural validation; no compatibility decoder. |
-| 3 | Done | Distinguish compiler switches from operands when validating options. Reuse the existing option-arity table without changing argv. Actual worker-owned flags remain rejected; their ordinary action equivalents must stay out of worker requests. |
-| 4 | Next discussion | Support versioned shared-library cache filenames. Change artifact lookup, preserving Bazel's declared destination and the existing SONAME behavior. Depends on interpreting the effective version option correctly. |
-| 5 | Pending | Make incremental archives usable by native consumers. Keep archive indexing and the backend gate for observed external-member corruption as separate reviewable fixes. Index only the published copy when needed; leave the retained compiler artifact untouched. |
+| 3 | Done: `c79fe48` | Distinguish compiler switches from operands when validating options. Reuse the existing option-arity table without changing argv. Actual worker-owned flags remain rejected; their ordinary action equivalents must stay out of worker requests. |
+| 4 | Deferred by agreement | Versioned shared-library cache filenames (`--version`). No demonstrated user need: rules_zig does not generate this option and already controls the published filename and SONAME. Retain the explicit unsupported diagnostic; reconsider when needed. |
+| 5 | Next discussion | Make incremental archives usable by native consumers. Keep archive indexing and the backend gate for observed external-member corruption as separate reviewable fixes. Index only the published copy when needed; leave the retained compiler artifact untouched. |
 | 6 | Pending | Support assembly, LLVM IR and bitcode outputs, including `emit_bin=False`. Describe and publish each requested artifact; preserve output groups and backend choices. |
 | 7 | Pending | Allow generated C bindings and header-only dependencies. Translation remains ordinary; its generated Zig source becomes a worker input. No provider change is needed merely to enable this feature. |
 | 8 | Pending | Support `use_cc_common_link`: incremental Zig source compilation followed by the existing ordinary C/C++ link. Binary/shared-library paths first; test-object compilation and ordinary archive packaging in a follow-up commit. Account for item 5 before enabling affected archive configurations. |
@@ -118,9 +118,9 @@ require a different order, explain and agree on the adjustment before proceeding
   rejected it. Actual reserved switches still failed without creating their
   requested destinations. The generated worker action's argv/environment stayed
   unchanged, with ordinary cache/SDK flags absent. Read-only review found no issues.
-- **Resume at item 4's scope and implementation agreement.** Item 4 and later
-  feature extensions remain unapproved. Keeping an edge case unsupported is a
-  valid outcome if explicitly agreed and recorded here.
+- **Resume at item 5's scope and implementation agreement.** Item 4 is deferred;
+  item 5 and later feature extensions remain unapproved. Keeping an edge case
+  unsupported is a valid outcome if explicitly agreed and recorded here.
 
 ## Contract
 
