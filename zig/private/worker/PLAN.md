@@ -60,7 +60,7 @@ Pending items describe behavior to discuss, not an approved implementation.
 | 3 | Done: `c79fe48` | Distinguish compiler switches from operands when validating options. Reuse the existing option-arity table without changing argv. Actual worker-owned flags remain rejected; their ordinary action equivalents must stay out of worker requests. |
 | 4 | Deferred by agreement | Versioned shared-library cache filenames (`--version`). No demonstrated user need: rules_zig does not generate this option and already controls the published filename and SONAME. Retain the explicit unsupported diagnostic; reconsider when needed. |
 | 5a | Deferred for the current Linux scope | Do not add archive indexing for gold or other GNU-linker compatibility. Qualify Linux C/C++ consumers with hermetic-llvm; direct Zig linking retains its qualified defaults. Revisit indexing only if an in-scope consumer requires it, including the Apple linker when macOS targets are qualified. |
-| 5b | Next discussion | Reject incremental archive-generation configurations that can publish corrupt external members, including compiler-rt. The downstream C/C++ linker cannot repair those bytes. Agree on the narrow backend gate before implementation. |
+| 5b | Investigation complete; qualification decision pending | Zig 0.17.0 archive corruption reproduces without the worker and already has an upstream fix, including a 0.17.x backport. Prefer qualifying a compiler containing that fix before deciding whether an old-version restriction is needed. No backend or version-gate change is approved yet. |
 | 6 | Pending | Support assembly, LLVM IR and bitcode outputs, including `emit_bin=False`. Describe and publish each requested artifact; preserve output groups and backend choices. |
 | 7 | Pending | Allow generated C bindings and header-only dependencies. Translation remains ordinary; its generated Zig source becomes a worker input. No provider change is needed merely to enable this feature. |
 | 8 | Pending | Support `use_cc_common_link`: incremental Zig source compilation followed by the existing ordinary C/C++ link. Binary/shared-library paths first; test-object compilation and ordinary archive packaging in a follow-up commit. Account for item 5 before enabling affected archive configurations. |
@@ -132,11 +132,11 @@ require a different order, explain and agree on the adjustment before proceeding
   rejected it. Actual reserved switches still failed without creating their
   requested destinations. The generated worker action's argv/environment stayed
   unchanged, with ordinary cache/SDK flags absent. Read-only review found no issues.
-- **Resume at item 5b's scope and implementation agreement.** Items 4 and 5a are
+- **Resume at item 5b's compiler qualification agreement.** Items 4 and 5a are
   deferred; item 5b and later feature extensions remain unapproved. Keeping an
   edge case unsupported is a valid outcome if explicitly agreed and recorded here.
 
-### Item 5b: evidence to recheck before implementation
+### Item 5b: original evidence
 
 The earlier probes recorded in the preserved patch's `CAPABILITIES.md` used Zig
 0.17.0 (`7647adab80dd088f4de3610fd245915a912eb6ad`) on x86_64 Linux. These are
@@ -158,6 +158,77 @@ previous observations, not a fresh reproduction during the rewrite discussion.
 - The concrete reproduction concerns compiler-rt. Extending a restriction to
   other external members is a separate conservative choice when those inputs
   are enabled. Item 5b is not approval to disable all self-hosted compilation.
+
+### Item 5b: upstream investigation (2026-10-30)
+
+The requested Sol 6.1 high investigation reproduced the corruption independently
+of Bazel and the adapter, then built current Zig sources and repeated the probe
+on x86_64 Linux. Each compiler-server session received one update, used a unique
+local cache and a shared global cache, and produced a static library containing
+compiler-rt. The probe inspected the private archive before publication and
+verified that its bytes stayed unchanged after the compiler exited.
+
+| Compiler and configuration | Sessions | Zero-filled `compiler_rt.o` |
+| --- | --- | --- |
+| Pinned 0.17.0, incremental self-hosted | 20 | 17 |
+| Pinned 0.17.0, incremental LLVM/LLD | 20 | 0 |
+| Pinned 0.17.0, ordinary self-hosted | 5 | 0 |
+| 0.17.x at `12d9399228a41e5c4369602bfc0b51907662066f`, incremental self-hosted | 30 | 0 |
+| Master at `9da28756563d966484e79154c6ee56ca3065bfe6`, incremental self-hosted | 30 | 0 |
+
+All compiler sessions exited successfully, including the corrupt cases. In a
+separate five-session pinned-compiler run, four archives were corrupt and failed
+direct Zig consumer linking with "not an ELF file"; the healthy archive linked
+and ran. Five fixed-0.17.x consumers and all 30 master consumers linked and ran.
+These consumer checks use Zig's self-hosted linker, not a native C/C++ toolchain.
+
+The matching upstream bug is [Zig issue 37327](https://codeberg.org/ziglang/zig/issues/37327),
+fixed by [PR 37326](https://codeberg.org/ziglang/zig/pulls/37326):
+
+- Master fix: `f7626b95269bc3baad2c46e4d3b7acc16221c424`.
+- 0.17.x backport: `ea475556756d5afbaf88d472e9b223ab2a1ca1f4`.
+- `Elf2.prelinkInner` inserted a synthetic Zig input and advanced the pending
+  input index even for archives, which already contain the actual Zig object.
+  Depending on scheduling, this skipped writing a pending member. The fix limits
+  the synthetic input and index increment to nonarchive outputs.
+- The backport applies cleanly to the pinned source. No new compiler patch was
+  needed. Attribution combines upstream diagnosis, source inspection and fresh
+  reproduction; no instrumented or fix-only before/after compiler was built.
+
+Local source toolchains are feasible through the file-based interface introduced
+by merged [rules_zig PR 651](https://github.com/hermeticbuild/rules_zig/pull/651):
+expose the executable, matching `lib` directory and `zig.h` as labels, register a
+`zig_toolchain` for the bootstrap-enabled configuration, and enable the
+`bootstrapped` setting. Both source-built compilers successfully built an ordinary
+`zig_static_library` in a Linux Bazel sandbox; action inspection confirmed the
+compiler and SDK files were declared inputs. Compilers were built outside Bazel
+and exposed through a local repository. Building Zig itself inside the Bazel graph
+was not tested.
+
+Proposed next step, requiring agreement: qualify a fixed 0.17.x source compiler,
+then update the exact-version boundaries in `zig_build.bzl` and `worker.zig`
+together. Their current checks correctly reject both development compilers;
+versions were not disguised. `Client.zig` and `Server.zig` are unchanged between
+the pinned release and tested 0.17.x revision, making that a smaller compatibility
+step than master. No fixed 0.17.1 SDK was published in the download index checked
+during this investigation. The existing 0.17.0 corruption remains until a fixed
+compiler is selected or affected configurations are explicitly rejected.
+
+Qualification must cover the actual rules_zig worker and retained source edits,
+which this one-update-per-session probe did not exercise. A Zig compiler built by
+`zig_binary` inside Bazel also needs an ordinary-compilation boundary: the current
+toolchain transition resets `bootstrapped`, but not `incremental`. LLVM-enabled
+source builds, hermetic-llvm consumers and macOS targets remain unqualified here.
+Item 5a stays deferred; no production compiler, backend gate or provider changed.
+
+Reproduction scripts and full report are committed in the local Zig audit branch
+`cerisier/zig-archive-audit`, commits `4bfca1bf953b8078fe91abf78d1b44bd44f75c58`
+and `29095e841bc9627371f48f0eb8e89133529d3495`. The report is
+`tools/incremental_archive_audit.txt`; worktree:
+`/Users/corentinkerisit/code/codeberg.org/ziglang/zig-archive-audit`.
+Raw evidence is copied to `/tmp/zig-archive-audit-evidence-20261030` locally;
+the builds and complete matrix remain under `/tmp/zig-archive-audit-9da2875656`
+on `9985wx-5090x4`. Nothing was pushed or submitted upstream.
 
 ## Contract
 
