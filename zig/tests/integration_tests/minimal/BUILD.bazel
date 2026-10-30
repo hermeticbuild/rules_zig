@@ -83,3 +83,42 @@ zig_shared_library(
     shared_lib_name = "libincremental_custom.so",
     tags = ["manual"],
 )
+
+zig_binary(
+    name = "binary_outputs",
+    srcs = ["incremental_value.zig"],
+    emit_asm = True,
+    emit_llvm_bc = True,
+    emit_llvm_ir = True,
+    main = "incremental_output_main.zig",
+    tags = ["manual"],
+)
+
+zig_test(
+    name = "test_outputs",
+    srcs = ["incremental_value.zig"],
+    emit_llvm_bc = True,
+    main = "incremental_test.zig",
+    tags = ["manual"],
+)
+
+zig_static_library(
+    name = "static_outputs",
+    srcs = ["incremental_value.zig"],
+    emit_asm = True,
+    emit_bin = False,
+    emit_llvm_bc = True,
+    emit_llvm_ir = True,
+    main = "incremental_library.zig",
+    tags = ["manual"],
+)
+
+zig_shared_library(
+    name = "shared_outputs",
+    srcs = ["incremental_value.zig"],
+    emit_llvm_ir = True,
+    main = "incremental_library.zig",
+    shared_lib_name = "liboutputs_custom.so",
+    tags = ["manual"],
+    zigopts = ["-flld"],
+)

@@ -439,7 +439,7 @@ test "incremental tests and libraries preserve updates and reject unsupported co
     for (rejected) |backend| {
         const result = try buildTarget(ctx, modes[2], backend, "//:incremental_shared");
         defer result.deinit();
-        try expectFailure(result, "shared libraries require explicit -fllvm and -flld");
+        try expectFailure(result, "shared libraries require LLVM (-fllvm or LLVM output) and explicit -flld");
     }
     const platform = try buildTarget(ctx, modes[2], &.{"--platforms=//:aarch64_linux"}, "//:incremental_static");
     defer platform.deinit();
@@ -453,4 +453,85 @@ test "incremental tests and libraries preserve updates and reject unsupported co
     const bazel_test = try ctx.exec_bazel(.{ .argv = &.{ "test", "--@rules_zig//zig/settings:incremental", "--worker_sandboxing", "--experimental_worker_sandbox_hardening", "--test_output=errors", "//:incremental_test" } });
     defer bazel_test.deinit();
     try std.testing.expect(bazel_test.success);
+}
+
+test "requested outputs follow retained edits and one-shot compilation" {
+    if (builtin.os.tag != .linux or builtin.cpu.arch != .x86_64) return error.SkipZigTest;
+    const ctx = try BitContext.init();
+    defer ctx.deinit();
+    defer {
+        const shutdown = ctx.exec_bazel(.{ .argv = &.{"shutdown"} }) catch null;
+        if (shutdown) |result| result.deinit();
+    }
+    const info = try ctx.exec_bazel(.{ .argv = &.{ "info", "output_base" } });
+    defer info.deinit();
+    try std.testing.expect(info.success);
+    const output_base = std.mem.trim(u8, info.stdout, "\r\n");
+    const mode = &.{ "--worker_sandboxing", "--experimental_worker_sandbox_hardening" };
+    const cases = .{
+        .{ "binary_outputs", &.{ "s", "ll", "bc" } },
+        .{ "test_outputs", &.{"bc"} },
+        .{ "static_outputs", &.{ "s", "ll", "bc" } },
+        .{ "shared_outputs", &.{"ll"} },
+    };
+    inline for (cases) |case| {
+        const target = "//:" ++ case[0];
+        try ctx.writeWorkspaceFile("incremental_value.zig", "pub const value: u32 = 42;\n");
+        try expectTarget(ctx, mode, &.{"--output_groups=+asm,+llvm_ir,+llvm_bc"}, target);
+        const compiler = try compilerProcess(output_base);
+        defer a.free(compiler);
+        var workspace = try ctx.openWorkspace();
+        defer workspace.close(io);
+        inline for (case[1]) |extension| {
+            try workspace.copyFile("bazel-bin/" ++ case[0] ++ "." ++ extension, workspace, "saved-" ++ case[0] ++ "." ++ extension, io, .{});
+        }
+        // All requested files must update, while the previously published copies
+        // stay independent of the compiler's mutable cache.
+        for ([_]u32{ 44, 46 }) |value| {
+            const source = try std.fmt.allocPrint(a, "pub const value: u32 = {d};\n", .{value});
+            defer a.free(source);
+            try ctx.writeWorkspaceFile("incremental_value.zig", source);
+            const strategy: []const u8 = if (value == 44) "--strategy=ZigIncrementalCompile=worker" else "--strategy=ZigIncrementalCompile=sandboxed";
+            try expectTarget(ctx, mode, &.{ "--output_groups=+asm,+llvm_ir,+llvm_bc", strategy }, target);
+            if (value == 44) {
+                const reused = try compilerProcess(output_base);
+                defer a.free(reused);
+                try std.testing.expectEqualStrings(compiler, reused);
+            }
+            inline for (case[1]) |extension| {
+                const current = try ctx.readWorkspaceFileAlloc("bazel-bin/" ++ case[0] ++ "." ++ extension, 64 * 1024 * 1024);
+                defer a.free(current);
+                const saved = try ctx.readWorkspaceFileAlloc("saved-" ++ case[0] ++ "." ++ extension, 64 * 1024 * 1024);
+                defer a.free(saved);
+                try std.testing.expect(current.len > 0);
+                try std.testing.expect(!std.mem.eql(u8, current, saved));
+                if (comptime std.mem.eql(u8, extension, "bc")) {
+                    try std.testing.expect(std.mem.startsWith(u8, current, "BC\xc0\xde"));
+                }
+                if (comptime std.mem.eql(u8, extension, "ll") and !std.mem.eql(u8, case[0], "binary_outputs")) {
+                    const expected = try std.fmt.allocPrint(a, "ret i32 {d}", .{value});
+                    defer a.free(expected);
+                    try std.testing.expect(std.mem.find(u8, current, expected) != null);
+                    try std.testing.expect(std.mem.find(u8, saved, "ret i32 42") != null);
+                }
+            }
+            if (comptime std.mem.eql(u8, case[0], "binary_outputs")) {
+                try expectProgram(ctx, "bazel-bin/binary_outputs", if (value == 44) "44\n" else "46\n");
+            } else if (comptime std.mem.eql(u8, case[0], "test_outputs")) {
+                try expectProgram(ctx, "bazel-bin/test_outputs", "");
+            } else if (comptime std.mem.eql(u8, case[0], "static_outputs")) {
+                try std.testing.expect(!try ctx.workspaceFileExists("bazel-bin/libstatic_outputs.a"));
+            } else {
+                const command_path = try std.fs.path.join(a, &.{ compiler, "cmdline" });
+                defer a.free(command_path);
+                const command = try readProc(.cwd(), command_path);
+                defer a.free(command);
+                const sdk = command[0..std.mem.findScalar(u8, command, 0).?];
+                try expectLibrary(ctx, sdk, "bazel-bin/liboutputs_custom.so", if (value == 44) "44\n" else "46\n");
+            }
+        }
+    }
+    const rejected = try buildTarget(ctx, mode, &.{"--@rules_zig//zig/settings:zigopt=-fno-llvm"}, "//:shared_outputs");
+    defer rejected.deinit();
+    try expectFailure(rejected, "shared libraries require LLVM");
 }

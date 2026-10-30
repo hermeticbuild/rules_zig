@@ -21,17 +21,18 @@ affects the earlier toolchain-built adapter. Ordinary compilation is unaffected.
 The implementation accepts hermetic Zig 0.17.x from 0.17.0 onward, including
 development builds of later patches in that series. Other minor versions and
 pre-release builds of 0.17.0 remain unsupported. It supports POSIX execution tools,
-x86_64 Linux targets, Zig linking, and one primary output. Native dependencies,
-C sources, linker options/scripts, auxiliary outputs, path toolchains, and other
-compiler versions or targets are rejected for incremental compilations. Static
-libraries require `emit_bin = True`; C/C++ linking and test-object pipelines using
+x86_64 Linux targets and Zig linking. Native dependencies,
+C sources, linker options/scripts, path toolchains, and other
+compiler versions or targets are rejected for incremental compilations.
+C/C++ linking and test-object pipelines using
 `use_cc_common_link` are unsupported. Unsupported configurations fail explicitly;
 they do not silently use ordinary compilation. The Linux integration tests
 cover both generated sources and directory inputs, source
 file symlinks, external repositories, and the sibling repository layout.
 
 Binaries, test executables, and static libraries support both the self-hosted and
-LLVM backends. Shared libraries require explicit effective `-fllvm` and `-flld`:
+LLVM backends. Shared libraries require LLVM and explicit effective `-flld`.
+Select LLVM with `-fllvm` or by requesting LLVM IR/bitcode output:
 
 ```sh
 bazel build --@rules_zig//zig/settings:incremental \
@@ -39,14 +40,38 @@ bazel build --@rules_zig//zig/settings:incremental \
   --@rules_zig//zig/settings:zigopt=-flld //lib:shared
 ```
 
-The adapter checks those switches without rewriting arguments. Missing flags,
-or a later `-fno-llvm` or `-fno-lld`, fail before starting the compiler.
+The adapter checks that selection without rewriting arguments. An unsupported
+backend selection, including a later `-fno-llvm` or `-fno-lld`, fails before
+starting the compiler.
 Option operands are skipped when checking the backend, so an rpath named `-flld`
 does not enable LLD. Versioned shared libraries (`--version`) and native compiler
 flag groups remain unsupported and fail explicitly.
 
 Zig 0.17's self-hosted incremental shared-library output failed execution in
 qualification. LLVM still retains frontend state; LLD performs a full relink.
+
+### Requested outputs
+
+The existing `emit_asm`, `emit_llvm_ir`, and `emit_llvm_bc` attributes also work in
+incremental mode. Their files retain the `asm`, `llvm_ir`, and `llvm_bc` output
+groups. Request those groups as usual, for example:
+
+```sh
+bazel build --@rules_zig//zig/settings:incremental \
+  --output_groups=+asm,+llvm_ir,+llvm_bc //lib:library
+```
+
+Static libraries may set `emit_bin = False` when another output is enabled. Such
+targets expose no default archive or `CcInfo`; request the desired output group.
+Binaries, tests, and shared libraries still require their primary output.
+
+Zig selects LLVM when IR or bitcode is requested. Assembly without those outputs
+requires `-fllvm` on the supported target. The adapter does not choose a backend
+on the user's behalf; incompatible options fail, and a compiler that reports
+success without producing a requested file causes an explicit missing-output
+failure. Every requested artifact is checked before publication and copied
+independently into its declared location. Changing requested output kinds or
+destinations selects a different compiler session; source edits retain the session.
 
 ### Known compiler limitation
 
@@ -131,8 +156,9 @@ leave a different worker pool alive until Bazel evicts it or shuts down.
 
 Direct and incremental compilations share action declaration and semantic argument
 construction. Incremental actions use one automatic parameter file containing
-metadata, the output path, ordered compiler arguments, and the declared input
-paths. The private format has no version negotiation or legacy decoding; its
+metadata listing output kinds, their corresponding output paths, ordered compiler
+arguments, and the declared input paths. The private format has no version
+negotiation or legacy decoding; its
 producer and adapter ship together. The same request is used for persistent and
 one-shot execution. The adapter does not reconstruct commands by stripping compiler
 options. Missing input digests conservatively cause a fresh copy; they never imply
@@ -199,4 +225,5 @@ artifact reproducibility remain follow-up work.
 
 The compiler protocol is internal to Zig and admitted only for the tested SDK
 version. Additional compiler versions, native targets, remote-worker support,
-additional output kinds, and auxiliary outputs require separate compatibility work.
+additional output kinds beyond binary, assembly, LLVM IR, and bitcode require
+separate compatibility work.

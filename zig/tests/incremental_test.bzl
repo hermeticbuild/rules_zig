@@ -34,7 +34,7 @@ _worker_graph = aspect(
     attr_aspects = ["_incremental_worker", "actual"],
 )
 
-def _assert_incremental(env, command, output_kind):
+def _assert_incremental(env, command, output_kind, outputs):
     action = assert_find_action(env, "ZigIncrementalCompile")
     executables = [file for file in action.inputs.to_list() if file.path == action.argv[0]]
     asserts.equals(env, [Label("//zig/private/worker:configured_worker")], [file.owner for file in executables], "The adapter must come through the worker configuration transition.")
@@ -54,22 +54,28 @@ def _assert_incremental(env, command, output_kind):
         metadata = json.decode(metadata_args[0])
         asserts.equals(env, command, metadata["command"])
         asserts.equals(env, output_kind, metadata["output_kind"])
+        asserts.equals(env, outputs, metadata["outputs"])
         header_index = action.argv.index(metadata_args[0])
-        asserts.true(env, action.argv[header_index + 1] in [file.path for file in action.outputs.to_list()])
+        output_paths = action.argv[header_index + 1:header_index + 1 + len(outputs)]
+        asserts.equals(env, sorted([file.path for file in action.outputs.to_list()]), sorted(output_paths))
+        target = analysistest.target_under_test(env)
+        for kind, path in zip(outputs, output_paths):
+            files = target[DefaultInfo].files if kind == "bin" else getattr(target[OutputGroupInfo], kind)
+            asserts.equals(env, [path], [file.path for file in files.to_list()])
         input_paths = [file.path for file in action.inputs.to_list()]
         for arg in action.argv:
             if arg.startswith("input="):
                 asserts.true(env, arg[len("input="):] in input_paths, "The framed request must name declared inputs.")
         asserts.false(env, any([path.endswith(".zig-inputs") or path.endswith(".zig-global.args") or path.endswith(".zig-module.args") for path in input_paths]))
-    asserts.false(env, any([arg.startswith("-femit-bin=") for arg in action.argv]))
+    asserts.false(env, any([arg.startswith("-femit-") or arg.startswith("-fno-emit-") for arg in action.argv]))
     asserts.false(env, "--cache-dir" in action.argv)
     asserts.false(env, "--global-cache-dir" in action.argv)
     asserts.false(env, "--zig-lib-dir" in action.argv)
 
-def _enabled_test_for(command, output_kind):
+def _enabled_test_for(command, output_kind, outputs = ["bin"]):
     def _impl(ctx):
         env = analysistest.begin(ctx)
-        _assert_incremental(env, command, output_kind)
+        _assert_incremental(env, command, output_kind, outputs)
         assert_find_action(env, "ZigBuildDocs")
         return analysistest.end(env)
 
@@ -79,6 +85,10 @@ _enabled_test = _enabled_test_for("build-exe", "executable")
 _test_compile_test = _enabled_test_for("test", "executable")
 _static_test = _enabled_test_for("build-lib", "static_library")
 _shared_test = _enabled_test_for("build-lib", "shared_library")
+_binary_asm_test = _enabled_test_for("build-exe", "executable", ["bin", "asm"])
+_static_asm_only_test = _enabled_test_for("build-lib", "static_library", ["asm"])
+_shared_asm_test = _enabled_test_for("build-lib", "shared_library", ["bin", "asm"])
+_test_asm_bc_test = _enabled_test_for("test", "executable", ["bin", "asm", "llvm_bc"])
 
 def _disabled_impl(ctx):
     env = analysistest.begin(ctx)
@@ -131,7 +141,7 @@ _unsupported_link_test = _failure_test(
     "use_cc_common_link=False",
     {canonical_label("@//zig/settings:use_cc_common_link"): True},
 )
-_unsupported_outputs_test = _failure_test("no native dependencies or auxiliary outputs")
+_unsupported_native_test = _failure_test("no native dependencies")
 _unsupported_sdk_test = _failure_test(
     "requires Zig 0.17.x",
     {canonical_label("@zig_toolchains//:version"): "0.16.0"},
@@ -149,10 +159,10 @@ def incremental_test_suite(name):
         partial.make(_unsupported_target_test, target_under_test = "//zig/tests/simple-binary:binary", size = "small"),
         partial.make(_unsupported_arch_test, target_under_test = "//zig/tests/simple-binary:binary", size = "small"),
         partial.make(_unsupported_link_test, target_under_test = "//zig/tests/simple-test:test", size = "small"),
-        partial.make(_unsupported_outputs_test, target_under_test = "//zig/tests/emit-attr:binary_emit_asm", size = "small"),
-        partial.make(_unsupported_outputs_test, target_under_test = "//zig/tests/emit-attr:static_emit_asm_only", size = "small"),
-        partial.make(_unsupported_outputs_test, target_under_test = "//zig/tests/emit-attr:shared_emit_asm", size = "small"),
-        partial.make(_unsupported_outputs_test, target_under_test = "//zig/tests/emit-attr:test_emit_asm_and_bc", size = "small"),
-        partial.make(_unsupported_outputs_test, target_under_test = "//zig/tests/c-sources-binary:without-copts", size = "small"),
+        partial.make(_binary_asm_test, target_under_test = "//zig/tests/emit-attr:binary_emit_asm", size = "small"),
+        partial.make(_static_asm_only_test, target_under_test = "//zig/tests/emit-attr:static_emit_asm_only", size = "small"),
+        partial.make(_shared_asm_test, target_under_test = "//zig/tests/emit-attr:shared_emit_asm", size = "small"),
+        partial.make(_test_asm_bc_test, target_under_test = "//zig/tests/emit-attr:test_emit_asm_and_bc", size = "small"),
+        partial.make(_unsupported_native_test, target_under_test = "//zig/tests/c-sources-binary:without-copts", size = "small"),
         partial.make(_unsupported_sdk_test, target_under_test = "//zig/tests/simple-library:library", size = "small"),
     )

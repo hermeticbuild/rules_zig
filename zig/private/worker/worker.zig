@@ -16,11 +16,13 @@ const Response = struct { requestId: i32, exitCode: u8, output: []const u8 };
 
 // These controls come from the action owner, never from a parsed compiler argv.
 const OutputKind = enum { executable, static_library, shared_library };
+const EmitKind = enum { bin, @"asm", llvm_ir, llvm_bc };
+const EmittedOutput = struct { kind: EmitKind, path: []const u8 };
 const Compilation = struct {
     command: []const u8,
     output_kind: OutputKind,
     name: []const u8,
-    output: []const u8,
+    outputs: []const EmittedOutput,
     arguments: []const []const u8,
     input_paths: []const []const u8,
 
@@ -28,16 +30,30 @@ const Compilation = struct {
         command: []const u8,
         output_kind: OutputKind,
         name: []const u8,
+        outputs: []const EmitKind,
     };
 
     fn parse(a: Allocator, data: []const []const u8) !Compilation {
         if (data.len < 3) return error.InvalidCompilationRequest;
         const parsed = try std.json.parseFromSlice(Metadata, a, data[0], .{});
         const metadata = parsed.value;
+        if (metadata.outputs.len == 0 or metadata.outputs.len > data.len - 2)
+            return error.InvalidCompilationRequest;
+        const arguments_start = 1 + metadata.outputs.len;
+        const outputs = try a.alloc(EmittedOutput, metadata.outputs.len);
+        var emitted: std.EnumSet(EmitKind) = .empty;
+        for (outputs, metadata.outputs, data[1..arguments_start]) |*output, kind, path| {
+            if (emitted.contains(kind)) return error.InvalidCompilationRequest;
+            emitted.insert(kind);
+            try safePath(path, false);
+            output.* = .{ .kind = kind, .path = path };
+        }
+        if (!emitted.contains(.bin) and metadata.output_kind != .static_library)
+            return error.UnsupportedCompilationRequest;
         // Inputs are prefixed records, so the final '--' always frames them,
         // independently of empty arguments or '--' in the compiler vector.
         var boundary = data.len;
-        while (boundary > 2) {
+        while (boundary > arguments_start) {
             boundary -= 1;
             if (std.mem.eql(u8, data[boundary], "--")) break;
         }
@@ -51,8 +67,8 @@ const Compilation = struct {
             .command = metadata.command,
             .output_kind = metadata.output_kind,
             .name = metadata.name,
-            .output = data[1],
-            .arguments = data[2..boundary],
+            .outputs = outputs,
+            .arguments = data[arguments_start..boundary],
             .input_paths = paths,
         };
         const valid_command = switch (result.output_kind) {
@@ -61,7 +77,6 @@ const Compilation = struct {
         };
         if (!valid_command)
             return error.UnsupportedCompilationRequest;
-        try safePath(result.output, false);
         if (result.name.len == 0 or !std.mem.eql(u8, std.fs.path.basename(result.name), result.name))
             return error.InvalidCompilationName;
         return result;
@@ -81,7 +96,12 @@ const Compilation = struct {
                 i += 1;
             }
         }
-        if (self.output_kind == .shared_library) try checkSharedLibraryArgs(self.arguments, diagnostics);
+        if (self.output_kind == .shared_library) {
+            const emits_llvm = for (self.outputs) |output| {
+                if (output.kind == .llvm_ir or output.kind == .llvm_bc) break true;
+            } else false;
+            try checkSharedLibraryArgs(self.arguments, emits_llvm, diagnostics);
+        }
         return self.arguments;
     }
 
@@ -98,17 +118,22 @@ const Compilation = struct {
         return result;
     }
 
-    fn artifactName(self: Compilation, a: Allocator) ![]const u8 {
-        return switch (self.output_kind) {
-            .executable => self.name,
-            .static_library => std.fmt.allocPrint(a, "lib{s}.a", .{self.name}),
-            .shared_library => std.fmt.allocPrint(a, "lib{s}.so", .{self.name}),
+    fn artifactName(self: Compilation, a: Allocator, kind: EmitKind) ![]const u8 {
+        return switch (kind) {
+            .bin => switch (self.output_kind) {
+                .executable => self.name,
+                .static_library => std.fmt.allocPrint(a, "lib{s}.a", .{self.name}),
+                .shared_library => std.fmt.allocPrint(a, "lib{s}.so", .{self.name}),
+            },
+            .@"asm" => std.fmt.allocPrint(a, "{s}.s", .{self.name}),
+            .llvm_ir => std.fmt.allocPrint(a, "{s}.ll", .{self.name}),
+            .llvm_bc => std.fmt.allocPrint(a, "{s}.bc", .{self.name}),
         };
     }
 };
 
-fn checkSharedLibraryArgs(arguments: []const []const u8, diagnostics: *Io.Writer) !void {
-    var llvm = false;
+fn checkSharedLibraryArgs(arguments: []const []const u8, emits_llvm: bool, diagnostics: *Io.Writer) !void {
+    var llvm = emits_llvm;
     var lld = false;
     var i: usize = 0;
     while (i < arguments.len) : (i += 1) {
@@ -132,7 +157,7 @@ fn checkSharedLibraryArgs(arguments: []const []const u8, diagnostics: *Io.Writer
         if (std.mem.eql(u8, arg, "-fno-lld")) lld = false;
     }
     if (!llvm or !lld) {
-        try diagnostics.writeAll("zig incremental compilation: shared libraries require explicit -fllvm and -flld; the Zig 0.17 self-hosted shared-library configuration is unsupported\n");
+        try diagnostics.writeAll("zig incremental compilation: shared libraries require LLVM (-fllvm or LLVM output) and explicit -flld; the Zig 0.17 self-hosted shared-library configuration is unsupported\n");
         return error.UnsupportedSharedLibraryBackend;
     }
 }
@@ -168,7 +193,7 @@ test "request framing preserves empty operands and delimiter-shaped names" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const compilation = try Compilation.parse(arena.allocator(), &.{
-        "{\"command\":\"build-exe\",\"output_kind\":\"executable\",\"name\":\"root\"}",
+        "{\"command\":\"build-exe\",\"output_kind\":\"executable\",\"name\":\"root\",\"outputs\":[\"bin\"]}",
         "bazel-out/cfg/bin/program",
         "--test-filter",
         "",
@@ -178,7 +203,7 @@ test "request framing preserves empty operands and delimiter-shaped names" {
         "input=--",
         "input=bazel-out/cfg/bin/generated.zig",
     });
-    try std.testing.expectEqualStrings("bazel-out/cfg/bin/program", compilation.output);
+    try std.testing.expectEqualStrings("bazel-out/cfg/bin/program", compilation.outputs[0].path);
     try std.testing.expectEqualSlices([]const u8, &.{ "--test-filter", "", "--", "input=operand" }, compilation.arguments);
     const inputs = try compilation.inputs(arena.allocator(), &.{
         .{ .path = "--", .digest = "opaque" },
@@ -193,10 +218,12 @@ test "request framing preserves empty operands and delimiter-shaped names" {
 test "shared backend checks distinguish switches from option operands" {
     var diagnostics: Io.Writer.Allocating = .init(std.testing.allocator);
     defer diagnostics.deinit();
-    try std.testing.expectError(error.UnsupportedSharedLibraryBackend, checkSharedLibraryArgs(&.{ "-fllvm", "-fno-lld", "-rpath", "-flld" }, &diagnostics.writer));
-    try checkSharedLibraryArgs(&.{ "-fllvm", "-flld", "-rpath", "-fno-llvm" }, &diagnostics.writer);
-    try checkSharedLibraryArgs(&.{ "-fno-llvm", "-fno-lld", "-fllvm", "-flld" }, &diagnostics.writer);
-    try std.testing.expectError(error.UnsupportedSharedLibraryVersion, checkSharedLibraryArgs(&.{ "-fllvm", "-flld", "--version", "1.2.3" }, &diagnostics.writer));
+    try std.testing.expectError(error.UnsupportedSharedLibraryBackend, checkSharedLibraryArgs(&.{ "-fllvm", "-fno-lld", "-rpath", "-flld" }, false, &diagnostics.writer));
+    try checkSharedLibraryArgs(&.{ "-fllvm", "-flld", "-rpath", "-fno-llvm" }, false, &diagnostics.writer);
+    try checkSharedLibraryArgs(&.{ "-fno-llvm", "-fno-lld", "-fllvm", "-flld" }, false, &diagnostics.writer);
+    try std.testing.expectError(error.UnsupportedSharedLibraryVersion, checkSharedLibraryArgs(&.{ "-fllvm", "-flld", "--version", "1.2.3" }, false, &diagnostics.writer));
+    try checkSharedLibraryArgs(&.{"-flld"}, true, &diagnostics.writer);
+    try std.testing.expectError(error.UnsupportedSharedLibraryBackend, checkSharedLibraryArgs(&.{ "-flld", "-fno-llvm" }, true, &diagnostics.writer));
 }
 
 test "reserved controls are rejected as switches, not option values" {
@@ -206,7 +233,7 @@ test "reserved controls are rejected as switches, not option values" {
         .command = "test",
         .output_kind = .executable,
         .name = "root",
-        .output = "out",
+        .outputs = &.{.{ .kind = .bin, .path = "out" }},
         .arguments = &.{ "--test-filter", "--cache-dir", "-Mroot=main.zig" },
         .input_paths = &.{"main.zig"},
     };
@@ -395,6 +422,17 @@ const Worker = struct {
             .shared_library => try argv.append("-dynamic"),
             .executable => if (std.mem.eql(u8, compilation.command, "test")) try argv.append("--test-no-exec"),
         }
+        var emit_bin = false;
+        for (compilation.outputs) |output| {
+            try argv.append(switch (output.kind) {
+                .bin => "-femit-bin",
+                .@"asm" => "-femit-asm",
+                .llvm_ir => "-femit-llvm-ir",
+                .llvm_bc => "-femit-llvm-bc",
+            });
+            if (output.kind == .bin) emit_bin = true;
+        }
+        if (!emit_bin) try argv.append("-fno-emit-bin");
         // Zig 0.17 cannot encode apostrophes in response files and consumes
         // direct argv before response contents. Use one representation for the
         // entire semantic vector so module dependency ordering stays intact.
@@ -452,8 +490,7 @@ const Worker = struct {
         const compilation = try Compilation.parse(a, request.arguments);
         const arguments = try compilation.compilerArgs(diagnostics);
         const inputs = try compilation.inputs(a, request.inputs);
-        const output_path = compilation.output;
-        const key = try std.json.Stringify.valueAlloc(a, .{ compilation.command, compilation.output_kind, compilation.name, output_path, arguments }, .{});
+        const key = try std.json.Stringify.valueAlloc(a, .{ compilation.command, compilation.output_kind, compilation.name, compilation.outputs, arguments }, .{});
         try self.selectSession(key);
         var reused = self.session != null and std.mem.eql(u8, self.session.?.key, key);
         const started_at = Io.Clock.awake.now(self.io);
@@ -523,9 +560,18 @@ const Worker = struct {
             }
         }
         const compiled_at = Io.Clock.awake.now(self.io);
-        const artifact = try std.fs.path.join(a, &.{ s.cache, "o", digest orelse return error.MissingEmitDigest, try compilation.artifactName(a) });
-        // Atomic copy, never a hard link: Zig mutates the private artifact in place.
-        try Dir.cwd().copyFile(artifact, .cwd(), output_path, self.io, .{ .make_path = true });
+        const artifacts = try a.alloc([]const u8, compilation.outputs.len);
+        for (artifacts, compilation.outputs) |*artifact, output| {
+            artifact.* = try std.fs.path.join(a, &.{ s.cache, "o", digest orelse return error.MissingEmitDigest, try compilation.artifactName(a, output.kind) });
+            Dir.cwd().access(self.io, artifact.*, .{}) catch |err| {
+                try diagnostics.print("zig incremental compilation: requested {t} output was not produced: {s} ({t})\n", .{ output.kind, output.path, err });
+                return error.MissingCompilerOutput;
+            };
+        }
+        for (artifacts, compilation.outputs) |artifact, output| {
+            // Atomic copy, never a hard link: Zig mutates the private artifact in place.
+            try Dir.cwd().copyFile(artifact, .cwd(), output.path, self.io, .{ .make_path = true });
+        }
         const ms = started_at.untilNow(self.io, .awake).toMilliseconds();
         std.log.info("zig-worker generation={d} reused={} copied={d} duration_ms={d} input_ms={d} compile_ms={d} output_ms={d}", .{
             s.generation,

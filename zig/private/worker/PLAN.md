@@ -61,7 +61,7 @@ Pending items describe behavior to discuss, not an approved implementation.
 | 4 | Deferred by agreement | Versioned shared-library cache filenames (`--version`). No demonstrated user need: rules_zig does not generate this option and already controls the published filename and SONAME. Retain the explicit unsupported diagnostic; reconsider when needed. |
 | 5a | Deferred for the current Linux scope | Do not add archive indexing for gold or other GNU-linker compatibility. Qualify Linux C/C++ consumers with hermetic-llvm; direct Zig linking retains its qualified defaults. Revisit indexing only if an in-scope consumer requires it, including the Apple linker when macOS targets are qualified. |
 | 5b | Closed by agreement: upstream compiler bug | No archive workaround, backend fallback or configuration-specific rejection. Document the affected 0.17.0 path and upstream fix. Allow compatible fixed toolchains by qualifying 0.17.x patch builds and relaxing both exact-version checks together. |
-| 6 | Pending | Support assembly, LLVM IR and bitcode outputs, including `emit_bin=False`. Describe and publish each requested artifact; preserve output groups and backend choices. |
+| 6 | Done: reviewed and approved for commit | Support assembly, LLVM IR and bitcode outputs, including `emit_bin=False`. Describe and publish each requested artifact; preserve output groups and backend choices. |
 | 7 | Pending | Allow generated C bindings and header-only dependencies. Translation remains ordinary; its generated Zig source becomes a worker input. No provider change is needed merely to enable this feature. |
 | 8 | Pending | Support `use_cc_common_link`: incremental Zig source compilation followed by the existing ordinary C/C++ link. Binary/shared-library paths first; test-object compilation and ordinary archive packaging in a follow-up commit. Account for item 5 before enabling affected archive configurations. |
 | 9 | Pending | Allow ordinary scalar linker options. Preserve their consumer, ordering, and existing static-library behavior. Do not bundle location-expansion changes. |
@@ -132,7 +132,8 @@ require a different order, explain and agree on the adjustment before proceeding
   rejected it. Actual reserved switches still failed without creating their
   requested destinations. The generated worker action's argv/environment stayed
   unchanged, with ordinary cache/SDK flags absent. Read-only review found no issues.
-- **Resume at item 6's scope and implementation agreement.** Items 4 and 5a are
+- **Resume at item 7's scope and implementation agreement.** Item 6 is complete.
+  Items 4 and 5a are
   deferred; item 5b needs no compiler workaround. There is no separate item 5c.
   Later feature extensions remain unapproved. Keeping an edge case unsupported
   is a valid outcome if explicitly agreed and recorded here.
@@ -272,7 +273,7 @@ fixture attempts under `/tmp` encountered sandbox path visibility/mount failures
 moving the fixture and declared SDK outside `/tmp` resolved them without changing
 the worker or sandbox policy.
 
-### Item 6: proposed commit boundaries, pending agreement
+### Item 6: combined implementation approved (2026-10-30)
 
 1. **Auxiliary outputs alongside the binary.** Support `emit_asm`, `emit_llvm_ir`
    and `emit_llvm_bc` through explicit action-owned output descriptions. Publish
@@ -282,15 +283,79 @@ the worker or sandbox policy.
    `emit_bin=False` when another output is requested, matching the ordinary rule.
    Do not request, require or publish an archive in that case.
 
-Keep ordinary action construction and comments in place. No provider changes,
+Both paths share one output description/publication change, reviewed together
+and approved for commit. Keep ordinary action construction and comments in
+place. No provider changes,
 module-argument refactoring, documentation-action support or native linking work
-belong to either commit. Qualify retained edits and one-shot execution for each
+belong to this commit. Qualify retained edits and one-shot execution for each
 output combination before declaring it supported. The previous capability audit
 is a starting point for checks, not authority to restore the rejected patch.
 
+The only moved code in `zig_build.bzl` declares auxiliary files and their output
+groups beside the primary output. Ordinary emission flags stay at their original
+position. Auxiliary output attributes are evaluated once when declaring files.
+Each selected auxiliary emission is a struct carrying its kind, file and ordinary
+flag. Action outputs, output groups and worker metadata are derived from those
+records; ordinary emission iterates the same records without filtering primary
+outputs or deriving flags from kind names.
+The request lists output kinds in JSON followed by File-aware paths;
+the adapter owns emission flags and cache filenames, never strips compiler argv,
+and includes the full output description in session identity. Static libraries
+without a binary explicitly request `-fno-emit-bin`. All requested cache artifacts
+must exist before independent atomic copies publish them.
+
+LLVM IR/bitcode requests select LLVM in Zig, so they also satisfy the existing
+shared-library LLVM requirement; explicit LLD selection is still required.
+Backend choices remain with the caller. Missing compiler output is a failure,
+including assembly requested from a backend that does not emit it.
+
+Verification on 2026-10-30:
+
+- Baseline `bazel build --config=remote-cache --//zig/settings:incremental
+  --platforms=//zig/tests/platforms:x86_64-linux
+  //zig/tests/emit-attr:static_emit_asm_only` failed at the old auxiliary-output
+  analysis guard. The corresponding incremental analysis case now passes and
+  checks the sole assembly output, its output group, and its request path.
+- `bazel test --config=remote-cache //zig/tests:incremental_test
+  //zig/tests:incremental_worker_test //zig/tests:emit_attr_test`: all 23 targets
+  pass, including the existing ordinary emission checks. Remote execution was
+  already unavailable for the Darwin executor; this uses the established local
+  execution/remote-cache fallback.
+- After consolidating output selection, all 22 emission/incremental analysis
+  tests pass. Before/after `aquery` snapshots matched by target, mnemonic and
+  configuration checksum show identical keys, arguments, environments, execution
+  requirements, inputs and outputs for all eight ordinary actions inspected.
+- The new Linux integration case passed with Bazel 9.2.0 and Zig 0.17.0: binary,
+  test, static auxiliary-only and shared-library outputs; retained compiler PIDs
+  across edits; current IR contents, bitcode headers, saved output independence,
+  executable/shared-library consumers, no unwanted archive, hardened worker and
+  sandboxed one-shot execution. Shared IR selects LLVM without explicit `-fllvm`;
+  explicit `-fno-llvm` still fails.
+- A direct protocol qualification exercised all 15 nonempty subsets of binary,
+  assembly, IR and bitcode for static compilation, each cold, retained and
+  one-shot. Bitcode consumers executed the current value. Changing output kinds
+  or destination paths changed the compiler PID. Self-hosted assembly absence
+  failed before overwriting an existing published binary.
+- Buildifier, Zig formatting, whitespace checks and a narrow read-only review
+  passed. No provider, bootstrap or native-linking changes. Corentin approved
+  the reviewed implementation for commit; changes remain unpushed.
+
+The disposable Linux fixture and commands are under
+`/home/corentin/.cache/rules-zig-outputs-20261030` on `9985wx-5090x4`:
+`run.sh` runs the checked-in integration case; `outputs_protocol.py` runs the
+output-selection qualification. Results are in `run.log`, `outputs_protocol.log`
+and `protocol.log`. These checks used released 0.17.0 with LLVM; they do not
+establish auxiliary output support on other target architectures or SDK series.
+
+Commit rationale: incremental mode unnecessarily rejected existing
+emission attributes because its private request described one mandatory binary.
+Describe every requested output explicitly and publish the corresponding cache
+artifacts, allowing the same legitimate output choices as ordinary compilation
+within the already qualified backend/target scope.
+
 ## Contract
 
-A successful action publishes an independent artifact for its current declared
+A successful action publishes independent artifacts for its current declared
 inputs, compiler, environment, and options. Removing retained state changes only
 performance. Bazel owns action invalidation; Zig owns semantic incremental work.
 
@@ -298,11 +363,13 @@ performance. Bazel owns action invalidation; Zig owns semantic incremental work.
 
 - Existing `zig_binary`, `zig_test`, `zig_static_library`, and `zig_shared_library`,
   opt-in `//zig/settings:incremental`; default unchanged.
-- Hermetic Zig 0.17.x from 0.17.0 onward, x86_64 Linux target, Zig linking, one
-  primary output. The known 0.17.0 archive corruption is an upstream limitation;
+- Hermetic Zig 0.17.x from 0.17.0 onward, x86_64 Linux target, Zig linking, binary
+  and requested assembly/LLVM outputs. Static libraries may omit the binary.
+  The known 0.17.0 archive corruption is an upstream limitation;
   select a compiler containing its fix.
 - Binaries, test executables, and static libraries support self-hosted and LLVM
-  compilation. Shared libraries require explicit effective LLVM and LLD options.
+  compilation. Shared libraries require LLVM (explicitly or through LLVM output)
+  and explicit effective LLD selection.
 - Singleplex JSON worker, one compiler session by default, optional bounded LRU.
 - Adapter-owned protocol, cache, SDK, naming, and output controls are reserved.
   Conflicting `zigopts` fail clearly; arbitrary invalid compiler usage is outside
@@ -352,7 +419,7 @@ changed Bazel input digests; they cannot repair Bazel failing to detect an edit.
 ## Deferred, not prerequisites
 
 Multiplexing, target-affinity scheduling, remote worker locality, macOS and
-Windows, native dependencies, object pipelines/auxiliary outputs, additional Zig
+Windows, native dependencies, object pipelines, additional Zig
 protocol versions, and remote-cache eligibility. Measure representative multiple
 target workloads before expanding session policy; synthetic results already
 justify implementing the narrow supported mode.

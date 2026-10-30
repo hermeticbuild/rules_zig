@@ -266,7 +266,7 @@ def _compile(ctx, *, worker, zigtoolchaininfo, command, global_args, args, outpu
     arguments = command + [global_args, args] + trailing_args
     tools = []
     if worker:
-        # Metadata, output, ordered compiler arguments, then a framed
+        # Metadata, output paths, ordered compiler arguments, then a framed
         # input list. Prefixing input paths makes the final delimiter unambiguous,
         # even when a compiler operand or an input file is named "--".
         args.add("--")
@@ -338,10 +338,8 @@ def zig_build_impl(ctx, *, kind):
             fail("Incremental compilation requires the worker tool dependency.")
         if zigtargetinfo.triple.arch != "x86_64" or zigtargetinfo.triple.os != "linux":
             fail("Incremental compilation currently supports x86_64-linux targets only.")
-        if use_cc_common_link or ctx.attr.csrcs or ctx.attr.copts or ctx.attr.linkopts or ctx.file.linker_script or ctx.attr.emit_asm or ctx.attr.emit_llvm_ir or ctx.attr.emit_llvm_bc:
-            fail("Incremental compilation requires one primary output, no native dependencies or auxiliary outputs, and Zig linking (use_cc_common_link=False).")
-        if kind == "zig_static_library" and not ctx.attr.emit_bin:
-            fail("Incremental compilation requires emit_bin=True for static libraries.")
+        if use_cc_common_link or ctx.attr.csrcs or ctx.attr.copts or ctx.attr.linkopts or ctx.file.linker_script:
+            fail("Incremental compilation requires no native dependencies or linker options/scripts, and Zig linking (use_cc_common_link=False).")
 
     cc_toolchain = None
     feature_configuration = None
@@ -438,8 +436,37 @@ def zig_build_impl(ctx, *, kind):
     # zig_binary, zig_test and zig_shared_library must produce their primary output, so emit_bin is not user configurable and considered true.
     should_emit_bin = bin_output_is_executable or kind == "zig_shared_library" or ctx.attr.emit_bin
 
+    emitted_outputs = {}
     if should_emit_bin:
         outputs.append(bin_output)
+        emitted_outputs["bin"] = bin_output
+
+    auxiliary_emissions = []
+    if ctx.attr.emit_asm:
+        auxiliary_emissions.append(struct(
+            kind = "asm",
+            file = ctx.actions.declare_file(ctx.label.name + ".s"),
+            flag = "-femit-asm=%s",
+        ))
+    if ctx.attr.emit_llvm_ir:
+        auxiliary_emissions.append(struct(
+            kind = "llvm_ir",
+            file = ctx.actions.declare_file(ctx.label.name + ".ll"),
+            flag = "-femit-llvm-ir=%s",
+        ))
+
+    if ctx.attr.emit_llvm_bc:
+        auxiliary_emissions.append(struct(
+            kind = "llvm_bc",
+            file = ctx.actions.declare_file(ctx.label.name + ".bc"),
+            flag = "-femit-llvm-bc=%s",
+        ))
+
+    auxiliary_outputs = []
+    for emission in auxiliary_emissions:
+        auxiliary_outputs.append(emission.file)
+        output_groups[emission.kind] = depset([emission.file])
+        emitted_outputs[emission.kind] = emission.file
 
     args = ctx.actions.args()
     args.use_param_file("@%s")
@@ -454,8 +481,9 @@ def zig_build_impl(ctx, *, kind):
             "command": command,
             "output_kind": output_kind,
             "name": ctx.attr.deps[0][ZigModuleInfo].canonical_name if root_module_is_only_dep else escape_label(label = ctx.label),
+            "outputs": emitted_outputs.keys(),
         }))
-        args.add(bin_output)
+        args.add_all(emitted_outputs.values())
         zig_settings(settings = settings, args = args)
         zig_target_platform(target = zigtargetinfo, args = args)
 
@@ -621,23 +649,9 @@ def zig_build_impl(ctx, *, kind):
     if not use_cc_common_link and kind != "zig_static_library":
         args.add_all(linkopts)
 
-    auxiliary_outputs = []
-    if ctx.attr.emit_asm:
-        asm_output = ctx.actions.declare_file(ctx.label.name + ".s")
-        auxiliary_outputs.append(asm_output)
-        args.add(asm_output, format = "-femit-asm=%s")
-        output_groups["asm"] = depset([asm_output])
-    if ctx.attr.emit_llvm_ir:
-        llvm_ir_output = ctx.actions.declare_file(ctx.label.name + ".ll")
-        auxiliary_outputs.append(llvm_ir_output)
-        output_groups["llvm_ir"] = depset([llvm_ir_output])
-        args.add(llvm_ir_output, format = "-femit-llvm-ir=%s")
-
-    if ctx.attr.emit_llvm_bc:
-        llvm_bc_output = ctx.actions.declare_file(ctx.label.name + ".bc")
-        auxiliary_outputs.append(llvm_bc_output)
-        output_groups["llvm_bc"] = depset([llvm_bc_output])
-        args.add(llvm_bc_output, format = "-femit-llvm-bc=%s")
+    if not incremental_worker:
+        for emission in auxiliary_emissions:
+            args.add(emission.file, format = emission.flag)
 
     compile_kwargs = {
         "worker": incremental_worker,
