@@ -594,11 +594,6 @@ def zig_build_impl(ctx, *, kind):
         args = global_args,
     )
 
-    if incremental_worker and not use_cc_common_link and root_module.cc_info:
-        for link in root_module.cc_info.linking_context.linker_inputs.to_list():
-            if link.libraries or link.user_link_flags or link.additional_inputs:
-                fail("Incremental compilation does not support native linking dependencies.")
-
     zig_target_platform(
         target = zigtargetinfo,
         args = global_args,
@@ -629,6 +624,13 @@ def zig_build_impl(ctx, *, kind):
                 args = args,
                 data = direct_data,
             )
+
+            if incremental_worker and cdeps_inputs:
+                print(
+                    "{}: warning: Zig incremental linking may reuse stale native inputs ".format(ctx.label) +
+                    "or retain previous link errors. Native input changes do not restart the compiler. " +
+                    "Use use_cc_common_link or disable incremental compilation to avoid retained native-link state.",
+                )
 
             transitive_inputs.append(depset(cdeps_inputs))
 

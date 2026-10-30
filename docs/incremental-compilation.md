@@ -22,11 +22,10 @@ The implementation accepts hermetic Zig 0.17.x from 0.17.0 onward, including
 development builds of later patches in that series. Other minor versions and
 pre-release builds of 0.17.0 remain unsupported. It supports POSIX execution tools,
 x86_64 Linux targets and Zig linking, or separate C/C++ linking for `zig_binary`,
-`zig_test` and `zig_shared_library`. Native linking dependencies consumed by Zig,
-C sources, linker scripts, path toolchains, and other compiler versions or
-targets are rejected for incremental compilations. The `linkopts` attribute
-requires `use_cc_common_link`. With that setting,
-static libraries retain their archive-compilation path. Unsupported configurations
+`zig_test` and `zig_shared_library`. C sources, linker scripts, path toolchains,
+and other compiler versions or targets are rejected for incremental compilations.
+The `linkopts` attribute requires `use_cc_common_link`. With that setting, static
+libraries retain their archive-compilation path. Unsupported configurations
 fail explicitly; they do not silently use ordinary compilation. The Linux
 integration tests cover both generated sources and directory inputs, source
 file symlinks, external repositories, and the sibling repository layout.
@@ -36,8 +35,8 @@ explicit `zig_c_library` modules. Use a registered standalone translate-c toolch
 with `--@rules_zig//zig/settings:use_standalone_translate_c` for Zig 0.17.
 Translation remains an ordinary action; the worker consumes its generated Zig
 sources. Header edits rerun translation and update those sources in the retained
-compiler session. Dependencies carrying native libraries, linker flags or
-additional linker inputs require separate C/C++ linking as described below.
+compiler session. Native dependencies can use direct Zig linking with the
+compiler limitations below, or separate C/C++ linking.
 
 Binaries, test executables, and static libraries support both the self-hosted and
 LLVM backends. Shared libraries linked by Zig require LLVM and explicit effective
@@ -124,6 +123,28 @@ independently into its declared location. Changing requested output kinds or
 destinations selects a different compiler session; source edits retain the session.
 
 ### Known compiler limitations
+
+Direct Zig linking accepts native dependencies from `CcInfo`. When their selected
+libraries or additional linker inputs are present, rules_zig emits an
+analysis-time warning: Zig may reuse stale native inputs or retain previous link
+errors. These files remain declared action inputs and the worker stages their
+current contents, but it does not restart Zig when they change. Refreshing native
+link state remains the selected compiler's responsibility.
+
+On x86_64 Linux, the self-hosted linker in 0.17.0, tested 0.17.x revision
+`12d9399228` and tested master revision `9da2875656` reused old archive contents
+after native-only edits, even while reporting success. A subsequent Zig edit
+still used the old native code. Fresh compiler sessions produced the correct
+result. With 0.17.0 LLVM+LLD, native edits worked, but a retained session continued
+reporting an undefined-symbol error after the library was repaired. Newer
+LLVM-enabled compilers were not qualified for this recovery case.
+
+These upstream limitations are accepted in experimental direct native linking;
+rules_zig does not add restart metadata, backend fallback or a compiler-version
+gate. Use `use_cc_common_link` or disable incremental compilation to avoid
+retained native-link state. The warning occurs during target analysis, not on
+each build request. Arbitrary files referenced only through raw options are not
+discovered by this warning.
 
 Zig 0.17.0 can produce a zero-filled `compiler_rt.o` member in incremental static
 archives using its self-hosted linker, while reporting successful compilation.

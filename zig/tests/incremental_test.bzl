@@ -269,7 +269,6 @@ _unsupported_linkopts_test = _failure_test(
     "Incremental compilation requires use_cc_common_link for linkopts.",
     {canonical_label("@//zig/settings:use_cc_common_link"): False},
 )
-_unsupported_native_linking_test = _failure_test("does not support native linking dependencies", _CC_SETTINGS)
 _unsupported_sdk_test = _failure_test(
     "requires Zig 0.17.x",
     {canonical_label("@zig_toolchains//:version"): "0.16.0"},
@@ -295,9 +294,9 @@ def incremental_test_suite(name):
         partial.make(_unsupported_sdk_test, target_under_test = "//zig/tests/simple-library:library", size = "small"),
         partial.make(_bindings_test, target_under_test = "//zig/tests/translate-c-action:automatic_bindings", size = "small"),
         partial.make(_bindings_test, target_under_test = "//zig/tests/translate-c-action:explicit_bindings", size = "small"),
-        partial.make(_unsupported_native_linking_test, target_under_test = "//zig/tests/translate-c-action:native_library_binary", size = "small"),
-        partial.make(_unsupported_native_linking_test, target_under_test = "//zig/tests/translate-c-action:native_flags_binary", size = "small"),
-        partial.make(_unsupported_native_linking_test, target_under_test = "//zig/tests/translate-c-action:native_inputs_binary", size = "small"),
+        partial.make(_bindings_test, target_under_test = "//zig/tests/translate-c-action:native_library_binary", size = "small"),
+        partial.make(_bindings_test, target_under_test = "//zig/tests/translate-c-action:native_flags_binary", size = "small"),
+        partial.make(_bindings_test, target_under_test = "//zig/tests/translate-c-action:native_inputs_binary", size = "small"),
         partial.make(_cc_link_outputs_test, target_under_test = "//zig/tests/emit-attr:binary_emit_asm", size = "small"),
         partial.make(_cc_link_outputs_test, target_under_test = "//zig/tests/emit-attr:shared_emit_asm", size = "small"),
         partial.make(_cc_link_native_test, target_under_test = "//zig/tests/translate-c-action:native_library_binary", size = "small"),

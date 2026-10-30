@@ -64,9 +64,9 @@ Pending items describe behavior to discuss, not an approved implementation.
 | 6 | Done: `89c9aa6` | Support assembly, LLVM IR and bitcode outputs, including `emit_bin=False`. Describe and publish each requested artifact; preserve output groups and backend choices. |
 | 7 | Done: `f7c3442` | Allow generated C bindings and header-only dependencies. Translation remains ordinary; its generated Zig source becomes a worker input. No provider change is needed merely to enable this feature. |
 | 8 | Done: 8a in `9dbe090`; 8b in `82d1444` | Support `use_cc_common_link`: incremental Zig source compilation followed by the existing ordinary C/C++ link. Binary/shared-library paths first; test-object compilation and ordinary archive packaging in a follow-up commit. Account for item 5 before enabling affected archive configurations. |
-| 9a | Done in this commit | Allow `linkopts` with `use_cc_common_link`. Preserve the existing ordinary link consumer, ordering, and static-library ignored-options behavior. No worker or location-expansion changes. |
-| 9b | Pending scope discussion | Allow scalar linker options consumed by Zig. Simply removing the rejection also allows file-consuming options, overlapping items 10 and 12; agree on that boundary before implementation. |
-| 10 | Design discussion required | Support native libraries or objects consumed by Zig. Current self-hosted linking retains stale native inputs; see the investigation below. Prefer an upstream fix. Restarting on native changes is a possible explicit tradeoff, not an approved implementation. Agree on scope and representation first. |
+| 9a | Done: `87ae4ac` | Allow `linkopts` with `use_cc_common_link`. Preserve the existing ordinary link consumer, ordering, and static-library ignored-options behavior. No worker or location-expansion changes. |
+| 9b | Pending implementation agreement | Allow linker options consumed by Zig. Item 10 now accepts the native-refresh compiler limitation without restarts; ownership of files referenced through raw options remains separate in item 12. |
+| 10 | Done: reviewed and approved for this commit | Allow native dependencies already handled through CcInfo, warning during analysis when selected native linker files are present. Keep declaring/staging current files; leave refresh correctness to Zig. No restart machinery or provider changes. |
 | 11 | Design discussion required | Support `csrcs`, their options and relevant included files. Extend the restart policy only after agreeing on transitive headers and `extra_srcs` handling. |
 | 12 | Separate scope decision | Correct action ownership of files referenced by compiler/linker options. This affects ordinary rules too and needs its own reproduction and design. The rejected `_location_inputs` scanner is not an accepted implementation. |
 | 13 | Agreed final phase | Simplify the completed implementation and minimize the worker's knowledge of Zig flags. Revisit option-arity tables and capability checks; prefer explicit action-owned metadata or compiler-provided information where appropriate. Preserve compiler argv and supported-configuration correctness; do not grow a general Zig command-line parser. |
@@ -133,11 +133,14 @@ require a different order, explain and agree on the adjustment before proceeding
   rejected it. Actual reserved switches still failed without creating their
   requested destinations. The generated worker action's argv/environment stayed
   unchanged, with ordinary cache/SDK flags absent. Read-only review found no issues.
-- **Resume at scope agreement for item 9b.** Item 8a and the emission-description cleanup
+- **Resume at agreement on item 9b.** Item 8a and the emission-description cleanup
   are committed as `9dbe090`. Corentin declined the proposed `global_args`
   cleanup: keep the existing construction. Item 8b is committed as `82d1444`.
-  Corentin reviewed and approved item 9a for this commit; no push was requested.
-  Direct Zig `linkopts` remains a separate scope discussion in item 9b.
+  Item 9a is committed as `87ae4ac`. Corentin explicitly approved allowing direct
+  native dependencies with a warning, accepting Zig's refresh limitation without
+  a restart workaround. Item 10 was reviewed and approved for this commit;
+  no push was requested. Direct Zig `linkopts` remains a separate small change
+  in item 9b, pending implementation agreement.
   The native-update
   investigation below establishes the reason for implementing `cc_common.link`
   before native inputs consumed by Zig.
@@ -605,11 +608,51 @@ retain their existing rejection. Direct Zig `linkopts` remains unsupported.
 Evidence: `/tmp/rules-zig-9a-evidence-20261030` locally; remote qualification is
 under `linkopts-evidence` in the existing item 8b fixture.
 
+### Item 10: accept native linking with a compiler warning (2026-10-30)
+
+Corentin explicitly chose to allow native dependencies with direct Zig
+incremental linking, warn about stale results, and leave native-refresh
+correctness to the selected compiler. This supersedes the earlier proposed
+deferral or restart design; it does not fix the compiler bugs recorded above.
+
+Removed the CcInfo linking-payload rejection. The existing linker-input helper
+still selects the files, arguments and runtime dependencies. After that selection,
+`zig_build.bzl` emits one analysis-time warning for incremental direct linking
+with selected native files. It warns about stale inputs and retained link errors,
+states that native changes do not restart Zig, and points to `use_cc_common_link`
+or disabling incremental compilation. Bazel renders Starlark `print` messages
+with a DEBUG prefix; the message itself identifies the target and says warning.
+
+The warning does not run for ordinary compilation, separate C/C++ linking,
+header-only dependencies, or dependency flags with no selected linker files.
+It cannot discover files referenced only by raw compiler/linker options.
+Inputs remain declared and their new bytes are staged normally; no worker,
+provider, argument-routing, session, cache or backend behavior changed.
+
+- The updated native-library analysis failed at the old guard, then passed.
+  All 52 focused analysis tests pass, including acceptance of existing library,
+  dependency-flag and additional-linker-input fixtures.
+- Linux Bazel 9.2.0, Zig 0.17.0 self-hosted, native archive built by hermetic-llvm:
+  initial build warned once and returned 41. After rebuilding the archive to
+  return 42, the same compiler still produced 41; a Zig edit adding 1 produced
+  42. The staged archive matched the current declared input. Ordinary compilation
+  of the final sources returned the correct 43. This verifies the warning and
+  preserved behavior, not a compiler fix.
+- Ordinary, header-only and `cc_common.link` analysis emitted no warning. The
+  qualification Bazel server was shut down afterward.
+
+Evidence: `/tmp/rules-zig-native-warning-evidence-20261030` locally and
+`native-warning-evidence` in the existing item 8b remote fixture. Narrow read-only
+review found no issues. Corentin reviewed and approved this change for commit.
+
 ## Contract
 
 A successful action publishes independent artifacts for its current declared
-inputs, compiler, environment, and options. Removing retained state changes only
-performance. Bazel owns action invalidation; Zig owns semantic incremental work.
+inputs, compiler, environment, and options. Bazel owns action invalidation; Zig
+owns semantic incremental work. With a compiler that correctly handles updates,
+removing retained state changes only performance. The documented native-link
+refresh bugs are accepted compiler limitations: rules_zig warns and stages current
+inputs, but does not repair Zig's retained state.
 
 ## Accepted scope
 
@@ -629,6 +672,9 @@ performance. Bazel owns action invalidation; Zig owns semantic incremental work.
 - Adapter-owned protocol, cache, SDK, naming, and output controls are reserved.
   Conflicting `zigopts` fail clearly; arbitrary invalid compiler usage is outside
   the contract. Semantic compiler arguments retain their original order.
+- Native dependencies already handled through CcInfo are accepted in direct Zig
+  linking, with the warning and compiler limitations above. Native changes do
+  not trigger an adapter-controlled restart.
 - Local execution; remote caching disabled pending artifact equivalence work.
 - Ordinary, sandboxed, and hardened Linux worker execution; one-shot fallback
   consumes the same compilation request and uses the same compiler settings.
