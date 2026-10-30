@@ -21,11 +21,12 @@ affects the earlier toolchain-built adapter. Ordinary compilation is unaffected.
 The implementation accepts hermetic Zig 0.17.x from 0.17.0 onward, including
 development builds of later patches in that series. Other minor versions and
 pre-release builds of 0.17.0 remain unsupported. It supports POSIX execution tools,
-x86_64 Linux targets and Zig linking. Native linking dependencies,
-C sources, linker options/scripts, path toolchains, and other
-compiler versions or targets are rejected for incremental compilations.
-C/C++ linking and test-object pipelines using
-`use_cc_common_link` are unsupported. Unsupported configurations fail explicitly;
+x86_64 Linux targets and Zig linking, or separate C/C++ linking for `zig_binary`
+and `zig_shared_library`. Native linking dependencies consumed by Zig, C sources,
+linker options/scripts, path toolchains, and other compiler versions or targets
+are rejected for incremental compilations. With `use_cc_common_link`, static
+libraries retain their archive-compilation path, while test-object pipelines
+remain unsupported. Unsupported configurations fail explicitly;
 they do not silently use ordinary compilation. The Linux integration tests
 cover both generated sources and directory inputs, source
 file symlinks, external repositories, and the sibling repository layout.
@@ -36,11 +37,11 @@ with `--@rules_zig//zig/settings:use_standalone_translate_c` for Zig 0.17.
 Translation remains an ordinary action; the worker consumes its generated Zig
 sources. Header edits rerun translation and update those sources in the retained
 compiler session. Dependencies carrying native libraries, linker flags or
-additional linker inputs remain unsupported.
+additional linker inputs require separate C/C++ linking as described below.
 
 Binaries, test executables, and static libraries support both the self-hosted and
-LLVM backends. Shared libraries require LLVM and explicit effective `-flld`.
-Select LLVM with `-fllvm` or by requesting LLVM IR/bitcode output:
+LLVM backends. Shared libraries linked by Zig require LLVM and explicit effective
+`-flld`. Select LLVM with `-fllvm` or by requesting LLVM IR/bitcode output:
 
 ```sh
 bazel build --@rules_zig//zig/settings:incremental \
@@ -57,6 +58,33 @@ flag groups remain unsupported and fail explicitly.
 
 Zig 0.17's self-hosted incremental shared-library output failed execution in
 qualification. LLVM still retains frontend state; LLD performs a full relink.
+
+### Separate C/C++ linking
+
+For binaries and shared libraries, combine the existing settings. The qualified
+LLVM path uses:
+
+```sh
+bazel build --@rules_zig//zig/settings:incremental \
+  --@rules_zig//zig/settings:use_cc_common_link \
+  --@rules_zig//zig/settings:zigopt=-fllvm \
+  --@rules_zig//zig/settings:zigopt=-flld //app:app
+```
+
+The worker incrementally compiles Zig into an intermediate static archive. The
+existing ordinary `cc_common.link` action consumes that archive and the native
+dependencies using the selected C/C++ toolchain. Native libraries, dependency
+linker flags and additional linker inputs belong to that link action, not the
+worker. A native-only edit can relink without recompiling Zig; an edit to generated
+bindings still updates the Zig compilation. The final executable/shared library
+and its runfiles retain their existing providers and paths.
+
+The intermediate archive uses the selected Zig backend, including when the final
+output is a shared library. The direct shared-library backend restriction above
+does not apply to this archive. As with ordinary separate linking, the compilation
+receives `-lc` and `-fcompiler-rt` before explicit user options. Linux execution is
+qualified with LLVM+LLD and hermetic-llvm; self-hosted archives have the additional
+compiler limitation described below. macOS incremental targets remain unsupported.
 
 ### Requested outputs
 
@@ -81,7 +109,7 @@ failure. Every requested artifact is checked before publication and copied
 independently into its declared location. Changing requested output kinds or
 destinations selects a different compiler session; source edits retain the session.
 
-### Known compiler limitation
+### Known compiler limitations
 
 Zig 0.17.0 can produce a zero-filled `compiler_rt.o` member in incremental static
 archives using its self-hosted linker, while reporting successful compilation.
@@ -99,6 +127,15 @@ The fixed source revision `12d9399228a41e5c4369602bfc0b51907662066f`, reporting
 `0.17.1-dev.12d9399228`, was verified with the self-hosted backend through the
 hardened Linux worker, retained edits, error recovery, and one-shot execution.
 LLVM/shared-library qualification remains based on the released 0.17.0 SDK.
+
+Separate C/C++ linking exposed another limitation in that fixed source compiler:
+an incremental self-hosted archive for a binary contained malformed `.eh_frame`
+data, rejected by hermetic-llvm's LLD with "FDE version 1 or 3 expected, but got 0".
+Ordinary compilation of the same target linked successfully. The compiler-rt fix
+above does not resolve this failure. A direct Zig compiler-server probe reproduces
+it before the worker is involved. LLVM+LLD archives passed separate linking;
+rules_zig does not switch backends, disable unwind information or introduce a
+compiler-version rejection to work around this problem.
 
 ## Compiler invocation
 

@@ -1,5 +1,5 @@
 load("@rules_cc//cc:defs.bzl", "cc_library")
-load("//zig:defs.bzl", "zig_binary", "zig_c_library", "zig_library")
+load("//zig:defs.bzl", "zig_binary", "zig_c_library", "zig_library", "zig_static_library")
 load("//zig/translate-c:toolchain.bzl", "translate_c_toolchain")
 load(":fake_translate_c.bzl", "fake_translate_c")
 
@@ -66,6 +66,19 @@ cc_library(
         "native_inputs",
     ]
 ]
+
+zig_static_library(
+    name = "native_archive",
+    main = "native.zig",
+    deps = ["native_library"],
+)
+
+zig_binary(
+    name = "native_archive_binary",
+    main = "bindings.zig",
+    visibility = ["//zig/tests:__pkg__"],
+    deps = ["native_archive"],
+)
 
 zig_c_library(
     name = "c_module_copts",

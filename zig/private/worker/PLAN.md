@@ -62,10 +62,10 @@ Pending items describe behavior to discuss, not an approved implementation.
 | 5a | Deferred for the current Linux scope | Do not add archive indexing for gold or other GNU-linker compatibility. Qualify Linux C/C++ consumers with hermetic-llvm; direct Zig linking retains its qualified defaults. Revisit indexing only if an in-scope consumer requires it, including the Apple linker when macOS targets are qualified. |
 | 5b | Closed by agreement: upstream compiler bug | No archive workaround, backend fallback or configuration-specific rejection. Document the affected 0.17.0 path and upstream fix. Allow compatible fixed toolchains by qualifying 0.17.x patch builds and relaxing both exact-version checks together. |
 | 6 | Done: `89c9aa6` | Support assembly, LLVM IR and bitcode outputs, including `emit_bin=False`. Describe and publish each requested artifact; preserve output groups and backend choices. |
-| 7 | Done: reviewed and approved for commit | Allow generated C bindings and header-only dependencies. Translation remains ordinary; its generated Zig source becomes a worker input. No provider change is needed merely to enable this feature. |
-| 8 | Pending | Support `use_cc_common_link`: incremental Zig source compilation followed by the existing ordinary C/C++ link. Binary/shared-library paths first; test-object compilation and ordinary archive packaging in a follow-up commit. Account for item 5 before enabling affected archive configurations. |
+| 7 | Done: `f7c3442` | Allow generated C bindings and header-only dependencies. Translation remains ordinary; its generated Zig source becomes a worker input. No provider change is needed merely to enable this feature. |
+| 8 | 8a done; 8b pending | Support `use_cc_common_link`: incremental Zig source compilation followed by the existing ordinary C/C++ link. Binary/shared-library paths first; test-object compilation and ordinary archive packaging in a follow-up commit. Account for item 5 before enabling affected archive configurations. |
 | 9 | Pending | Allow ordinary scalar linker options. Preserve their consumer, ordering, and existing static-library behavior. Do not bundle location-expansion changes. |
-| 10 | Design discussion required | Invalidate retained state when Zig consumes native libraries or objects. Native changes restart the compiler; Zig-only changes retain it. Agree on the supported inputs and their representation first. |
+| 10 | Design discussion required | Support native libraries or objects consumed by Zig. Current self-hosted linking retains stale native inputs; see the investigation below. Prefer an upstream fix. Restarting on native changes is a possible explicit tradeoff, not an approved implementation. Agree on scope and representation first. |
 | 11 | Design discussion required | Support `csrcs`, their options and relevant included files. Extend the restart policy only after agreeing on transitive headers and `extra_srcs` handling. |
 | 12 | Separate scope decision | Correct action ownership of files referenced by compiler/linker options. This affects ordinary rules too and needs its own reproduction and design. The rejected `_location_inputs` scanner is not an accepted implementation. |
 | 13 | Agreed final phase | Simplify the completed implementation and minimize the worker's knowledge of Zig flags. Revisit option-arity tables and capability checks; prefer explicit action-owned metadata or compiler-provided information where appropriate. Preserve compiler argv and supported-configuration correctness; do not grow a general Zig command-line parser. |
@@ -132,8 +132,13 @@ require a different order, explain and agree on the adjustment before proceeding
   rejected it. Actual reserved switches still failed without creating their
   requested destinations. The generated worker action's argv/environment stayed
   unchanged, with ordinary cache/SDK flags absent. Read-only review found no issues.
-- **Resume at item 8's scope and implementation agreement.** Item 7 is reviewed
-  and approved for commit.
+- **Resume at discussion of the `global_args` cleanup.** Corentin approved
+  committing item 8a together with the emission-description cleanup and the
+  comment explaining the shared compilation defaults. The `global_args` cleanup
+  requires agreement before implementation; no push was requested.
+  Item 8b's test-object pipeline remains a separate change. The native-update
+  investigation below establishes the reason for implementing `cc_common.link`
+  before native inputs consumed by Zig.
   Items 4 and 5a are
   deferred; item 5b needs no compiler workaround. There is no separate item 5c.
   Later feature extensions remain unapproved. Keeping an edge case unsupported
@@ -390,6 +395,144 @@ Commit rationale: header translation already produces declared Zig sources that
 the worker can update. Rejecting their CcInfo solely for headers or empty linker
 records unnecessarily excludes this path. Check actual linking payloads instead,
 preserving the unsupported native-linking boundary until its implementation.
+
+### Items 8 and 10: native-input update investigation (2026-10-30)
+
+Corentin asked to establish whether direct Zig linking actually requires extra
+invalidation before choosing the implementation order. Retained compiler-server
+experiments now demonstrate stale native inputs independently of Bazel and the
+worker. All cases below target x86_64 Linux and link an executable against native
+files produced separately from the Zig compilation.
+
+| Compiler / linker | Native input | Observed retained-session behavior |
+| --- | --- | --- |
+| 0.17.0, self-hosted; also default backend/linker | Static archive | Replacing a function returning 41 with one returning 42 still produces 41. |
+| 0.17.x `12d9399228`, self-hosted | Static archive | Same stale result, through both the worker and Zig directly. |
+| Master `9da2875656`, self-hosted | Static archive | Same stale result through Zig directly. |
+| 0.17.0, self-hosted | Object file | Same stale result through Zig directly. |
+| 0.17.0, self-hosted | Shared library | A newly added symbol remains undefined; a fresh compiler links it successfully. |
+| 0.17.0, LLVM + LLD | Static archive and shared library | Content/symbol additions work, but after an undefined-symbol link error, restoring the library and then editing Zig still leaves the session reporting the old error. Fresh sessions succeed. |
+
+For archives, a later Zig edit adding 1 produces 42 instead of 43: Zig source
+updates work while native code remains stale. Worker probes verified an unchanged
+compiler PID and equality between each requested native-file digest and the bytes
+actually staged under that compiler's working directory. Direct-server probes
+reproduce the failure without the adapter. Fresh-session controls use the same
+final files and produce the expected results. Shared-library content-only edits
+are not evidence of linker refresh: the runtime loader reads the replaced DSO.
+
+A real Bazel 9.2.0 hardened-worker reproduction used a disposable export of
+`f7c3442`. The unmodified native-dependency guard rejected it first. Bypassing only
+that guard in the disposable export allowed the existing direct-link path to run:
+cold result 41, native edit still 41 (expected 42), subsequent Zig edit 42
+(expected 43). Worker logs show `reused=true` and one copied input for each edit.
+The action graph confirms separate `CppCompile`/`CppArchive` actions and their
+archive as a declared `ZigIncrementalCompile` input. A fresh Bazel output base with
+`--strategy=ZigIncrementalCompile=sandboxed` produces 43. Merely changing strategy
+did not rerun the cached action, so that earlier attempt is not a cold control.
+The disposable guard edit was restored; no production restriction was removed.
+
+Source inspection explains the self-hosted behavior. At tested 0.17.x revision
+`12d9399228a41e5c4369602bfc0b51907662066f`, `Compilation.zig:2576` queues
+`.load_explicitly_provided` in `oneshot_prelink_tasks`; `:4444` consumes and clears
+that list on the first update. `link.zig:1551` loads the native link inputs from
+that task. LLD instead constructs a new link invocation in `link/Lld.zig:elfLink`.
+The observed LLD recovery failure is consistent with `clearMiscFailures` clearing
+diagnostic flags but retaining `link_diags.lld`; this latter cause was not proved
+by a compiler patch and before/after run.
+
+Limits: the source-built 0.17.x/master compilers have no LLVM extensions. Current
+LLVM+LLD was not tested, and the current-0.17.x shared-library fixture could not
+build its glibc dependencies for that reason. The release LLVM-backend/self-hosted
+linker combination closed its protocol stream on its second update; the cause
+and compiler exit status were not captured. Native fixtures use ordinary GCC/ar ELF
+outputs; these are Zig-linker checks, not hermetic-llvm consumer qualification.
+The checked remote branch tips matched the two tested source revisions.
+
+Decision: item 8 first. Keep native libraries in the existing ordinary
+`cc_common.link` action and retain only Zig source compilation in the worker.
+Native-only changes should rerun linking without rebuilding the Zig archive;
+Zig-only changes should retain the compiler and then relink. This avoids the
+demonstrated native-input state problem without introducing a compiler workaround
+or changing backend selection. Qualify the existing archive output against the
+chosen C/C++ toolchain, using a fixed 0.17.x compiler for self-hosted archives as
+discussed in item 5b. Start with binary/shared-library source stages; keep test-object
+compilation and archive packaging in the agreed follow-up commit.
+
+Direct Zig native linking remains planned. An upstream refresh fix is preferred;
+a restart on changed native inputs would be a separately agreed correctness and
+performance tradeoff. Do not add restart metadata, provider fields or a backend
+allowlist merely from these experiments. A fix for item 5b's archive corruption
+does not fix this distinct native-input refresh problem.
+
+Rerunnable scripts, protocol responses, build logs and action graph are preserved
+under `/tmp/rules-zig-native-update-evidence-20261030` locally and
+`/home/corentin/.cache/rules-zig-native-update-20261030` on `9985wx-5090x4`.
+`probe.py` exercises direct/worker sessions; `bazel-probe.py` and
+`collect-evidence.py` record the Bazel reproduction and fresh-output-base control.
+
+### Item 8a: separate C/C++ linking (2026-10-30)
+
+Corentin authorized implementation for review. Production changes stay in
+`zig_build.bzl`: declare the existing binary/shared-library intermediate archive
+before constructing the worker request, describe it as `build-lib` / static
+library, and pass the existing libc/compiler-rt defaults before explicit options.
+The two defaults use a shared concrete list; their original comments remain in
+place. The C/C++ link blocks, providers and worker protocol are unchanged.
+
+Native libraries, dependency linker flags and additional linker inputs remain
+owned by the existing C/C++ link action. Static-library dependencies inherit the
+global setting and retain their archive path, forwarding native CcInfo to the
+final link as before. Only `zig_test` remains gated for the deferred test-object
+pipeline. Direct Zig native linking, C sources/compiler options and rule-level
+linker options/scripts retain their restrictions.
+
+- The three initial new analysis cases failed at the original guard. All 47
+  focused tests now pass: incremental, ordinary C/C++ linking, output emission
+  and translation action suites. Checks cover intermediate/final output ownership,
+  auxiliary output groups, explicit compiler-rt overrides, native input ownership,
+  and a binary -> Zig static library -> C library dependency chain.
+- Linux Bazel 9.2.0, Zig 0.17.0 LLVM+LLD, hermetic-llvm 0.8.24: both a binary and a
+  shared library with a C consumer passed hardened-worker compilation, retained
+  Zig edits, native-only edits, native-link and Zig-error recovery, sandboxed
+  one-shot execution and ordinary compilation. Assembly, LLVM IR and bitcode were
+  published alongside the intermediate archives. Retaining both targets used
+  `--worker_extra_flag=ZigIncrementalCompile=--max-sessions=4` with one worker.
+- Native-only edits left worker logs and all Zig artifact hashes unchanged;
+  source edits reused the same compiler processes. A saved earlier executable
+  still returned its original result. The action graph confirms hermetic-llvm
+  link actions consume native inputs that are absent from the worker action.
+  The separate Zig-static-library dependency chain also executed correctly and
+  relinked after native-only edits without invoking its workers.
+- Fixed 0.17.x `12d9399228` self-hosted archive qualification found a distinct
+  compiler failure: LLD rejects the Zig object's malformed `.eh_frame` with
+  "FDE version 1 or 3 expected, but got 0". A direct Zig compiler-server probe
+  reproduces it in the private archive, without Bazel or the adapter; ordinary
+  compilation of the same source links successfully with the same C/C++ command.
+  Item 5b's compiler-rt fix does not resolve it. No backend switch, unwind-option
+  change, compiler patch or version-specific rejection was added. Public docs
+  qualify LLVM+LLD and record this remaining self-hosted limitation.
+- Narrow read-only review caught the inherited static-library setting case;
+  its correction and dependency-chain regression were re-reviewed without findings.
+  Formatting and whitespace checks pass. Item 8b remains unimplemented.
+
+Evidence and scripts: `/tmp/rules-zig-cc-link-evidence-20261030` locally;
+`/home/corentin/.cache/rules-zig-cc-link-20261030` on `9985wx-5090x4`.
+`qualification.json`, `archive-dependency.json`, `actions-focused.json` and
+`direct-eh-frame/results.json` preserve the outcomes and owning actions.
+
+Review follow-up: primary compiler outputs now use the same emission records as
+auxiliary outputs. Ordinary flags, worker destinations and declared compiler
+outputs derive from those records. The ordinary test-object and archive stages
+keep separate descriptions; final linked outputs remain unchanged. Added the
+comment explaining why libc/compiler-rt defaults are retained for both argument
+paths. All existing comments remain in place.
+
+The 47 focused analysis tests pass. Before/after action-graph comparisons matched
+all 53 captured actions across ordinary and worker compilation, with and without
+`cc_common.link`, including ordered arguments, inputs and outputs. Narrow review
+found no issues. Corentin approved this change for commit. The proposed
+`global_args` cleanup is the next discussion; implementation remains unapproved.
 
 ## Contract
 

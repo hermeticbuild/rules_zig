@@ -38,7 +38,7 @@ _worker_graph = aspect(
     attr_aspects = ["_incremental_worker", "actual"],
 )
 
-def _assert_incremental(env, command, output_kind, outputs):
+def _assert_incremental(env, command, output_kind, outputs, link = None):
     action = assert_find_action(env, "ZigIncrementalCompile")
     executables = [file for file in action.inputs.to_list() if file.path == action.argv[0]]
     asserts.equals(env, [Label("//zig/private/worker:configured_worker")], [file.owner for file in executables], "The adapter must come through the worker configuration transition.")
@@ -64,8 +64,14 @@ def _assert_incremental(env, command, output_kind, outputs):
         asserts.equals(env, sorted([file.path for file in action.outputs.to_list()]), sorted(output_paths))
         target = analysistest.target_under_test(env)
         for kind, path in zip(outputs, output_paths):
-            files = target[DefaultInfo].files if kind == "bin" else getattr(target[OutputGroupInfo], kind)
-            asserts.equals(env, [path], [file.path for file in files.to_list()])
+            if kind == "bin" and link:
+                asserts.true(env, path in [file.path for file in link.inputs.to_list()], "The C/C++ link must consume the worker's archive.")
+                for file in target[DefaultInfo].files.to_list():
+                    asserts.true(env, file in link.outputs.to_list(), "The final output must come from the C/C++ link.")
+                    asserts.false(env, file.path in output_paths)
+            else:
+                files = target[DefaultInfo].files if kind == "bin" else getattr(target[OutputGroupInfo], kind)
+                asserts.equals(env, [path], [file.path for file in files.to_list()])
         input_paths = [file.path for file in action.inputs.to_list()]
         for arg in action.argv:
             if arg.startswith("input="):
@@ -76,18 +82,19 @@ def _assert_incremental(env, command, output_kind, outputs):
     asserts.false(env, "--global-cache-dir" in action.argv)
     asserts.false(env, "--zig-lib-dir" in action.argv)
 
-def _enabled_test_for(command, output_kind, outputs = ["bin"]):
+def _enabled_test_for(command, output_kind, outputs = ["bin"], settings = {}):
     def _impl(ctx):
         env = analysistest.begin(ctx)
         _assert_incremental(env, command, output_kind, outputs)
         assert_find_action(env, "ZigBuildDocs")
         return analysistest.end(env)
 
-    return analysistest.make(_impl, config_settings = {_INCREMENTAL: True, _PLATFORMS: _LINUX, _EXEC_PLATFORMS: [_LINUX]}, extra_target_under_test_aspects = [_worker_graph])
+    return analysistest.make(_impl, config_settings = {_INCREMENTAL: True, _PLATFORMS: _LINUX, _EXEC_PLATFORMS: [_LINUX]} | settings, extra_target_under_test_aspects = [_worker_graph])
 
 _enabled_test = _enabled_test_for("build-exe", "executable")
 _test_compile_test = _enabled_test_for("test", "executable")
 _static_test = _enabled_test_for("build-lib", "static_library")
+_static_cc_link_test = _enabled_test_for("build-lib", "static_library", settings = {canonical_label("@//zig/settings:use_cc_common_link"): True})
 _shared_test = _enabled_test_for("build-lib", "shared_library")
 _binary_asm_test = _enabled_test_for("build-exe", "executable", ["bin", "asm"])
 _static_asm_only_test = _enabled_test_for("build-lib", "static_library", ["asm"])
@@ -115,6 +122,45 @@ _bindings_test = analysistest.make(
     },
     extra_target_under_test_aspects = [_worker_graph],
 )
+
+def _cc_link_test_for(outputs, native_library = False):
+    def _impl(ctx):
+        env = analysistest.begin(ctx)
+        link = assert_find_action(env, "CppLink")
+        _assert_incremental(env, "build-lib", "static_library", outputs, link = link)
+        compile = assert_find_action(env, "ZigIncrementalCompile")
+        asserts.true(env, "-lc" in compile.argv)
+        asserts.true(env, "-fcompiler-rt" in compile.argv)
+        asserts.true(env, compile.argv.index("-fcompiler-rt") < compile.argv.index("-fno-compiler-rt"), "Explicit options must follow the C/C++ link defaults.")
+        if native_library:
+            native_inputs = [file for file in link.inputs.to_list() if file.owner in [
+                Label("//zig/tests/translate-c-action:native_library"),
+                Label("//zig/tests/translate-c-action:native_archive"),
+            ]]
+            asserts.true(env, bool(native_inputs), "The C/C++ link must consume the native dependency.")
+            for file in native_inputs:
+                asserts.false(env, file in compile.inputs.to_list(), "Native libraries belong to the separate link action.")
+                asserts.false(env, file.path in compile.argv)
+        return analysistest.end(env)
+
+    return analysistest.make(
+        _impl,
+        config_settings = _CC_SETTINGS | {
+            _INCREMENTAL: True,
+            _PLATFORMS: _LINUX,
+            canonical_label("@//zig/settings:use_cc_common_link"): True,
+            canonical_label("@//zig/settings:zigopt"): ["-fno-compiler-rt"],
+            canonical_label("@//zig/settings:use_standalone_translate_c"): True,
+            "//command_line_option:extra_toolchains": [
+                canonical_label("@buildbuddy_toolchain//:cc_toolchain"),
+                canonical_label("@//zig/tests/translate-c-action:fake_translate_c_toolchain"),
+            ],
+        },
+        extra_target_under_test_aspects = [_worker_graph],
+    )
+
+_cc_link_outputs_test = _cc_link_test_for(["bin", "asm"])
+_cc_link_native_test = _cc_link_test_for(["bin"], native_library = True)
 
 def _disabled_impl(ctx):
     env = analysistest.begin(ctx)
@@ -164,7 +210,7 @@ _unsupported_arch_test = _failure_test(
     {_PLATFORMS: canonical_label("@//zig/tests/platforms:aarch64-linux")},
 )
 _unsupported_link_test = _failure_test(
-    "use_cc_common_link=False",
+    "does not support zig_test with use_cc_common_link yet",
     {canonical_label("@//zig/settings:use_cc_common_link"): True},
 )
 _unsupported_native_test = _failure_test("no C sources/compiler options")
@@ -197,4 +243,9 @@ def incremental_test_suite(name):
         partial.make(_unsupported_native_linking_test, target_under_test = "//zig/tests/translate-c-action:native_library_binary", size = "small"),
         partial.make(_unsupported_native_linking_test, target_under_test = "//zig/tests/translate-c-action:native_flags_binary", size = "small"),
         partial.make(_unsupported_native_linking_test, target_under_test = "//zig/tests/translate-c-action:native_inputs_binary", size = "small"),
+        partial.make(_cc_link_outputs_test, target_under_test = "//zig/tests/emit-attr:binary_emit_asm", size = "small"),
+        partial.make(_cc_link_outputs_test, target_under_test = "//zig/tests/emit-attr:shared_emit_asm", size = "small"),
+        partial.make(_cc_link_native_test, target_under_test = "//zig/tests/translate-c-action:native_library_binary", size = "small"),
+        partial.make(_static_cc_link_test, target_under_test = "//zig/tests/simple-library:library", size = "small"),
+        partial.make(_cc_link_native_test, target_under_test = "//zig/tests/translate-c-action:native_archive_binary", size = "small"),
     )
