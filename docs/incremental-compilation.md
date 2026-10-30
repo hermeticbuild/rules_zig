@@ -18,7 +18,9 @@ Incremental execution is verified with Bazel 9.2.0. Bazel 8.4.1 crashes in its
 worker-file hashing when using the SDK directory as a worker tool; this also
 affects the earlier toolchain-built adapter. Ordinary compilation is unaffected.
 
-The initial implementation supports hermetic Zig 0.17.0, POSIX execution tools,
+The implementation accepts hermetic Zig 0.17.x from 0.17.0 onward, including
+development builds of later patches in that series. Other minor versions and
+pre-release builds of 0.17.0 remain unsupported. It supports POSIX execution tools,
 x86_64 Linux targets, Zig linking, and one primary output. Native dependencies,
 C sources, linker options/scripts, auxiliary outputs, path toolchains, and other
 compiler versions or targets are rejected for incremental compilations. Static
@@ -45,6 +47,27 @@ flag groups remain unsupported and fail explicitly.
 
 Zig 0.17's self-hosted incremental shared-library output failed execution in
 qualification. LLVM still retains frontend state; LLD performs a full relink.
+
+### Known compiler limitation
+
+Zig 0.17.0 can produce a zero-filled `compiler_rt.o` member in incremental static
+archives using its self-hosted linker, while reporting successful compilation.
+The corruption occurs inside Zig before the worker publishes the archive; an
+external C/C++ linker cannot repair it. See
+[Zig issue 37327](https://codeberg.org/ziglang/zig/issues/37327).
+
+Use a compiler containing the fix, backported to the `0.17.x` branch as
+[`ea47555675`](https://codeberg.org/ziglang/zig/commit/ea475556756d5afbaf88d472e9b223ab2a1ca1f4).
+rules_zig does not work around this bug or reject its affected configurations.
+Accepting a compiler version establishes the adapter's compatibility boundary;
+it does not establish that every accepted development build contains this fix.
+
+The fixed source revision `12d9399228a41e5c4369602bfc0b51907662066f`, reporting
+`0.17.1-dev.12d9399228`, was verified with the self-hosted backend through the
+hardened Linux worker, retained edits, error recovery, and one-shot execution.
+LLVM/shared-library qualification remains based on the released 0.17.0 SDK.
+
+## Compiler invocation
 
 For `zig_test`, the worker compiles with `zig test --test-no-exec`. Bazel executes
 the published test executable in its normal, separate test action. The worker

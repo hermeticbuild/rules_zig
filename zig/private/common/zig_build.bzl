@@ -30,6 +30,7 @@ load(
 )
 load("//zig/private/common:linker_script.bzl", "zig_linker_script")
 load("//zig/private/common:location_expansion.bzl", "location_expansion")
+load("//zig/private/common:semver.bzl", "semver")
 load("//zig/private/common:translate_c.bzl", "zig_translate_c")
 load("//zig/private/common:zig_cache.bzl", "zig_cache_output")
 load("//zig/private/common:zig_lib_dir.bzl", "zig_lib_dir")
@@ -327,8 +328,11 @@ def zig_build_impl(ctx, *, kind):
     use_cc_common_link = settings.use_cc_common_link
     incremental_worker = None
     if settings.incremental:
-        if zigtoolchaininfo.zig_version != "0.17.0" or zigtoolchaininfo.mode != "file" or zigtoolchaininfo.zig_exe.file.basename.endswith(".exe"):
-            fail("Incremental compilation requires a hermetic Zig 0.17.0 toolchain with a POSIX worker adapter.")
+        if zigtoolchaininfo.mode != "file" or zigtoolchaininfo.zig_exe.file.basename.endswith(".exe"):
+            fail("Incremental compilation requires a hermetic Zig toolchain with a POSIX worker adapter.")
+        version = zigtoolchaininfo.zig_version
+        if not version.startswith("0.17.") or not semver.gte(version, "0.17.0"):
+            fail("Incremental compilation requires Zig 0.17.x (at least 0.17.0).")
         incremental_worker = ctx.attr._incremental_worker[DefaultInfo].files_to_run
         if not incremental_worker.executable:
             fail("Incremental compilation requires the worker tool dependency.")

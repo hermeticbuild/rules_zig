@@ -133,7 +133,7 @@ _unsupported_link_test = _failure_test(
 )
 _unsupported_outputs_test = _failure_test("no native dependencies or auxiliary outputs")
 _unsupported_sdk_test = _failure_test(
-    "requires a hermetic Zig 0.17.0 toolchain",
+    "requires Zig 0.17.x",
     {canonical_label("@zig_toolchains//:version"): "0.16.0"},
 )
 

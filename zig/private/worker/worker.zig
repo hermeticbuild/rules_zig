@@ -478,7 +478,11 @@ const Worker = struct {
             if (hdr.bytes_len > 64 * 1024 * 1024) return error.CompilerMessageTooLarge;
             const body = try s.reader.interface.readAllocAll(a, hdr.bytes_len);
             switch (hdr.tag) {
-                .zig_version => if (!std.mem.eql(u8, body, "0.17.0")) return error.UnsupportedZigVersion,
+                .zig_version => {
+                    const version = std.SemanticVersion.parse(body) catch return error.UnsupportedZigVersion;
+                    if (version.major != 0 or version.minor != 17 or (version.patch == 0 and version.pre != null))
+                        return error.UnsupportedZigVersion;
+                },
                 .emit_digest => {
                     if (body.len != 1 + std.Build.Cache.bin_digest_len) return error.InvalidEmitDigest;
                     digest = try std.fmt.allocPrint(a, "{x}", .{body[1..]});

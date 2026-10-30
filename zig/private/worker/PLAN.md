@@ -60,7 +60,7 @@ Pending items describe behavior to discuss, not an approved implementation.
 | 3 | Done: `c79fe48` | Distinguish compiler switches from operands when validating options. Reuse the existing option-arity table without changing argv. Actual worker-owned flags remain rejected; their ordinary action equivalents must stay out of worker requests. |
 | 4 | Deferred by agreement | Versioned shared-library cache filenames (`--version`). No demonstrated user need: rules_zig does not generate this option and already controls the published filename and SONAME. Retain the explicit unsupported diagnostic; reconsider when needed. |
 | 5a | Deferred for the current Linux scope | Do not add archive indexing for gold or other GNU-linker compatibility. Qualify Linux C/C++ consumers with hermetic-llvm; direct Zig linking retains its qualified defaults. Revisit indexing only if an in-scope consumer requires it, including the Apple linker when macOS targets are qualified. |
-| 5b | Investigation complete; qualification decision pending | Zig 0.17.0 archive corruption reproduces without the worker and already has an upstream fix, including a 0.17.x backport. Prefer qualifying a compiler containing that fix before deciding whether an old-version restriction is needed. No backend or version-gate change is approved yet. |
+| 5b | Closed by agreement: upstream compiler bug | No archive workaround, backend fallback or configuration-specific rejection. Document the affected 0.17.0 path and upstream fix. Allow compatible fixed toolchains by qualifying 0.17.x patch builds and relaxing both exact-version checks together. |
 | 6 | Pending | Support assembly, LLVM IR and bitcode outputs, including `emit_bin=False`. Describe and publish each requested artifact; preserve output groups and backend choices. |
 | 7 | Pending | Allow generated C bindings and header-only dependencies. Translation remains ordinary; its generated Zig source becomes a worker input. No provider change is needed merely to enable this feature. |
 | 8 | Pending | Support `use_cc_common_link`: incremental Zig source compilation followed by the existing ordinary C/C++ link. Binary/shared-library paths first; test-object compilation and ordinary archive packaging in a follow-up commit. Account for item 5 before enabling affected archive configurations. |
@@ -132,9 +132,10 @@ require a different order, explain and agree on the adjustment before proceeding
   rejected it. Actual reserved switches still failed without creating their
   requested destinations. The generated worker action's argv/environment stayed
   unchanged, with ordinary cache/SDK flags absent. Read-only review found no issues.
-- **Resume at item 5b's compiler qualification agreement.** Items 4 and 5a are
-  deferred; item 5b and later feature extensions remain unapproved. Keeping an
-  edge case unsupported is a valid outcome if explicitly agreed and recorded here.
+- **Resume at item 6's scope and implementation agreement.** Items 4 and 5a are
+  deferred; item 5b needs no compiler workaround. There is no separate item 5c.
+  Later feature extensions remain unapproved. Keeping an edge case unsupported
+  is a valid outcome if explicitly agreed and recorded here.
 
 ### Item 5b: original evidence
 
@@ -205,17 +206,20 @@ compiler and SDK files were declared inputs. Compilers were built outside Bazel
 and exposed through a local repository. Building Zig itself inside the Bazel graph
 was not tested.
 
-Proposed next step, requiring agreement: qualify a fixed 0.17.x source compiler,
-then update the exact-version boundaries in `zig_build.bzl` and `worker.zig`
-together. Their current checks correctly reject both development compilers;
-versions were not disguised. `Client.zig` and `Server.zig` are unchanged between
+Agreed follow-up: qualify a fixed 0.17.x source compiler, then update the
+exact-version boundaries in `zig_build.bzl` and `worker.zig` together. Accept the
+0.17 series from 0.17.0 onward, including later patch development builds; reject
+pre-release 0.17.0 and other minor versions. Versions are not disguised, and the
+adapter does not encode a particular local build's revision in an allowlist.
+`Client.zig` and `Server.zig` are unchanged between
 the pinned release and tested 0.17.x revision, making that a smaller compatibility
 step than master. No fixed 0.17.1 SDK was published in the download index checked
 during this investigation. The existing 0.17.0 corruption remains until a fixed
-compiler is selected or affected configurations are explicitly rejected.
+compiler is selected. Corentin chose to document that limitation, leaving the
+compiler fix upstream rather than adding a configuration-specific rejection.
 
-Qualification must cover the actual rules_zig worker and retained source edits,
-which this one-update-per-session probe did not exercise. A Zig compiler built by
+The initial one-update-per-session probe did not exercise the actual rules_zig
+worker or retained source edits; the follow-up below covers those. A Zig compiler built by
 `zig_binary` inside Bazel also needs an ordinary-compilation boundary: the current
 toolchain transition resets `bootstrapped`, but not `incremental`. LLVM-enabled
 source builds, hermetic-llvm consumers and macOS targets remain unqualified here.
@@ -230,6 +234,60 @@ Raw evidence is copied to `/tmp/zig-archive-audit-evidence-20261030` locally;
 the builds and complete matrix remain under `/tmp/zig-archive-audit-9da2875656`
 on `9985wx-5090x4`. Nothing was pushed or submitted upstream.
 
+### Item 5b: fixed compiler qualification and closure (2026-10-30)
+
+Both the Starlark action gate and worker protocol check now accept the 0.17
+compiler line from 0.17.0 onward, including patch-development builds. Ordinary
+compilation, compiler arguments, providers and backend selection are unchanged.
+The public documentation records the compiler bug and fixing revision, with no
+configuration-specific workaround or rejection.
+
+- Before the change, the real `0.17.1-dev.12d9399228` toolchain failed analysis;
+  separately, the unmodified adapter failed its first real request with
+  `UnsupportedZigVersion`. Both cases pass after the change.
+- `bazel test --config=remote-cache //zig/tests:incremental_test
+  //zig/tests:incremental_worker_test`: all 16 focused targets pass. Full remote
+  execution was unavailable for Darwin, so tests ran locally with remote caching.
+- On x86_64 Linux with Bazel 9.2.0, the actual hardened persistent worker built
+  binaries and static archives containing compiler-rt with the fixed compiler's
+  self-hosted backend. Same-session edits changed results from 41 to 42, compile
+  errors recovered to 43, and saved earlier outputs still produced 41. Archive
+  consumers linked and executed with the expected results.
+- No-op builds left worker logs unchanged. One-shot execution produced the edited
+  result, and a real `zig_test` compiled through the worker and passed Bazel's
+  separate test action. Action inspection confirmed the declared source SDK,
+  `-fcompiler-rt`, and existing worker/local-execution requirements.
+- The existing full protocol probe passed with the Bazel-built adapter and fixed
+  SDK: metadata-preserving edits, independent published outputs, error recovery,
+  input removal, compiler crash/restart, embedded/directory inputs, and one-shot
+  execution. The updated adapter still rejected the real 0.18 master compiler.
+- The narrowly scoped read-only review found no issues. Formatting and diff
+  checks passed. No changes were pushed.
+
+The disposable fixture, commands and logs are under
+`/home/corentin/.cache/rules-zig-fixed-qualification-20261030` on `9985wx-5090x4`;
+`python3 qualify.py` reruns the positive checks. Selected logs and the driver are
+copied to `/tmp/rules-zig-fixed-qualification-evidence-20261030` locally. Early
+fixture attempts under `/tmp` encountered sandbox path visibility/mount failures;
+moving the fixture and declared SDK outside `/tmp` resolved them without changing
+the worker or sandbox policy.
+
+### Item 6: proposed commit boundaries, pending agreement
+
+1. **Auxiliary outputs alongside the binary.** Support `emit_asm`, `emit_llvm_ir`
+   and `emit_llvm_bc` through explicit action-owned output descriptions. Publish
+   every requested artifact and preserve existing output groups. Leave backend
+   selection to Zig; fail if the compiler does not produce a requested artifact.
+2. **Auxiliary outputs without a binary.** Extend static-library compilation to
+   `emit_bin=False` when another output is requested, matching the ordinary rule.
+   Do not request, require or publish an archive in that case.
+
+Keep ordinary action construction and comments in place. No provider changes,
+module-argument refactoring, documentation-action support or native linking work
+belong to either commit. Qualify retained edits and one-shot execution for each
+output combination before declaring it supported. The previous capability audit
+is a starting point for checks, not authority to restore the rejected patch.
+
 ## Contract
 
 A successful action publishes an independent artifact for its current declared
@@ -240,7 +298,9 @@ performance. Bazel owns action invalidation; Zig owns semantic incremental work.
 
 - Existing `zig_binary`, `zig_test`, `zig_static_library`, and `zig_shared_library`,
   opt-in `//zig/settings:incremental`; default unchanged.
-- Hermetic Zig 0.17.0, x86_64 Linux target, Zig linking, one primary output.
+- Hermetic Zig 0.17.x from 0.17.0 onward, x86_64 Linux target, Zig linking, one
+  primary output. The known 0.17.0 archive corruption is an upstream limitation;
+  select a compiler containing its fix.
 - Binaries, test executables, and static libraries support self-hosted and LLVM
   compilation. Shared libraries require explicit effective LLVM and LLD options.
 - Singleplex JSON worker, one compiler session by default, optional bounded LRU.
