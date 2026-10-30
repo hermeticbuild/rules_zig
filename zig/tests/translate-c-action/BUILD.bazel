@@ -1,5 +1,5 @@
 load("@rules_cc//cc:defs.bzl", "cc_library")
-load("//zig:defs.bzl", "zig_c_library")
+load("//zig:defs.bzl", "zig_binary", "zig_c_library", "zig_library")
 load("//zig/translate-c:toolchain.bzl", "translate_c_toolchain")
 load(":fake_translate_c.bzl", "fake_translate_c")
 
@@ -13,6 +13,59 @@ zig_c_library(
     cdeps = [":c"],
     visibility = ["//zig/tests:__pkg__"],
 )
+
+zig_binary(
+    name = "automatic_bindings",
+    main = "bindings.zig",
+    visibility = ["//zig/tests:__pkg__"],
+    deps = [":c"],
+)
+
+zig_library(
+    name = "explicit_module",
+    import_name = "bindings",
+    import_names = {":c_module": "c"},
+    main = "bindings.zig",
+    deps = [":c_module"],
+)
+
+zig_binary(
+    name = "explicit_bindings",
+    visibility = ["//zig/tests:__pkg__"],
+    deps = [":explicit_module"],
+)
+
+cc_library(
+    name = "native_library",
+    srcs = ["native.c"],
+    hdrs = ["data.h"],
+)
+
+cc_library(
+    name = "native_flags",
+    hdrs = ["data.h"],
+    linkopts = ["-lm"],
+)
+
+cc_library(
+    name = "native_inputs",
+    hdrs = ["data.h"],
+    additional_linker_inputs = ["data.h"],
+)
+
+[
+    zig_binary(
+        name = dependency + "_binary",
+        main = "bindings.zig",
+        visibility = ["//zig/tests:__pkg__"],
+        deps = [":" + dependency],
+    )
+    for dependency in [
+        "native_library",
+        "native_flags",
+        "native_inputs",
+    ]
+]
 
 zig_c_library(
     name = "c_module_copts",

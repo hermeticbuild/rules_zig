@@ -61,8 +61,8 @@ Pending items describe behavior to discuss, not an approved implementation.
 | 4 | Deferred by agreement | Versioned shared-library cache filenames (`--version`). No demonstrated user need: rules_zig does not generate this option and already controls the published filename and SONAME. Retain the explicit unsupported diagnostic; reconsider when needed. |
 | 5a | Deferred for the current Linux scope | Do not add archive indexing for gold or other GNU-linker compatibility. Qualify Linux C/C++ consumers with hermetic-llvm; direct Zig linking retains its qualified defaults. Revisit indexing only if an in-scope consumer requires it, including the Apple linker when macOS targets are qualified. |
 | 5b | Closed by agreement: upstream compiler bug | No archive workaround, backend fallback or configuration-specific rejection. Document the affected 0.17.0 path and upstream fix. Allow compatible fixed toolchains by qualifying 0.17.x patch builds and relaxing both exact-version checks together. |
-| 6 | Done: reviewed and approved for commit | Support assembly, LLVM IR and bitcode outputs, including `emit_bin=False`. Describe and publish each requested artifact; preserve output groups and backend choices. |
-| 7 | Pending | Allow generated C bindings and header-only dependencies. Translation remains ordinary; its generated Zig source becomes a worker input. No provider change is needed merely to enable this feature. |
+| 6 | Done: `89c9aa6` | Support assembly, LLVM IR and bitcode outputs, including `emit_bin=False`. Describe and publish each requested artifact; preserve output groups and backend choices. |
+| 7 | Done: reviewed and approved for commit | Allow generated C bindings and header-only dependencies. Translation remains ordinary; its generated Zig source becomes a worker input. No provider change is needed merely to enable this feature. |
 | 8 | Pending | Support `use_cc_common_link`: incremental Zig source compilation followed by the existing ordinary C/C++ link. Binary/shared-library paths first; test-object compilation and ordinary archive packaging in a follow-up commit. Account for item 5 before enabling affected archive configurations. |
 | 9 | Pending | Allow ordinary scalar linker options. Preserve their consumer, ordering, and existing static-library behavior. Do not bundle location-expansion changes. |
 | 10 | Design discussion required | Invalidate retained state when Zig consumes native libraries or objects. Native changes restart the compiler; Zig-only changes retain it. Agree on the supported inputs and their representation first. |
@@ -132,7 +132,8 @@ require a different order, explain and agree on the adjustment before proceeding
   rejected it. Actual reserved switches still failed without creating their
   requested destinations. The generated worker action's argv/environment stayed
   unchanged, with ordinary cache/SDK flags absent. Read-only review found no issues.
-- **Resume at item 7's scope and implementation agreement.** Item 6 is complete.
+- **Resume at item 8's scope and implementation agreement.** Item 7 is reviewed
+  and approved for commit.
   Items 4 and 5a are
   deferred; item 5b needs no compiler workaround. There is no separate item 5c.
   Later feature extensions remain unapproved. Keeping an edge case unsupported
@@ -352,6 +353,43 @@ emission attributes because its private request described one mandatory binary.
 Describe every requested output explicitly and publish the corresponding cache
 artifacts, allowing the same legitimate output choices as ordinary compilation
 within the already qualified backend/target scope.
+
+### Item 7: header-only dependencies (2026-10-30)
+
+The compilation gate now rejects linking payloads (libraries, user link flags,
+additional linker inputs), rather than all CcInfo dependencies or empty linker
+records. Automatic `c` translation and explicit `zig_c_library` bindings use the
+existing ordinary translation actions and declared generated-source inputs.
+No provider, worker, argument-construction or translation implementation changes.
+Native linking remains a later item; this rejection is temporary.
+
+- Both new binding analysis cases failed against the original guard. All 24
+  targets now pass with `bazel test --config=remote-cache
+  //zig/tests:incremental_test //zig/tests:translate_c_action_test`, including
+  separate rejections for libraries, link flags and additional linker inputs.
+- Linux Bazel 9.2.0 / Zig 0.17.0 qualification used the existing e2e standalone
+  translate-c toolchain and a disposable fixture. Both automatic and explicit
+  bindings consumed transitive/generated headers, defines and include paths
+  through Zig modules. Hardened workers produced 42, then 44, then recovered from
+  a translation error to 46, retaining the same compiler PID within each case.
+  Sandboxed one-shot and ordinary compilation both produced the next value, 48.
+- The action graph confirms ordinary translation owns the header inputs and
+  define; generated bindings and translate-c runtime modules are declared inputs
+  of the incremental action. Documentation translation remains ordinary too.
+- Narrow read-only review found no issues. Production changes are confined to
+  the guard and its diagnostics in `zig_build.bzl`. Corentin reviewed the diff
+  and approved the commit; changes remain unpushed.
+
+The disposable Linux fixture and rerunnable `probe.py` are under
+`/home/corentin/.cache/rules-zig-headers-20261030` on `9985wx-5090x4`.
+`probe-builds.log` records builds; `actions.json` records the action graph.
+The fixture uses its own ordinary compiler cache because the host's default
+`/tmp/zig-cache` belongs to another user. Worker state remains private as before.
+
+Commit rationale: header translation already produces declared Zig sources that
+the worker can update. Rejecting their CcInfo solely for headers or empty linker
+records unnecessarily excludes this path. Check actual linking payloads instead,
+preserving the unsupported native-linking boundary until its implementation.
 
 ## Contract
 

@@ -339,7 +339,7 @@ def zig_build_impl(ctx, *, kind):
         if zigtargetinfo.triple.arch != "x86_64" or zigtargetinfo.triple.os != "linux":
             fail("Incremental compilation currently supports x86_64-linux targets only.")
         if use_cc_common_link or ctx.attr.csrcs or ctx.attr.copts or ctx.attr.linkopts or ctx.file.linker_script:
-            fail("Incremental compilation requires no native dependencies or linker options/scripts, and Zig linking (use_cc_common_link=False).")
+            fail("Incremental compilation requires no C sources/compiler options or linker options/scripts, and Zig linking (use_cc_common_link=False).")
 
     cc_toolchain = None
     feature_configuration = None
@@ -570,8 +570,10 @@ def zig_build_impl(ctx, *, kind):
         args = global_args,
     )
 
-    if incremental_worker and root_module.cc_info and (need_translate_c(root_module.cc_info) or root_module.cc_info.linking_context.linker_inputs.to_list()):
-        fail("Incremental compilation does not support native dependencies.")
+    if incremental_worker and root_module.cc_info:
+        for link in root_module.cc_info.linking_context.linker_inputs.to_list():
+            if link.libraries or link.user_link_flags or link.additional_inputs:
+                fail("Incremental compilation does not support native linking dependencies.")
 
     zig_target_platform(
         target = zigtargetinfo,

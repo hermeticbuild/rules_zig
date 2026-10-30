@@ -9,6 +9,10 @@ _INCREMENTAL = canonical_label("@//zig/settings:incremental")
 _PLATFORMS = "//command_line_option:platforms"
 _LINUX = canonical_label("@//zig/tests/platforms:x86_64-linux")
 _EXEC_PLATFORMS = "//command_line_option:extra_execution_platforms"
+_CC_SETTINGS = {
+    _EXEC_PLATFORMS: [_LINUX, canonical_label("@buildbuddy_toolchain//:platform_linux_x86_64")],
+    "//command_line_option:extra_toolchains": [canonical_label("@buildbuddy_toolchain//:cc_toolchain")],
+}
 
 _WorkerGraphInfo = provider(
     doc = "Worker compilations reached through the configured tool dependency.",
@@ -90,6 +94,28 @@ _static_asm_only_test = _enabled_test_for("build-lib", "static_library", ["asm"]
 _shared_asm_test = _enabled_test_for("build-lib", "shared_library", ["bin", "asm"])
 _test_asm_bc_test = _enabled_test_for("test", "executable", ["bin", "asm", "llvm_bc"])
 
+def _bindings_impl(ctx):
+    env = analysistest.begin(ctx)
+    _assert_incremental(env, "build-exe", "executable", ["bin"])
+    action = assert_find_action(env, "ZigIncrementalCompile")
+    bindings = [file for file in action.inputs.to_list() if file.basename.endswith("_c.zig")]
+    asserts.equals(env, 1, len(bindings), "Generated bindings must be a declared worker input.")
+    return analysistest.end(env)
+
+_bindings_test = analysistest.make(
+    _bindings_impl,
+    config_settings = _CC_SETTINGS | {
+        _INCREMENTAL: True,
+        _PLATFORMS: _LINUX,
+        canonical_label("@//zig/settings:use_standalone_translate_c"): True,
+        "//command_line_option:extra_toolchains": [
+            canonical_label("@buildbuddy_toolchain//:cc_toolchain"),
+            canonical_label("@//zig/tests/translate-c-action:fake_translate_c_toolchain"),
+        ],
+    },
+    extra_target_under_test_aspects = [_worker_graph],
+)
+
 def _disabled_impl(ctx):
     env = analysistest.begin(ctx)
     action = assert_find_action(env, "ZigBuildExe")
@@ -141,7 +167,8 @@ _unsupported_link_test = _failure_test(
     "use_cc_common_link=False",
     {canonical_label("@//zig/settings:use_cc_common_link"): True},
 )
-_unsupported_native_test = _failure_test("no native dependencies")
+_unsupported_native_test = _failure_test("no C sources/compiler options")
+_unsupported_native_linking_test = _failure_test("does not support native linking dependencies", _CC_SETTINGS)
 _unsupported_sdk_test = _failure_test(
     "requires Zig 0.17.x",
     {canonical_label("@zig_toolchains//:version"): "0.16.0"},
@@ -165,4 +192,9 @@ def incremental_test_suite(name):
         partial.make(_test_asm_bc_test, target_under_test = "//zig/tests/emit-attr:test_emit_asm_and_bc", size = "small"),
         partial.make(_unsupported_native_test, target_under_test = "//zig/tests/c-sources-binary:without-copts", size = "small"),
         partial.make(_unsupported_sdk_test, target_under_test = "//zig/tests/simple-library:library", size = "small"),
+        partial.make(_bindings_test, target_under_test = "//zig/tests/translate-c-action:automatic_bindings", size = "small"),
+        partial.make(_bindings_test, target_under_test = "//zig/tests/translate-c-action:explicit_bindings", size = "small"),
+        partial.make(_unsupported_native_linking_test, target_under_test = "//zig/tests/translate-c-action:native_library_binary", size = "small"),
+        partial.make(_unsupported_native_linking_test, target_under_test = "//zig/tests/translate-c-action:native_flags_binary", size = "small"),
+        partial.make(_unsupported_native_linking_test, target_under_test = "//zig/tests/translate-c-action:native_inputs_binary", size = "small"),
     )

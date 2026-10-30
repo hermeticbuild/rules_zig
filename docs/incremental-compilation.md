@@ -21,7 +21,7 @@ affects the earlier toolchain-built adapter. Ordinary compilation is unaffected.
 The implementation accepts hermetic Zig 0.17.x from 0.17.0 onward, including
 development builds of later patches in that series. Other minor versions and
 pre-release builds of 0.17.0 remain unsupported. It supports POSIX execution tools,
-x86_64 Linux targets and Zig linking. Native dependencies,
+x86_64 Linux targets and Zig linking. Native linking dependencies,
 C sources, linker options/scripts, path toolchains, and other
 compiler versions or targets are rejected for incremental compilations.
 C/C++ linking and test-object pipelines using
@@ -29,6 +29,14 @@ C/C++ linking and test-object pipelines using
 they do not silently use ordinary compilation. The Linux integration tests
 cover both generated sources and directory inputs, source
 file symlinks, external repositories, and the sibling repository layout.
+
+Header-only C dependencies are supported, including automatic `c` bindings and
+explicit `zig_c_library` modules. Use a registered standalone translate-c toolchain
+with `--@rules_zig//zig/settings:use_standalone_translate_c` for Zig 0.17.
+Translation remains an ordinary action; the worker consumes its generated Zig
+sources. Header edits rerun translation and update those sources in the retained
+compiler session. Dependencies carrying native libraries, linker flags or
+additional linker inputs remain unsupported.
 
 Binaries, test executables, and static libraries support both the self-hosted and
 LLVM backends. Shared libraries require LLVM and explicit effective `-flld`.
