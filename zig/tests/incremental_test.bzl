@@ -38,7 +38,7 @@ _worker_graph = aspect(
     attr_aspects = ["_incremental_worker", "actual"],
 )
 
-def _assert_incremental(env, command, output_kind, outputs, link = None):
+def _assert_incremental(env, command, output_kind, outputs, link = None, archive = None):
     action = assert_find_action(env, "ZigIncrementalCompile")
     executables = [file for file in action.inputs.to_list() if file.path == action.argv[0]]
     asserts.equals(env, [Label("//zig/private/worker:configured_worker")], [file.owner for file in executables], "The adapter must come through the worker configuration transition.")
@@ -65,7 +65,8 @@ def _assert_incremental(env, command, output_kind, outputs, link = None):
         target = analysistest.target_under_test(env)
         for kind, path in zip(outputs, output_paths):
             if kind == "bin" and link:
-                asserts.true(env, path in [file.path for file in link.inputs.to_list()], "The C/C++ link must consume the worker's archive.")
+                consumer = archive if archive else link
+                asserts.true(env, path in [file.path for file in consumer.inputs.to_list()], "The next action must consume the worker's primary output.")
                 for file in target[DefaultInfo].files.to_list():
                     asserts.true(env, file in link.outputs.to_list(), "The final output must come from the C/C++ link.")
                     asserts.false(env, file.path in output_paths)
@@ -162,6 +163,34 @@ def _cc_link_test_for(outputs, native_library = False):
 _cc_link_outputs_test = _cc_link_test_for(["bin", "asm"])
 _cc_link_native_test = _cc_link_test_for(["bin"], native_library = True)
 
+def _cc_link_test_object_impl(ctx):
+    env = analysistest.begin(ctx)
+    archive = assert_find_action(env, "ZigBuildLib")
+    link = assert_find_action(env, "CppLink")
+    _assert_incremental(env, "test-obj", "object", ["bin", "asm", "llvm_bc"], link = link, archive = archive)
+
+    asserts.equals(env, "build-lib", archive.argv[1])
+    asserts.true(env, "--zig-lib-dir" in archive.argv)
+    asserts.true(env, "--cache-dir" in archive.argv)
+    asserts.true(env, "--global-cache-dir" in archive.argv)
+    asserts.true(env, "-fPIC" in archive.argv)
+    asserts.true(env, "-fcompiler-rt" in archive.argv)
+    for file in archive.outputs.to_list():
+        asserts.true(env, file in link.inputs.to_list(), "The C/C++ link must consume the ordinary archive.")
+    asserts.equals(env, 1, len(archive.outputs.to_list()), "Auxiliary outputs belong to test-object compilation.")
+
+    return analysistest.end(env)
+
+_cc_link_test_object_test = analysistest.make(
+    _cc_link_test_object_impl,
+    config_settings = _CC_SETTINGS | {
+        _INCREMENTAL: True,
+        _PLATFORMS: _LINUX,
+        canonical_label("@//zig/settings:use_cc_common_link"): True,
+    },
+    extra_target_under_test_aspects = [_worker_graph],
+)
+
 def _disabled_impl(ctx):
     env = analysistest.begin(ctx)
     action = assert_find_action(env, "ZigBuildExe")
@@ -209,10 +238,6 @@ _unsupported_arch_test = _failure_test(
     "supports x86_64-linux targets only",
     {_PLATFORMS: canonical_label("@//zig/tests/platforms:aarch64-linux")},
 )
-_unsupported_link_test = _failure_test(
-    "does not support zig_test with use_cc_common_link yet",
-    {canonical_label("@//zig/settings:use_cc_common_link"): True},
-)
 _unsupported_native_test = _failure_test("no C sources/compiler options")
 _unsupported_native_linking_test = _failure_test("does not support native linking dependencies", _CC_SETTINGS)
 _unsupported_sdk_test = _failure_test(
@@ -231,7 +256,7 @@ def incremental_test_suite(name):
         partial.make(_exec_settings_test, target_under_test = "//zig/tests:exec_settings", size = "small"),
         partial.make(_unsupported_target_test, target_under_test = "//zig/tests/simple-binary:binary", size = "small"),
         partial.make(_unsupported_arch_test, target_under_test = "//zig/tests/simple-binary:binary", size = "small"),
-        partial.make(_unsupported_link_test, target_under_test = "//zig/tests/simple-test:test", size = "small"),
+        partial.make(_cc_link_test_object_test, target_under_test = "//zig/tests/emit-attr:test_emit_asm_and_bc", size = "small"),
         partial.make(_binary_asm_test, target_under_test = "//zig/tests/emit-attr:binary_emit_asm", size = "small"),
         partial.make(_static_asm_only_test, target_under_test = "//zig/tests/emit-attr:static_emit_asm_only", size = "small"),
         partial.make(_shared_asm_test, target_under_test = "//zig/tests/emit-attr:shared_emit_asm", size = "small"),

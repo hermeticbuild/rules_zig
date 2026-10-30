@@ -15,7 +15,7 @@ const Request = struct {
 const Response = struct { requestId: i32, exitCode: u8, output: []const u8 };
 
 // These controls come from the action owner, never from a parsed compiler argv.
-const OutputKind = enum { executable, static_library, shared_library };
+const OutputKind = enum { executable, object, static_library, shared_library };
 const EmitKind = enum { bin, @"asm", llvm_ir, llvm_bc };
 const EmittedOutput = struct { kind: EmitKind, path: []const u8 };
 const Compilation = struct {
@@ -73,6 +73,7 @@ const Compilation = struct {
         };
         const valid_command = switch (result.output_kind) {
             .executable => std.mem.eql(u8, result.command, "build-exe") or std.mem.eql(u8, result.command, "test"),
+            .object => std.mem.eql(u8, result.command, "test-obj"),
             .static_library, .shared_library => std.mem.eql(u8, result.command, "build-lib"),
         };
         if (!valid_command)
@@ -122,6 +123,7 @@ const Compilation = struct {
         return switch (kind) {
             .bin => switch (self.output_kind) {
                 .executable => self.name,
+                .object => std.fmt.allocPrint(a, "{s}.o", .{self.name}),
                 .static_library => std.fmt.allocPrint(a, "lib{s}.a", .{self.name}),
                 .shared_library => std.fmt.allocPrint(a, "lib{s}.so", .{self.name}),
             },
@@ -421,6 +423,7 @@ const Worker = struct {
             .static_library => try argv.append("-static"),
             .shared_library => try argv.append("-dynamic"),
             .executable => if (std.mem.eql(u8, compilation.command, "test")) try argv.append("--test-no-exec"),
+            .object => try argv.append("--test-no-exec"),
         }
         var emit_bin = false;
         for (compilation.outputs) |output| {

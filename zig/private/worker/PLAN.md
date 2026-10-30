@@ -63,7 +63,7 @@ Pending items describe behavior to discuss, not an approved implementation.
 | 5b | Closed by agreement: upstream compiler bug | No archive workaround, backend fallback or configuration-specific rejection. Document the affected 0.17.0 path and upstream fix. Allow compatible fixed toolchains by qualifying 0.17.x patch builds and relaxing both exact-version checks together. |
 | 6 | Done: `89c9aa6` | Support assembly, LLVM IR and bitcode outputs, including `emit_bin=False`. Describe and publish each requested artifact; preserve output groups and backend choices. |
 | 7 | Done: `f7c3442` | Allow generated C bindings and header-only dependencies. Translation remains ordinary; its generated Zig source becomes a worker input. No provider change is needed merely to enable this feature. |
-| 8 | 8a done; 8b pending | Support `use_cc_common_link`: incremental Zig source compilation followed by the existing ordinary C/C++ link. Binary/shared-library paths first; test-object compilation and ordinary archive packaging in a follow-up commit. Account for item 5 before enabling affected archive configurations. |
+| 8 | Done: 8a in `9dbe090`; 8b in this commit | Support `use_cc_common_link`: incremental Zig source compilation followed by the existing ordinary C/C++ link. Binary/shared-library paths first; test-object compilation and ordinary archive packaging in a follow-up commit. Account for item 5 before enabling affected archive configurations. |
 | 9 | Pending | Allow ordinary scalar linker options. Preserve their consumer, ordering, and existing static-library behavior. Do not bundle location-expansion changes. |
 | 10 | Design discussion required | Support native libraries or objects consumed by Zig. Current self-hosted linking retains stale native inputs; see the investigation below. Prefer an upstream fix. Restarting on native changes is a possible explicit tradeoff, not an approved implementation. Agree on scope and representation first. |
 | 11 | Design discussion required | Support `csrcs`, their options and relevant included files. Extend the restart policy only after agreeing on transitive headers and `extra_srcs` handling. |
@@ -132,11 +132,11 @@ require a different order, explain and agree on the adjustment before proceeding
   rejected it. Actual reserved switches still failed without creating their
   requested destinations. The generated worker action's argv/environment stayed
   unchanged, with ordinary cache/SDK flags absent. Read-only review found no issues.
-- **Resume at discussion of the `global_args` cleanup.** Corentin approved
-  committing item 8a together with the emission-description cleanup and the
-  comment explaining the shared compilation defaults. The `global_args` cleanup
-  requires agreement before implementation; no push was requested.
-  Item 8b's test-object pipeline remains a separate change. The native-update
+- **Resume at discussion of item 9.** Item 8a and the emission-description cleanup
+  are committed as `9dbe090`. Corentin declined the proposed `global_args`
+  cleanup: keep the existing construction. Corentin reviewed and approved item
+  8b for this commit; no push was requested. Item 9 remains pending discussion.
+  The native-update
   investigation below establishes the reason for implementing `cc_common.link`
   before native inputs consumed by Zig.
   Items 4 and 5a are
@@ -531,8 +531,50 @@ paths. All existing comments remain in place.
 The 47 focused analysis tests pass. Before/after action-graph comparisons matched
 all 53 captured actions across ordinary and worker compilation, with and without
 `cc_common.link`, including ordered arguments, inputs and outputs. Narrow review
-found no issues. Corentin approved this change for commit. The proposed
-`global_args` cleanup is the next discussion; implementation remains unapproved.
+found no issues. Corentin approved this change, committed as `9dbe090`, then
+declined the proposed `global_args` cleanup. Keep the existing construction and
+resume discussion of the remaining feature items.
+
+### Item 8b: incremental test-object compilation (2026-10-30)
+
+Corentin authorized a small, local implementation for review. `zig_build.bzl`
+selects `test-obj` / object output for the existing test-object emission when
+`use_cc_common_link` is enabled. The worker accepts that command/output pair,
+passes `--test-no-exec`, and publishes the `.o` alongside requested auxiliary
+outputs. Existing session identity, input handling and publication remain shared.
+
+The test branch still packages the object through ordinary Zig `build-lib`, now
+explicitly selecting `worker = None`. When source compilation is incremental,
+the packaging arguments include the ordinary SDK/cache paths omitted from the
+worker request. Existing C/C++ linking and test execution are unchanged. No
+providers, argument builders, callbacks or `global_args` refactoring were added;
+existing comments remain in place.
+
+- The new analysis case failed at the original unsupported-test guard and passes
+  after the change. All 47 focused analysis targets and the worker unit-test
+  target pass. Before/after comparisons matched all 12 captured ordinary actions,
+  including arguments, inputs, outputs and execution settings.
+- Linux Bazel 9.2.0, Zig 0.17.0 LLVM+LLD, hermetic-llvm 0.8.24: hardened-worker
+  compilation produced the test object, assembly, LLVM IR and bitcode; ordinary
+  packaging and linking produced a test executable that Bazel ran successfully.
+- Native-only edits changed the test result without invoking the worker or
+  changing the object/archive/auxiliary hashes. Zig edits and compiler-error
+  recovery reused the same compiler PID. Native link-error recovery, no-op
+  builds, sandboxed one-shot execution, ordinary compilation, and an independently
+  saved earlier test executable also passed their expected outcomes.
+- The actual action graph shows the object consumed by ordinary `ZigBuildLib`,
+  its archive consumed by hermetic-llvm's `CppLink`, and native library inputs
+  absent from the worker. Archive packaging has no worker execution requirements.
+- Fixed 0.17.x `12d9399228` self-hosted `test-obj` produces the same malformed
+  `.eh_frame` diagnostic observed for archives in 8a; ordinary compilation of
+  that test passes. Documented the observation without a workaround or new gate.
+- Narrow read-only review found no issues. Corentin reviewed and approved item
+  8b for this commit, including ordinary SDK/cache setup for archive packaging.
+
+Evidence: `/tmp/rules-zig-8b-evidence-20261030` locally and
+`/home/corentin/.cache/rules-zig-test-object-20261030` on `9985wx-5090x4`.
+`qualification.json`, `selfhosted.json`, action graphs and per-phase logs retain
+the compiler reuse, artifact hashes, test outcomes and toolchain evidence.
 
 ## Contract
 
@@ -544,13 +586,16 @@ performance. Bazel owns action invalidation; Zig owns semantic incremental work.
 
 - Existing `zig_binary`, `zig_test`, `zig_static_library`, and `zig_shared_library`,
   opt-in `//zig/settings:incremental`; default unchanged.
-- Hermetic Zig 0.17.x from 0.17.0 onward, x86_64 Linux target, Zig linking, binary
-  and requested assembly/LLVM outputs. Static libraries may omit the binary.
+- Hermetic Zig 0.17.x from 0.17.0 onward, x86_64 Linux target, Zig linking or
+  separate C/C++ linking through `use_cc_common_link`, binary and requested
+  assembly/LLVM outputs. Static libraries may omit the binary.
   The known 0.17.0 archive corruption is an upstream limitation;
   select a compiler containing its fix.
 - Binaries, test executables, and static libraries support self-hosted and LLVM
-  compilation. Shared libraries require LLVM (explicitly or through LLVM output)
-  and explicit effective LLD selection.
+  compilation. Shared libraries linked by Zig require LLVM (explicitly or through
+  LLVM output) and explicit effective LLD selection. Separate C/C++ linking is
+  qualified with LLVM+LLD and hermetic-llvm; self-hosted `.eh_frame` failures remain
+  upstream limitations, as documented above.
 - Singleplex JSON worker, one compiler session by default, optional bounded LRU.
 - Adapter-owned protocol, cache, SDK, naming, and output controls are reserved.
   Conflicting `zigopts` fail clearly; arbitrary invalid compiler usage is outside

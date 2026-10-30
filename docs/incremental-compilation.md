@@ -21,14 +21,13 @@ affects the earlier toolchain-built adapter. Ordinary compilation is unaffected.
 The implementation accepts hermetic Zig 0.17.x from 0.17.0 onward, including
 development builds of later patches in that series. Other minor versions and
 pre-release builds of 0.17.0 remain unsupported. It supports POSIX execution tools,
-x86_64 Linux targets and Zig linking, or separate C/C++ linking for `zig_binary`
-and `zig_shared_library`. Native linking dependencies consumed by Zig, C sources,
-linker options/scripts, path toolchains, and other compiler versions or targets
-are rejected for incremental compilations. With `use_cc_common_link`, static
-libraries retain their archive-compilation path, while test-object pipelines
-remain unsupported. Unsupported configurations fail explicitly;
-they do not silently use ordinary compilation. The Linux integration tests
-cover both generated sources and directory inputs, source
+x86_64 Linux targets and Zig linking, or separate C/C++ linking for `zig_binary`,
+`zig_test` and `zig_shared_library`. Native linking dependencies consumed by Zig,
+C sources, linker options/scripts, path toolchains, and other compiler versions or
+targets are rejected for incremental compilations. With `use_cc_common_link`,
+static libraries retain their archive-compilation path. Unsupported configurations
+fail explicitly; they do not silently use ordinary compilation. The Linux
+integration tests cover both generated sources and directory inputs, source
 file symlinks, external repositories, and the sibling repository layout.
 
 Header-only C dependencies are supported, including automatic `c` bindings and
@@ -61,8 +60,8 @@ qualification. LLVM still retains frontend state; LLD performs a full relink.
 
 ### Separate C/C++ linking
 
-For binaries and shared libraries, combine the existing settings. The qualified
-LLVM path uses:
+For binaries, tests and shared libraries, combine the existing settings. The
+qualified LLVM path uses:
 
 ```sh
 bazel build --@rules_zig//zig/settings:incremental \
@@ -71,20 +70,28 @@ bazel build --@rules_zig//zig/settings:incremental \
   --@rules_zig//zig/settings:zigopt=-flld //app:app
 ```
 
-The worker incrementally compiles Zig into an intermediate static archive. The
-existing ordinary `cc_common.link` action consumes that archive and the native
-dependencies using the selected C/C++ toolchain. Native libraries, dependency
-linker flags and additional linker inputs belong to that link action, not the
-worker. A native-only edit can relink without recompiling Zig; an edit to generated
-bindings still updates the Zig compilation. The final executable/shared library
+For binaries and shared libraries, the worker incrementally compiles Zig into an
+intermediate static archive. The existing ordinary `cc_common.link` action
+consumes that archive and the native dependencies using the selected C/C++
+toolchain. Native libraries, dependency linker flags and additional linker inputs
+belong to that link action, not the worker. A native-only edit can relink without
+recompiling Zig; an edit to generated bindings still updates the Zig compilation.
+The final executable/shared library
 and its runfiles retain their existing providers and paths.
+
+For `zig_test`, the worker runs `test-obj` and publishes an object plus any
+requested auxiliary outputs. An ordinary Zig `build-lib` action packages that
+object into an archive, then the existing `cc_common.link` action produces the
+test executable. Archive packaging uses the ordinary SDK/cache configuration;
+only source compilation retains compiler state. Bazel runs the tests separately.
 
 The intermediate archive uses the selected Zig backend, including when the final
 output is a shared library. The direct shared-library backend restriction above
 does not apply to this archive. As with ordinary separate linking, the compilation
 receives `-lc` and `-fcompiler-rt` before explicit user options. Linux execution is
-qualified with LLVM+LLD and hermetic-llvm; self-hosted archives have the additional
-compiler limitation described below. macOS incremental targets remain unsupported.
+qualified with LLVM+LLD and hermetic-llvm; self-hosted objects and archives have
+the additional compiler limitation described below. macOS incremental targets
+remain unsupported.
 
 ### Requested outputs
 
@@ -133,14 +140,17 @@ an incremental self-hosted archive for a binary contained malformed `.eh_frame`
 data, rejected by hermetic-llvm's LLD with "FDE version 1 or 3 expected, but got 0".
 Ordinary compilation of the same target linked successfully. The compiler-rt fix
 above does not resolve this failure. A direct Zig compiler-server probe reproduces
-it before the worker is involved. LLVM+LLD archives passed separate linking;
-rules_zig does not switch backends, disable unwind information or introduce a
-compiler-version rejection to work around this problem.
+it before the worker is involved. Incremental `test-obj` with the same fixed
+self-hosted compiler also produced an object rejected with this diagnostic;
+ordinary compilation of that test passed. LLVM+LLD archives and test objects
+passed separate linking; rules_zig does not switch backends, disable unwind
+information or introduce a compiler-version rejection to work around this problem.
 
 ## Compiler invocation
 
-For `zig_test`, the worker compiles with `zig test --test-no-exec`. Bazel executes
-the published test executable in its normal, separate test action. The worker
+For `zig_test`, the worker compiles with `zig test --test-no-exec`, or
+`zig test-obj --test-no-exec` when `use_cc_common_link` is enabled. Bazel executes
+the resulting test executable in its normal, separate test action. The worker
 does not execute tests through Zig's compiler-server protocol.
 
 The adapter is an ordinary `zig_binary`, built automatically for the Zig action's
@@ -154,7 +164,8 @@ CPU features. Custom hermetic SDK toolchains need no worker-specific attributes.
 
 Adapter-owned controls are reserved: compiler server mode, incremental mode, SDK
 and cache directories, compilation naming, build root, response files, and output
-selection. For libraries, `-static` and `-dynamic` are also adapter-owned.
+selection. For libraries and test objects, `-static` and `-dynamic` are also
+adapter-owned.
 Conflicting `zigopts` fail with a diagnostic. These checks distinguish switches
 from their values: `--test-filter --cache-dir` uses `--cache-dir` as filter text,
 while an actual `--cache-dir` switch remains rejected. Other compiler arguments

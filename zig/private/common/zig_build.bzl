@@ -338,8 +338,6 @@ def zig_build_impl(ctx, *, kind):
             fail("Incremental compilation requires the worker tool dependency.")
         if zigtargetinfo.triple.arch != "x86_64" or zigtargetinfo.triple.os != "linux":
             fail("Incremental compilation currently supports x86_64-linux targets only.")
-        if use_cc_common_link and kind == "zig_test":
-            fail("Incremental compilation does not support zig_test with use_cc_common_link yet.")
         if ctx.attr.csrcs or ctx.attr.copts or ctx.attr.linkopts or ctx.file.linker_script:
             fail("Incremental compilation requires no C sources/compiler options or linker options/scripts.")
 
@@ -496,7 +494,7 @@ def zig_build_impl(ctx, *, kind):
     if incremental_worker:
         command, output_kind = {
             "zig_binary": ("build-exe", "executable"),
-            "zig_test": ("test", "executable"),
+            "zig_test": ("test-obj", "object") if test_obj else ("test", "executable"),
             "zig_static_library": ("build-lib", "static_library"),
             "zig_shared_library": ("build-lib", "shared_library"),
         }["zig_static_library" if cc_static_lib else kind]
@@ -759,6 +757,17 @@ def zig_build_impl(ctx, *, kind):
             )
             static_lib = archive_emission.file
             lib_args = ctx.actions.args()
+            if incremental_worker:
+                # Source compilation uses worker-owned SDK/cache paths, but
+                # packaging the emitted object remains an ordinary Zig action.
+                zig_lib_dir(
+                    zigtoolchaininfo = zigtoolchaininfo,
+                    args = lib_args,
+                )
+                zig_cache_output(
+                    zigtoolchaininfo = zigtoolchaininfo,
+                    args = lib_args,
+                )
             lib_args.add_all([
                 "-fPIC",
                 "-fcompiler-rt",
@@ -773,7 +782,7 @@ def zig_build_impl(ctx, *, kind):
                 args = lib_args,
                 mnemonic = "ZigBuildLib",
                 progress_message = "zig build-lib %{label}",
-                **compile_kwargs
+                **(compile_kwargs | {"worker": None})
             )
 
             library_to_link = cc_common.create_library_to_link(
