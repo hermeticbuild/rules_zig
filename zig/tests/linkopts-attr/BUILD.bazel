@@ -1,0 +1,45 @@
+load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_shared_library", "zig_static_library", "zig_test")
+
+package(default_visibility = ["//zig/tests:__pkg__"])
+
+# Analysis fixtures: these driver options require separate Linux C/C++ linking.
+zig_binary(
+    name = "binary",
+    linkopts = [
+        "-Wl,-z,now",
+        "-Wl,-z,lazy",
+    ],
+    main = "main.zig",
+    tags = ["manual"],
+)
+
+zig_test(
+    name = "test",
+    size = "small",
+    linkopts = [
+        "-Wl,-z,now",
+        "-Wl,-z,lazy",
+    ],
+    main = "main.zig",
+    tags = ["manual"],
+)
+
+zig_shared_library(
+    name = "shared",
+    linkopts = [
+        "-Wl,-z,now",
+        "-Wl,-z,lazy",
+    ],
+    main = "main.zig",
+    tags = ["manual"],
+)
+
+zig_static_library(
+    name = "static",
+    linkopts = [
+        "-Wl,-z,now",
+        "-Wl,-z,lazy",
+    ],
+    main = "main.zig",
+    tags = ["manual"],
+)

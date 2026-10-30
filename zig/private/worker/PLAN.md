@@ -63,8 +63,9 @@ Pending items describe behavior to discuss, not an approved implementation.
 | 5b | Closed by agreement: upstream compiler bug | No archive workaround, backend fallback or configuration-specific rejection. Document the affected 0.17.0 path and upstream fix. Allow compatible fixed toolchains by qualifying 0.17.x patch builds and relaxing both exact-version checks together. |
 | 6 | Done: `89c9aa6` | Support assembly, LLVM IR and bitcode outputs, including `emit_bin=False`. Describe and publish each requested artifact; preserve output groups and backend choices. |
 | 7 | Done: `f7c3442` | Allow generated C bindings and header-only dependencies. Translation remains ordinary; its generated Zig source becomes a worker input. No provider change is needed merely to enable this feature. |
-| 8 | Done: 8a in `9dbe090`; 8b in this commit | Support `use_cc_common_link`: incremental Zig source compilation followed by the existing ordinary C/C++ link. Binary/shared-library paths first; test-object compilation and ordinary archive packaging in a follow-up commit. Account for item 5 before enabling affected archive configurations. |
-| 9 | Pending | Allow ordinary scalar linker options. Preserve their consumer, ordering, and existing static-library behavior. Do not bundle location-expansion changes. |
+| 8 | Done: 8a in `9dbe090`; 8b in `82d1444` | Support `use_cc_common_link`: incremental Zig source compilation followed by the existing ordinary C/C++ link. Binary/shared-library paths first; test-object compilation and ordinary archive packaging in a follow-up commit. Account for item 5 before enabling affected archive configurations. |
+| 9a | Done in this commit | Allow `linkopts` with `use_cc_common_link`. Preserve the existing ordinary link consumer, ordering, and static-library ignored-options behavior. No worker or location-expansion changes. |
+| 9b | Pending scope discussion | Allow scalar linker options consumed by Zig. Simply removing the rejection also allows file-consuming options, overlapping items 10 and 12; agree on that boundary before implementation. |
 | 10 | Design discussion required | Support native libraries or objects consumed by Zig. Current self-hosted linking retains stale native inputs; see the investigation below. Prefer an upstream fix. Restarting on native changes is a possible explicit tradeoff, not an approved implementation. Agree on scope and representation first. |
 | 11 | Design discussion required | Support `csrcs`, their options and relevant included files. Extend the restart policy only after agreeing on transitive headers and `extra_srcs` handling. |
 | 12 | Separate scope decision | Correct action ownership of files referenced by compiler/linker options. This affects ordinary rules too and needs its own reproduction and design. The rejected `_location_inputs` scanner is not an accepted implementation. |
@@ -132,10 +133,11 @@ require a different order, explain and agree on the adjustment before proceeding
   rejected it. Actual reserved switches still failed without creating their
   requested destinations. The generated worker action's argv/environment stayed
   unchanged, with ordinary cache/SDK flags absent. Read-only review found no issues.
-- **Resume at discussion of item 9.** Item 8a and the emission-description cleanup
+- **Resume at scope agreement for item 9b.** Item 8a and the emission-description cleanup
   are committed as `9dbe090`. Corentin declined the proposed `global_args`
-  cleanup: keep the existing construction. Corentin reviewed and approved item
-  8b for this commit; no push was requested. Item 9 remains pending discussion.
+  cleanup: keep the existing construction. Item 8b is committed as `82d1444`.
+  Corentin reviewed and approved item 9a for this commit; no push was requested.
+  Direct Zig `linkopts` remains a separate scope discussion in item 9b.
   The native-update
   investigation below establishes the reason for implementing `cc_common.link`
   before native inputs consumed by Zig.
@@ -569,12 +571,39 @@ existing comments remain in place.
   `.eh_frame` diagnostic observed for archives in 8a; ordinary compilation of
   that test passes. Documented the observation without a workaround or new gate.
 - Narrow read-only review found no issues. Corentin reviewed and approved item
-  8b for this commit, including ordinary SDK/cache setup for archive packaging.
+  8b, including ordinary SDK/cache setup for archive packaging; commit `82d1444`.
 
 Evidence: `/tmp/rules-zig-8b-evidence-20261030` locally and
 `/home/corentin/.cache/rules-zig-test-object-20261030` on `9985wx-5090x4`.
 `qualification.json`, `selfhosted.json`, action graphs and per-phase logs retain
 the compiler reuse, artifact hashes, test outcomes and toolchain evidence.
+
+### Item 9a: linker options with separate C/C++ linking (2026-10-30)
+
+Corentin approved narrowing the `linkopts` rejection to incremental compilations
+without `use_cc_common_link`. Existing actions already route these options to the
+ordinary link, preserving their order, and ignore them for static libraries.
+Only the analysis guard changes; no worker, provider, argument construction or
+location-expansion changes are needed. C sources/options and linker scripts
+retain their existing rejection. Direct Zig `linkopts` remains unsupported.
+
+- The new binary regression failed at the original blanket rejection. All 52
+  focused analysis tests pass, including binary/test/shared-library routing,
+  static-library ignored options, and the direct Zig rejection.
+- Linux Bazel 9.2.0, Zig 0.17.0 LLVM+LLD, hermetic-llvm 0.8.24: binary, test,
+  shared-library and static-library builds passed with hardened workers.
+- Changing only `linkopts` from empty to `-Wl,-z,now`, `-Wl,-z,lazy`, then
+  reversing that order, changed the three final link actions and ELF binding
+  flags. All four worker actions and the ordinary test archive action retained
+  identical keys, arguments, inputs, outputs, environment and execution settings.
+  Their artifact hashes were unchanged and no worker request ran for either edit.
+- Ordinary compilation also passed; direct Zig linking failed with the intended
+  diagnostic. The qualification Bazel server was shut down afterward.
+- Narrow read-only review found no issues. Corentin reviewed and approved this
+  change for commit.
+
+Evidence: `/tmp/rules-zig-9a-evidence-20261030` locally; remote qualification is
+under `linkopts-evidence` in the existing item 8b fixture.
 
 ## Contract
 

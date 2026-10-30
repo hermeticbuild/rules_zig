@@ -191,6 +191,32 @@ _cc_link_test_object_test = analysistest.make(
     extra_target_under_test_aspects = [_worker_graph],
 )
 
+def _cc_linkopts_impl(ctx):
+    env = analysistest.begin(ctx)
+    compile = assert_find_action(env, "ZigIncrementalCompile")
+    linkopts = ["-Wl,-z,now", "-Wl,-z,lazy"]
+    for option in linkopts:
+        asserts.false(env, option in compile.argv, "Linker options must not reach the worker.")
+    links = [action for action in analysistest.target_actions(env) if action.mnemonic == "CppLink"]
+    asserts.equals(env, 1 if ctx.attr.links else 0, len(links))
+    for link in links:
+        asserts.equals(env, linkopts, [arg for arg in link.argv if arg in linkopts], "The separate link must preserve option order.")
+    for action in analysistest.target_actions(env):
+        if action.mnemonic == "ZigBuildLib":
+            for option in linkopts:
+                asserts.false(env, option in action.argv, "Test archive packaging must not receive linker options.")
+    return analysistest.end(env)
+
+_cc_linkopts_test = analysistest.make(
+    _cc_linkopts_impl,
+    config_settings = _CC_SETTINGS | {
+        _INCREMENTAL: True,
+        _PLATFORMS: _LINUX,
+        canonical_label("@//zig/settings:use_cc_common_link"): True,
+    },
+    attrs = {"links": attr.bool(default = True)},
+)
+
 def _disabled_impl(ctx):
     env = analysistest.begin(ctx)
     action = assert_find_action(env, "ZigBuildExe")
@@ -239,6 +265,10 @@ _unsupported_arch_test = _failure_test(
     {_PLATFORMS: canonical_label("@//zig/tests/platforms:aarch64-linux")},
 )
 _unsupported_native_test = _failure_test("no C sources/compiler options")
+_unsupported_linkopts_test = _failure_test(
+    "Incremental compilation requires use_cc_common_link for linkopts.",
+    {canonical_label("@//zig/settings:use_cc_common_link"): False},
+)
 _unsupported_native_linking_test = _failure_test("does not support native linking dependencies", _CC_SETTINGS)
 _unsupported_sdk_test = _failure_test(
     "requires Zig 0.17.x",
@@ -273,4 +303,9 @@ def incremental_test_suite(name):
         partial.make(_cc_link_native_test, target_under_test = "//zig/tests/translate-c-action:native_library_binary", size = "small"),
         partial.make(_static_cc_link_test, target_under_test = "//zig/tests/simple-library:library", size = "small"),
         partial.make(_cc_link_native_test, target_under_test = "//zig/tests/translate-c-action:native_archive_binary", size = "small"),
+        partial.make(_cc_linkopts_test, target_under_test = "//zig/tests/linkopts-attr:binary", size = "small"),
+        partial.make(_cc_linkopts_test, target_under_test = "//zig/tests/linkopts-attr:test", size = "small"),
+        partial.make(_cc_linkopts_test, target_under_test = "//zig/tests/linkopts-attr:shared", size = "small"),
+        partial.make(_cc_linkopts_test, target_under_test = "//zig/tests/linkopts-attr:static", links = False, size = "small"),
+        partial.make(_unsupported_linkopts_test, target_under_test = "//zig/tests/linkopts-attr:binary", size = "small"),
     )

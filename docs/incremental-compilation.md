@@ -23,8 +23,9 @@ development builds of later patches in that series. Other minor versions and
 pre-release builds of 0.17.0 remain unsupported. It supports POSIX execution tools,
 x86_64 Linux targets and Zig linking, or separate C/C++ linking for `zig_binary`,
 `zig_test` and `zig_shared_library`. Native linking dependencies consumed by Zig,
-C sources, linker options/scripts, path toolchains, and other compiler versions or
-targets are rejected for incremental compilations. With `use_cc_common_link`,
+C sources, linker scripts, path toolchains, and other compiler versions or
+targets are rejected for incremental compilations. The `linkopts` attribute
+requires `use_cc_common_link`. With that setting,
 static libraries retain their archive-compilation path. Unsupported configurations
 fail explicitly; they do not silently use ordinary compilation. The Linux
 integration tests cover both generated sources and directory inputs, source
@@ -78,6 +79,12 @@ belong to that link action, not the worker. A native-only edit can relink withou
 recompiling Zig; an edit to generated bindings still updates the Zig compilation.
 The final executable/shared library
 and its runfiles retain their existing providers and paths.
+
+The `linkopts` attribute is passed to the ordinary C/C++ link in its existing
+order. These options do not reach the worker or test archive packaging; changing
+them can relink without recompiling Zig. As in ordinary compilation,
+`zig_static_library` ignores `linkopts`. Location expansion and ownership of
+files referenced by options retain their existing behavior.
 
 For `zig_test`, the worker runs `test-obj` and publishes an object plus any
 requested auxiliary outputs. An ordinary Zig `build-lib` action packages that
