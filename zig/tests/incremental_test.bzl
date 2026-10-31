@@ -217,6 +217,30 @@ _cc_linkopts_test = analysistest.make(
     attrs = {"links": attr.bool(default = True)},
 )
 
+def _zig_linkopts_impl(ctx):
+    env = analysistest.begin(ctx)
+    compile = assert_find_action(env, "ZigIncrementalCompile")
+    linkopts = ["-z", "now", "-z", "lazy"]
+    asserts.equals(
+        env,
+        linkopts if ctx.attr.links else [],
+        [arg for arg in compile.argv if arg in linkopts],
+        "Direct Zig linking must preserve option order; static libraries ignore linker options.",
+    )
+    asserts.equals(env, [], [action for action in analysistest.target_actions(env) if action.mnemonic == "CppLink"])
+    return analysistest.end(env)
+
+_zig_linkopts_test = analysistest.make(
+    _zig_linkopts_impl,
+    config_settings = {
+        _INCREMENTAL: True,
+        _PLATFORMS: _LINUX,
+        _EXEC_PLATFORMS: [_LINUX],
+        canonical_label("@//zig/settings:use_cc_common_link"): False,
+    },
+    attrs = {"links": attr.bool(default = True)},
+)
+
 def _disabled_impl(ctx):
     env = analysistest.begin(ctx)
     action = assert_find_action(env, "ZigBuildExe")
@@ -265,10 +289,6 @@ _unsupported_arch_test = _failure_test(
     {_PLATFORMS: canonical_label("@//zig/tests/platforms:aarch64-linux")},
 )
 _unsupported_native_test = _failure_test("no C sources/compiler options")
-_unsupported_linkopts_test = _failure_test(
-    "Incremental compilation requires use_cc_common_link for linkopts.",
-    {canonical_label("@//zig/settings:use_cc_common_link"): False},
-)
 _unsupported_sdk_test = _failure_test(
     "requires Zig 0.17.x",
     {canonical_label("@zig_toolchains//:version"): "0.16.0"},
@@ -306,5 +326,8 @@ def incremental_test_suite(name):
         partial.make(_cc_linkopts_test, target_under_test = "//zig/tests/linkopts-attr:test", size = "small"),
         partial.make(_cc_linkopts_test, target_under_test = "//zig/tests/linkopts-attr:shared", size = "small"),
         partial.make(_cc_linkopts_test, target_under_test = "//zig/tests/linkopts-attr:static", links = False, size = "small"),
-        partial.make(_unsupported_linkopts_test, target_under_test = "//zig/tests/linkopts-attr:binary", size = "small"),
+        partial.make(_zig_linkopts_test, target_under_test = "//zig/tests/linkopts-attr:zig_binary", size = "small"),
+        partial.make(_zig_linkopts_test, target_under_test = "//zig/tests/linkopts-attr:zig_test", size = "small"),
+        partial.make(_zig_linkopts_test, target_under_test = "//zig/tests/linkopts-attr:zig_shared", size = "small"),
+        partial.make(_zig_linkopts_test, target_under_test = "//zig/tests/linkopts-attr:zig_static", links = False, size = "small"),
     )

@@ -24,11 +24,11 @@ pre-release builds of 0.17.0 remain unsupported. It supports POSIX execution too
 x86_64 Linux targets and Zig linking, or separate C/C++ linking for `zig_binary`,
 `zig_test` and `zig_shared_library`. C sources, linker scripts, path toolchains,
 and other compiler versions or targets are rejected for incremental compilations.
-The `linkopts` attribute requires `use_cc_common_link`. With that setting, static
-libraries retain their archive-compilation path. Unsupported configurations
-fail explicitly; they do not silently use ordinary compilation. The Linux
-integration tests cover both generated sources and directory inputs, source
-file symlinks, external repositories, and the sibling repository layout.
+Static libraries retain their archive-compilation path with either link setting.
+Unsupported configurations fail explicitly; they do not silently use ordinary
+compilation. The Linux integration tests cover both generated sources and
+directory inputs, source file symlinks, external repositories, and the sibling
+repository layout.
 
 Header-only C dependencies are supported, including automatic `c` bindings and
 explicit `zig_c_library` modules. Use a registered standalone translate-c toolchain
@@ -57,6 +57,12 @@ flag groups remain unsupported and fail explicitly.
 
 Zig 0.17's self-hosted incremental shared-library output failed execution in
 qualification. LLVM still retains frontend state; LLD performs a full relink.
+
+With direct Zig linking, `linkopts` uses Zig's option syntax and reaches the
+worker in its existing order. Changing these options selects a different compiler
+session; source-only edits can reuse the current session. As in ordinary
+compilation, `zig_static_library` ignores `linkopts`. Location expansion and
+ownership of files referenced by options retain their existing behavior.
 
 ### Separate C/C++ linking
 

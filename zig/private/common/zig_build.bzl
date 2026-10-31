@@ -340,8 +340,6 @@ def zig_build_impl(ctx, *, kind):
             fail("Incremental compilation currently supports x86_64-linux targets only.")
         if ctx.attr.csrcs or ctx.attr.copts or ctx.file.linker_script:
             fail("Incremental compilation requires no C sources/compiler options or linker scripts.")
-        if ctx.attr.linkopts and not use_cc_common_link:
-            fail("Incremental compilation requires use_cc_common_link for linkopts.")
 
     cc_toolchain = None
     feature_configuration = None

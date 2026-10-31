@@ -43,3 +43,57 @@ zig_static_library(
     main = "main.zig",
     tags = ["manual"],
 )
+
+# Direct Zig linking uses Zig's option syntax instead of C/C++ driver options.
+zig_binary(
+    name = "zig_binary",
+    linkopts = [
+        "-z",
+        "now",
+        "-z",
+        "lazy",
+    ],
+    main = "main.zig",
+    tags = ["manual"],
+)
+
+zig_test(
+    name = "zig_test",
+    size = "small",
+    linkopts = [
+        "-z",
+        "now",
+        "-z",
+        "lazy",
+    ],
+    main = "main.zig",
+    tags = ["manual"],
+)
+
+zig_shared_library(
+    name = "zig_shared",
+    linkopts = [
+        "-z",
+        "now",
+        "-z",
+        "lazy",
+    ],
+    main = "main.zig",
+    tags = ["manual"],
+    zigopts = [
+        "-fllvm",
+        "-flld",
+    ],
+)
+
+zig_static_library(
+    name = "zig_static",
+    linkopts = [
+        "-z",
+        "now",
+        "-z",
+        "lazy",
+    ],
+    main = "main.zig",
+    tags = ["manual"],
+)
