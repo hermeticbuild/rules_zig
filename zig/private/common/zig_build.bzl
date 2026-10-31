@@ -624,6 +624,8 @@ def zig_build_impl(ctx, *, kind):
             )
 
             if incremental_worker and cdeps_inputs:
+                # Intentional user-facing warning for the accepted compiler limitation.
+                # buildifier: disable=print
                 print(
                     "{}: warning: Zig incremental linking may reuse stale native inputs ".format(ctx.label) +
                     "or retain previous link errors. Native input changes do not restart the compiler. " +
