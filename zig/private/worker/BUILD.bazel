@@ -51,7 +51,6 @@ filegroup(
     srcs = [
         "BUILD.bazel",
         "non_incremental_binary.bzl",
-        "probe.py",
         "worker.zig",
     ],
     visibility = ["//zig/private:__pkg__"],
