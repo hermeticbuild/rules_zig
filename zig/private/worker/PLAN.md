@@ -57,7 +57,7 @@ Pending items describe behavior to discuss, not an approved implementation.
 | --- | --- | --- |
 | 1 | Done: `eecd8d1` | Rename the private wrapper to `non_incremental_binary`. Rename only; implementation and comments preserved. |
 | 2 | Done: `0ba2f99` | Remove the private request schema field and version check. Update producer, decoder, existing fixtures and docs together. Retain required-field and structural validation; no compatibility decoder. |
-| 3 | Done: `c79fe48` | Distinguish compiler switches from operands when validating options. Reuse the existing option-arity table without changing argv. Actual worker-owned flags remain rejected; their ordinary action equivalents must stay out of worker requests. |
+| 3 | Done: `c79fe48`; validation policy superseded by item 13 | Distinguish compiler switches from operands when validating options. Item 13 removes this validation by agreement; ordinary cache/SDK flags still stay out of worker requests. |
 | 4 | Deferred by agreement | Versioned shared-library cache filenames (`--version`). No demonstrated user need: rules_zig does not generate this option and already controls the published filename and SONAME. Retain the explicit unsupported diagnostic; reconsider when needed. |
 | 5a | Deferred for the current Linux scope | Do not add archive indexing for gold or other GNU-linker compatibility. Qualify Linux C/C++ consumers with hermetic-llvm; direct Zig linking retains its qualified defaults. Revisit indexing only if an in-scope consumer requires it, including the Apple linker when macOS targets are qualified. |
 | 5b | Closed by agreement: upstream compiler bug | No archive workaround, backend fallback or configuration-specific rejection. Document the affected 0.17.0 path and upstream fix. Allow compatible fixed toolchains by qualifying 0.17.x patch builds and relaxing both exact-version checks together. |
@@ -65,11 +65,11 @@ Pending items describe behavior to discuss, not an approved implementation.
 | 7 | Done: `f7c3442` | Allow generated C bindings and header-only dependencies. Translation remains ordinary; its generated Zig source becomes a worker input. No provider change is needed merely to enable this feature. |
 | 8 | Done: 8a in `9dbe090`; 8b in `82d1444` | Support `use_cc_common_link`: incremental Zig source compilation followed by the existing ordinary C/C++ link. Binary/shared-library paths first; test-object compilation and ordinary archive packaging in a follow-up commit. Account for item 5 before enabling affected archive configurations. |
 | 9a | Done: `87ae4ac` | Allow `linkopts` with `use_cc_common_link`. Preserve the existing ordinary link consumer, ordering, and static-library ignored-options behavior. No worker or location-expansion changes. |
-| 9b | Pending implementation agreement | Allow linker options consumed by Zig. Item 10 now accepts the native-refresh compiler limitation without restarts; ownership of files referenced through raw options remains separate in item 12. |
-| 10 | Done: reviewed and approved for this commit | Allow native dependencies already handled through CcInfo, warning during analysis when selected native linker files are present. Keep declaring/staging current files; leave refresh correctness to Zig. No restart machinery or provider changes. |
-| 11 | Design discussion required | Support `csrcs`, their options and relevant included files. Extend the restart policy only after agreeing on transitive headers and `extra_srcs` handling. |
-| 12 | Separate scope decision | Correct action ownership of files referenced by compiler/linker options. This affects ordinary rules too and needs its own reproduction and design. The rejected `_location_inputs` scanner is not an accepted implementation. |
-| 13 | Agreed final phase | Simplify the completed implementation and minimize the worker's knowledge of Zig flags. Revisit option-arity tables and capability checks; prefer explicit action-owned metadata or compiler-provided information where appropriate. Preserve compiler argv and supported-configuration correctness; do not grow a general Zig command-line parser. |
+| 9b | Done: `a530777` | Allow linker options consumed by Zig through the existing ordered argument path. Static libraries still ignore them. No worker or location-expansion changes; ownership of files referenced through raw options remains separate in item 12. |
+| 10 | Done: `aaa424a` | Allow native dependencies already handled through CcInfo, warning during analysis when selected native linker files are present. Keep declaring/staging current files; leave refresh correctness to Zig. No restart machinery or provider changes. |
+| 11 | Deferred by agreement | Keep rejecting nonempty `csrcs` or `copts` in incremental mode, including with `use_cc_common_link`. Use C/C++ library dependencies or ordinary compilation. Revisit only for a concrete need; no restart policy or provider changes are assumed. |
+| 12 | Deferred by agreement to the general input-declaration issue | Revisit after the ruleset's compiler/linker file-input API is addressed separately. Existing misuse of `data` also affects ordinary compilation and does not block incremental support. Preserve declared-input semantics; no `_location_inputs` scanner or new input attributes in this effort. |
+| 13 | Done: `c5084db` | Remove reserved-option policing and the option-arity table. Pass semantic arguments unchanged; retain a simple shared-library configuration check. Flag-shaped operands and conflicting raw overrides are outside the supported interface. |
 
 Item 8 intentionally contains smaller commit boundaries. Do not combine
 them into a large patch merely because they share a numbered item. If dependencies
@@ -116,35 +116,39 @@ require a different order, explain and agree on the adjustment before proceeding
   for the current Linux scope, not evidence that Apple needs no archive index.
 - `linker_script` with `use_cc_common_link` stays unsupported; Corentin explicitly
   does not need it. Retain the corresponding restriction when enabling item 8.
-- The rejected patch also implemented linker scripts for Zig linking. Deferring
-  that extension is proposed; do not reintroduce it without discussion.
+- Linker scripts also remain unsupported with direct Zig linking. This extension
+  is deferred; do not reintroduce it without discussion.
 - Documentation and standalone translation remain ordinary actions. An ordinary
   non-incremental worker mode, wider SDK/platform support, full path mapping and
   remote execution/cache eligibility are outside this rewrite's agreed scope.
 - Items 1 and 2 passed the focused checks. After item 2, all 16 focused test
   targets passed, a real persistent-worker build produced an x86-64 Linux ELF,
   and its action metadata contained only `command`, `name`, and `output_kind`.
-- Item 3 remains approved and implemented. The request to minimize flag knowledge
-  adds a final simplification phase; it does not withdraw this fix. Reserved
-  switches remain rejected, while their use as option values is allowed.
+- Item 3 was approved and implemented. Corentin's item 13 decision on 2026-10-31
+  supersedes its validation policy: remove reserved-option policing and operand
+  parsing. The evidence below records the earlier behavior, not a current promise.
 - Item 3 evidence: the new unit regression failed before the fix, then all 16
   focused targets passed. A Linux comparison ran exactly the same selected test
   with direct Zig, the persistent worker and one-shot execution; the old worker
   rejected it. Actual reserved switches still failed without creating their
   requested destinations. The generated worker action's argv/environment stayed
   unchanged, with ordinary cache/SDK flags absent. Read-only review found no issues.
-- **Resume at agreement on item 9b.** Item 8a and the emission-description cleanup
-  are committed as `9dbe090`. Corentin declined the proposed `global_args`
-  cleanup: keep the existing construction. Item 8b is committed as `82d1444`.
+- **Agreed rewrite and final verification complete.** Item 8a and the
+  emission-description cleanup are committed as `9dbe090`. Corentin declined the
+  proposed `global_args` cleanup: keep the existing construction. Item 8b is
+  committed as `82d1444`.
   Item 9a is committed as `87ae4ac`. Corentin explicitly approved allowing direct
   native dependencies with a warning, accepting Zig's refresh limitation without
-  a restart workaround. Item 10 was reviewed and approved for this commit;
-  no push was requested. Direct Zig `linkopts` remains a separate small change
-  in item 9b, pending implementation agreement.
-  The native-update
-  investigation below establishes the reason for implementing `cc_common.link`
-  before native inputs consumed by Zig.
-  Items 4 and 5a are
+  a restart workaround. Item 10 is committed as `aaa424a`.
+  Direct Zig `linkopts` in item 9b is committed as `a530777`. Corentin deferred
+  item 11 and requested documenting the `csrcs`/`copts` limitation. Item 12 is
+  deferred until the general input-declaration issue is addressed separately; it is not a
+  prerequisite for incremental support. Item 13's normal-use simplification and
+  accepted-pitfall comments are committed as `c5084db`. Corentin authorized the
+  final documentation reconciliation, integrated checks and branch review;
+  their results are recorded below. No push was requested.
+  The native-update investigation below establishes the reason for implementing
+  `cc_common.link` before native inputs consumed by Zig. Items 4 and 5a are
   deferred; item 5b needs no compiler workaround. There is no separate item 5c.
   Later feature extensions remain unapproved. Keeping an edge case unsupported
   is a valid outcome if explicitly agreed and recorded here.
@@ -645,6 +649,186 @@ Evidence: `/tmp/rules-zig-native-warning-evidence-20261030` locally and
 `native-warning-evidence` in the existing item 8b remote fixture. Narrow read-only
 review found no issues. Corentin reviewed and approved this change for commit.
 
+### Item 9b: linker options with direct Zig linking (2026-10-31)
+
+Corentin approved removing the direct `linkopts` rejection while retaining the
+existing argument construction, static-library behavior, worker validation and
+file ownership. The production change deletes only that two-line gate.
+`zig_binary`, `zig_test` and `zig_shared_library` now pass these options to the
+worker in their existing order. Static libraries still ignore them, just as in
+ordinary compilation. The session key already includes compiler arguments, so
+changing options selects a different compiler session. No worker, provider,
+flag-parser, location-expansion or input-declaration changes were needed.
+
+- The new direct-link analysis regression failed at the original gate before
+  its removal. All 55 focused incremental, separate-link, output and translation
+  analysis tests then passed. Remote execution had no Darwin/arm64 executor;
+  these tests ran locally with `--config=remote-cache`.
+- Linux Bazel 9.2.0, Zig 0.17.0 LLVM+LLD, hardened sandboxed worker: a source edit
+  changed the executable's result while retaining compiler PID 700374. Reversing
+  `-z now -z lazy` to `-z lazy -z now` selected PID 702100 and enabled ELF NOW
+  binding. Reversing back removed NOW binding in binaries, tests and shared
+  libraries. Tests passed and the shared library's exported function returned
+  the updated value.
+- Action inspection confirmed ordered options in all three linking worker
+  actions and no C/C++ link. The static-library action key and archive bytes
+  stayed unchanged when only `linkopts` changed.
+- At this checkpoint, a worker-owned `--cache-dir` passed through `linkopts`
+  failed with the ownership diagnostic, subsequently removed by item 13.
+  Ordinary compilation also passed with the same final options. The qualification
+  Bazel server was shut down afterward.
+- Narrow read-only review found no issues. Corentin approved the change, committed
+  as `a530777`. Files referenced only through raw options remain item 12;
+  this change does not add them to the native-input warning.
+
+Evidence: `/tmp/rules-zig-9b-evidence-20261031` locally and
+`direct-linkopts-evidence` in the existing item 8b remote fixture. The standalone
+qualification script is preserved with its action graphs and artifact reports.
+
+### Item 11: defer C source compilation inside Zig (2026-10-31)
+
+Corentin chose to defer incremental support for `csrcs` and `copts`. Keep the
+existing explicit rejection, including with `use_cc_common_link`: that setting
+separates the final link but still leaves `csrcs` compilation to Zig. C/C++
+libraries supplied through `deps` remain supported within the existing documented
+limits; ordinary compilation remains available for targets using `csrcs`/`copts`.
+
+No implementation or compiler qualification is included in this deferral. If a
+concrete use case warrants revisiting it, first qualify C source edits, included
+header edits and error recovery in retained Zig sessions, then agree on the
+minimal argument handling and file ownership. The earlier instruction to extend
+a restart policy is withdrawn; no restart machinery or provider change is
+preselected. The user-facing incremental documentation records the limitation.
+
+### Item 12: defer the general file-input API issue (2026-10-31)
+
+Corentin chose to defer this item until the general ruleset issue is addressed.
+A file consumed through an option but listed only in runtime `data` is already
+incorrectly declared for ordinary compilation. Repairing that usage is not a
+prerequisite for incremental compilation: the worker continues to stage the
+action's declared inputs, without discovering undeclared files from arguments.
+
+The separate issue draft is titled "Separate compiler and linker file inputs
+from runtime data" on `hermeticbuild/rules_zig`. It was prepared in Chrome and
+left unsubmitted for Corentin; publication has not been verified. The proposed
+API direction reuses `extra_srcs` for compiler inputs and considers
+`additional_linker_inputs` for final linking, with action ownership matching
+direct Zig or separate C/C++ linking. Neither proposal is approved for
+implementation in this incremental effort. Do not reintroduce the rejected
+`_location_inputs` scanner or broaden providers as worker plumbing.
+
+### Item 13: minimize compiler-option knowledge (2026-10-31)
+
+Corentin explicitly chose normal compiler usage over exhaustive validation of
+raw options. This supersedes item 3's reserved-option and operand-aware policy,
+including the earlier acceptance evidence that describes those checks.
+
+- Remove the reserved-option validator and the Zig option-arity table. Do not
+  reject arbitrary cache, emission, protocol, or library-mode overrides.
+- Pass semantic compiler arguments through unchanged and in order. The adapter
+  still supplies its own controls from the existing request metadata.
+- Keep the shared-library capability check: LLVM plus effective explicit LLD,
+  with the last backend switch winning. Keep the deferred `--version` diagnostic.
+  Use a simple token scan; flag-shaped operands are outside this check's contract.
+- Remove the raw `-cflags`/`-rcflags` guard with the parser. This does not enable
+  `csrcs` or `copts`: their existing Starlark restriction remains in item 11.
+- Preserve request framing, declared-input checks, staging, session identity,
+  compiler lifecycle, and output publication. No provider or public API change.
+
+Acceptance: worker unit tests cover normal backend selections and overrides;
+real Linux builds retain compiler reuse after source edits, publish current
+artifacts, reject unsupported shared-library configurations, and use the same
+request through one-shot execution. Remove tests for the discarded raw-option
+policing; do not replace them with pathological argument cases.
+
+Verification on 2026-10-31:
+
+- `bazel test --config=remote-cache //zig/tests:incremental_worker_test` passed.
+  The integration runner built with the same config; Zig 0.17 formatting checks
+  passed for both modified Zig files.
+- The disposable Linux fixture used Bazel 9.2.0, Zig 0.17.0, direct Zig linking,
+  worker sandboxing and worker sandbox hardening. An executable returned `2`, then
+  `3` after a source edit with compiler PID `756789` unchanged. One-shot sandboxed
+  execution returned `4` after the next edit.
+- Binary, test, shared-library and static-library builds passed. The shared
+  library exported the current value `43`; archive members were present. The
+  action graph retained the ordered linker arguments for binary/test/shared
+  actions and omitted them for the static library, as before.
+- Shared configurations ending in `-fno-llvm`, `-fno-lld`, or `--version 1.2.3`
+  failed with the intended capability diagnostic. Restoring the supported shared
+  configuration succeeded. This focused check preceded the full integration
+  rerun recorded in the final verification section below.
+- Narrow read-only review found two obsolete operand-aware integration cases and
+  two stale plan passages; these were corrected. No production-code issue found.
+
+The standalone qualification script is `/tmp/rules-zig-13-qualify.py`; its logs,
+action graph and compiler-process records are in
+`/tmp/rules-zig-13-evidence-20261031`. The Linux copy remains under
+`/home/corentin/.cache/rules-zig-test-object-20261030/flag-simplification-evidence`.
+The disposable fixture's sources were restored and its Bazel server shut down.
+Corentin approved the change and the four comments documenting accepted pitfalls:
+flag-shaped operands, user response files, conflicting adapter controls, and
+trusted SDK/cache/build-root prefixes. Committed as `c5084db`; no push requested.
+
+### Final verification and review (2026-10-31)
+
+The agreed rewrite is complete within the accepted scope. The remaining feature
+items are explicit deferrals, not unfinished implementation. No push was
+authorized or performed during this closeout.
+
+- On macOS, `bazel test --config=remote-cache
+  --test_tag_filters=-requires-network //zig/tests/... //docs/...
+  //util:buildifier.check --test_output=errors --test_summary=short` passed:
+  all 224 tests and all 337 requested targets built successfully. Existing test
+  results were reused where valid. The repaired native archive consumer also
+  executed successfully. Zig formatting and Git whitespace checks passed.
+- The first full regression exposed two small issues, fixed independently:
+  `b093612` scopes a buildifier suppression to the intentionally emitted native
+  compiler warning; `bcee626` makes the native archive consumer call the archive's
+  exported Zig function, instead of incorrectly expecting C bindings to be
+  reexported through the Zig module. The latter failed compilation before the
+  fixture correction, then built and ran successfully. No provider change.
+- Linux Bazel 9.2.0 and Zig 0.17.0 ran all four real integration cases in
+  `//zig/tests/integration_tests:incremental_tests`, passing in 349.4 seconds.
+  The suite covers unsandboxed, sandboxed, hardened and sibling-repository
+  layouts; current source/generated/external/embed inputs; retained compilers;
+  independent published artifacts; bounded sessions and eviction; tests and
+  libraries; requested outputs; one-shot execution; and unsupported configurations.
+  Hardened modes checked distinct mount namespaces and write restrictions.
+- A separate hardened hermetic-llvm 0.8.24 / LLVM+LLD test-object qualification
+  passed with `use_cc_common_link`. Native-only edits changed the test result
+  without invoking Zig or changing object/archive/auxiliary-output hashes.
+  Zig edits and compiler-error recovery retained PID 823647. Native link-error
+  recovery, no-op builds, saved earlier executable, one-shot execution and
+  ordinary compilation also passed their expected outcomes.
+- Its action graph confirms `ZigIncrementalCompile` publishes the object and
+  auxiliary outputs; ordinary `ZigBuildLib` packages the archive with SDK/cache
+  arguments; hermetic-llvm `CppLink` alone consumes the native object. The first
+  two actions contain no native input, and packaging advertises no worker support.
+- Two narrow read-only reviews covered the full worker and Starlark branch diff
+  from `d692048`, including bootstrap, ordinary compilation, input ownership,
+  lifecycle and publication. No actionable findings. The two closeout fixes
+  also received a narrow review without findings.
+
+Linux used an archive of `c5084db`, containing all final production behavior;
+the later commits above change only a lint comment and an unrelated regression
+fixture. The existing AppArmor launcher was used without policy changes. Remote
+cache authentication was unavailable, so the outer run disabled remote caching.
+The host's shared `/tmp/zig-cache` belonged to another user: both outer and nested
+Bazel used a task-owned `RULES_ZIG_CACHE_PREFIX`, with the nested value supplied
+through the existing `.bazelrc.ic.user` test hook in the disposable source export.
+Neither adjustment changes worker-private cache ownership or repository defaults.
+
+Evidence on `9985wx-5090x4`: the integration log is under
+`/home/corentin/.cache/rules-zig-closeout-20261031-output/execroot/_main/bazel-out/k8-fastbuild/testlogs/zig/tests/integration_tests/incremental_tests/`;
+the separate-link script, `qualification.json`, `actions.json` and phase logs
+are under `/home/corentin/.cache/rules-zig-closeout-cc-20261031/`.
+Local copies of the separate-link records are
+`/tmp/rules-zig-closeout-cc-20261031.json` and
+`/tmp/rules-zig-closeout-cc-actions-20261031.json`.
+The integration log is copied to
+`/tmp/rules-zig-closeout-integration-20261031.log`.
+
 ## Contract
 
 A successful action publishes independent artifacts for its current declared
@@ -669,9 +853,9 @@ inputs, but does not repair Zig's retained state.
   qualified with LLVM+LLD and hermetic-llvm; self-hosted `.eh_frame` failures remain
   upstream limitations, as documented above.
 - Singleplex JSON worker, one compiler session by default, optional bounded LRU.
-- Adapter-owned protocol, cache, SDK, naming, and output controls are reserved.
-  Conflicting `zigopts` fail clearly; arbitrary invalid compiler usage is outside
-  the contract. Semantic compiler arguments retain their original order.
+- The adapter supplies protocol, cache, SDK, naming, and output controls from
+  explicit metadata. Conflicting raw options are outside the supported interface
+  and are not policed. Semantic compiler arguments retain their original order.
 - Native dependencies already handled through CcInfo are accepted in direct Zig
   linking, with the warning and compiler limitations above. Native changes do
   not trigger an adapter-controlled restart.
@@ -695,10 +879,10 @@ inputs, but does not repair Zig's retained state.
    per action, retain normal compile-error recovery, and reset unknown or broken
    compiler state.
 3. **Integration and observable behavior.** Test the real public rule and generated
-   actions, opt-out behavior, reserved flags, bootstrap, configuration replacement,
-   source and embed edits, missing inputs, immutable publication, compiler restart,
-   and one-shot execution. Inspect artifacts and source/debug paths; correct path
-   mapping or bound supported configurations where needed.
+   actions, opt-out behavior, supported configurations, bootstrap, configuration
+   replacement, source and embed edits, missing inputs, immutable publication,
+   compiler restart, and one-shot execution. Inspect artifacts and source/debug
+   paths; correct path mapping or bound supported configurations where needed.
 4. **Sandbox matrix.** On Linux, test unsandboxed workers, `--worker_sandboxing`,
    and `--worker_sandboxing --experimental_worker_sandbox_hardening`. Establish
    actual hardening, compiler inheritance, warm reuse through cleanup, write
@@ -713,15 +897,19 @@ inputs, but does not repair Zig's retained state.
 Regression cases must demonstrate the old boundary's failure where practical and
 the new observable result. Passing builds alone are insufficient: execute edited
 programs, inspect emitted actions, verify session reuse, compare saved outputs,
-and inspect actual sandbox processes. Retained-state loss and configuration changes
-must never yield stale successes. Metadata-preserving tests explicitly provide
+and inspect actual sandbox processes. The adapter's session management must not
+introduce stale successes; the accepted upstream compiler limitations remain
+documented separately. Metadata-preserving tests explicitly provide
 changed Bazel input digests; they cannot repair Bazel failing to detect an edit.
 
 ## Deferred, not prerequisites
 
 Multiplexing, target-affinity scheduling, remote worker locality, macOS and
-Windows, native dependencies, object pipelines, additional Zig
-protocol versions, and remote-cache eligibility. Measure representative multiple
+Windows targets, additional Zig protocol versions, and remote-cache eligibility.
+The rewrite also defers C source compilation inside Zig, versioned shared-library
+artifacts, linker scripts, and the general file-input API issue. Native
+dependencies, auxiliary outputs and the separate C/C++ link pipeline are
+implemented within the accepted scope above. Measure representative multiple
 target workloads before expanding session policy; synthetic results already
 justify implementing the narrow supported mode.
 
@@ -740,7 +928,8 @@ justify implementing the narrow supported mode.
   metadata, the output File, ordered compiler arguments, and prefixed input File
   records in one automatic parameter file. The final `--` frames the input list;
   prefixed paths cannot collide with the delimiter, and empty operands survive.
-  The adapter rejects reserved controls instead of interpreting or deleting them.
+  The original reserved-control validation is removed by item 13; arguments
+  continue to pass through unchanged.
   Singleplex JSON and one-shot execution consume this same contract.
 - **Portable bootstrap.** The adapter is an ordinary `zig_binary` dependency in
   `config.exec("zig")`. A private transition disables incremental compilation;
@@ -775,10 +964,14 @@ justify implementing the narrow supported mode.
 - **Artifact limits remain explicit.** No remote execution/cache admission, no
   byte-equivalence claim across histories, and no DWARF rewriting. Both ordinary
   sandboxed Zig and incremental actions were observed embedding temporary source
-  paths when unstripped. Native macOS/Windows targets, native dependencies, extra
-  outputs, and additional protocol versions remain excluded.
+  paths when unstripped. Native macOS/Windows targets and additional protocol
+  versions remain excluded. Native dependencies and auxiliary outputs are now
+  supported within the documented compiler limitations.
 
 ## Recorded checks
+
+This section records earlier checkpoints. The rewrite decisions and final
+verification above supersede their scope and option-validation policies.
 
 Linux verification used Bazel 9.2.0 and hermetic Zig 0.17.0. The Linux checkout
 was a file snapshot of this branch; the original prototype snapshot was retained
@@ -863,11 +1056,11 @@ command/output-kind metadata rather than inferring the kind from compiler flags.
 The adapter maps that metadata to server arguments and known Linux artifact names.
 No semantic arguments are stripped or rebuilt.
 
-The shared-library backend check is read-only and uses Zig 0.17's option arities
-to skip operands, then checks the last LLVM and LLD switches. Native flag groups
-and versioned shared-library names are explicitly rejected. The option-arity table
-is a compatibility obligation when admitting another SDK protocol version; it is
-not a general Zig command-line parser. Automatically forcing LLVM/LLD would hide
+The initial shared-library backend check used Zig 0.17's option arities to skip
+operands, then checked the last LLVM and LLD switches. It rejected native flag
+groups and versioned shared-library names. Item 13 supersedes that design: remove
+the option-arity table and native flag-group guard, retaining a simple backend
+scan and the versioned-name diagnostic. Automatically forcing LLVM/LLD would hide
 unsupported user choices, while accepting the self-hosted path produced an unusable
 library in qualification. Supporting versioned names cleanly should use explicit
 compiler artifact metadata; silently guessing another cache file is excluded.

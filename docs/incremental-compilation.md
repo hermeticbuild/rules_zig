@@ -38,6 +38,11 @@ sources. Header edits rerun translation and update those sources in the retained
 compiler session. Native dependencies can use direct Zig linking with the
 compiler limitations below, or separate C/C++ linking.
 
+C source compilation inside Zig through `csrcs` or `copts` is not supported in
+incremental mode, including with `use_cc_common_link`. Compile C/C++ sources in
+`cc_library` dependencies instead, or disable incremental compilation for targets
+that use these attributes.
+
 Binaries, test executables, and static libraries support both the self-hosted and
 LLVM backends. Shared libraries linked by Zig require LLVM and explicit effective
 `-flld`. Select LLVM with `-fllvm` or by requesting LLVM IR/bitcode output:
@@ -204,6 +209,10 @@ maintain a general Zig argument parser.
 The adapter uses a single compiler response file to preserve argument ordering.
 Zig 0.17 cannot represent apostrophes in that format; compilations containing them
 use direct arguments and are subject to the operating system's argv size limit.
+User-supplied response files are unsupported: their options are read only at
+compiler startup, so changing their contents can leave a retained compiler using
+old options even if the files are declared inputs. Nested response files can
+also discard remaining outer arguments.
 
 ## Execution and retained state
 
