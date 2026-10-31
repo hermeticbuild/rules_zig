@@ -110,6 +110,28 @@ minimal_files = integration_test_utils.glob_workspace_files("minimal") + [
 ]
 
 zig_test(
+    name = "incremental_tests_runner",
+    main = "incremental_tests_runner.zig",
+    tags = ["manual"],
+    deps = [":integration_testing"],
+)
+
+bazel_integration_test(
+    name = "incremental_tests",
+    size = "large",
+    timeout = "long",
+    bazel_version = bazel_binaries.versions.current,
+    tags = ["requires-network"] + integration_test_utils.DEFAULT_INTEGRATION_TEST_TAGS,
+    target_compatible_with = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
+    test_runner = ":incremental_tests_runner",
+    workspace_files = minimal_files,
+    workspace_path = "minimal",
+)
+
+zig_test(
     name = "minimal_tests_runner",
     main = "minimal_tests_runner.zig",
     tags = ["manual"],
@@ -186,6 +208,7 @@ test_suite(
         "bzlmod_test",
         bazel_binaries.versions.all,
     ) + [
+        ":incremental_tests",
         ":packages_test",
         ":zig_version_tests",
     ],

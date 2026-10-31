@@ -1,6 +1,124 @@
-load("@rules_zig//zig:defs.bzl", "zig_test")
+load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_library", "zig_shared_library", "zig_static_library", "zig_test")
+load(":incremental_generated.bzl", "incremental_generated")
+
+exports_files(["incremental_external.zig"])
+
+platform(
+    name = "aarch64_linux",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:aarch64",
+    ],
+)
 
 zig_test(
     name = "test",
     main = "test.zig",
+)
+
+zig_library(
+    name = "incremental_module",
+    srcs = ["incremental_leaf.zig"],
+    extra_srcs = ["incremental_message.txt"],
+    main = "incremental_module.zig",
+)
+
+zig_binary(
+    name = "incremental",
+    main = "incremental_main.zig",
+    tags = ["manual"],
+    deps = [
+        ":external_module",
+        ":generated_module",
+        ":incremental_module",
+    ],
+)
+
+zig_binary(
+    name = "incremental_generator",
+    main = "incremental_generator.zig",
+    tags = ["manual"],
+)
+
+incremental_generated(
+    name = "generated",
+    source = "incremental_generated.txt",
+)
+
+filegroup(
+    name = "generated_assets",
+    srcs = [":generated"],
+    output_group = "assets",
+)
+
+zig_library(
+    name = "generated_module",
+    extra_srcs = [":generated_assets"],
+    main = ":generated",
+)
+
+zig_library(
+    name = "external_module",
+    main = "@incremental_dep//:value.zig",
+)
+
+zig_test(
+    name = "incremental_test",
+    srcs = ["incremental_value.zig"],
+    main = "incremental_test.zig",
+    tags = ["manual"],
+)
+
+zig_static_library(
+    name = "incremental_static",
+    srcs = ["incremental_value.zig"],
+    main = "incremental_library.zig",
+    tags = ["manual"],
+)
+
+zig_shared_library(
+    name = "incremental_shared",
+    srcs = ["incremental_value.zig"],
+    main = "incremental_library.zig",
+    shared_lib_name = "libincremental_custom.so",
+    tags = ["manual"],
+)
+
+zig_binary(
+    name = "binary_outputs",
+    srcs = ["incremental_value.zig"],
+    emit_asm = True,
+    emit_llvm_bc = True,
+    emit_llvm_ir = True,
+    main = "incremental_output_main.zig",
+    tags = ["manual"],
+)
+
+zig_test(
+    name = "test_outputs",
+    srcs = ["incremental_value.zig"],
+    emit_llvm_bc = True,
+    main = "incremental_test.zig",
+    tags = ["manual"],
+)
+
+zig_static_library(
+    name = "static_outputs",
+    srcs = ["incremental_value.zig"],
+    emit_asm = True,
+    emit_bin = False,
+    emit_llvm_bc = True,
+    emit_llvm_ir = True,
+    main = "incremental_library.zig",
+    tags = ["manual"],
+)
+
+zig_shared_library(
+    name = "shared_outputs",
+    srcs = ["incremental_value.zig"],
+    emit_llvm_ir = True,
+    main = "incremental_library.zig",
+    shared_lib_name = "liboutputs_custom.so",
+    tags = ["manual"],
+    zigopts = ["-flld"],
 )

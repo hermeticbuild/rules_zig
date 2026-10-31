@@ -33,6 +33,7 @@ bzl_library(
         ":filetypes",
         ":linker_script",
         ":location_expansion",
+        ":semver",
         ":translate_c",
         ":zig_cache",
         ":zig_lib_dir",

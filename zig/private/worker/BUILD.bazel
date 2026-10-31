@@ -1,0 +1,57 @@
+load("@bazel_skylib//:bzl_library.bzl", "bzl_library")
+load("//zig:defs.bzl", "zig_binary", "zig_test")
+load(":non_incremental_binary.bzl", "non_incremental_binary")
+
+config_setting(
+    name = "incremental_enabled",
+    flag_values = {"//zig/settings:incremental": "true"},
+)
+
+# The disabled configuration has no dependency on the worker binary. This cuts
+# the cycle during analysis, before any compilation actions are registered.
+alias(
+    name = "tool",
+    actual = select({
+        "incremental_enabled": "configured_worker",
+        "//conditions:default": "disabled",
+    }),
+    visibility = ["//zig:__subpackages__"],
+)
+
+filegroup(name = "disabled")
+
+non_incremental_binary(
+    name = "configured_worker",
+    actual = "worker",
+    tags = ["manual"],
+)
+
+zig_binary(
+    name = "worker",
+    main = "worker.zig",
+    tags = ["manual"],
+    visibility = ["//zig:__subpackages__"],
+    zigopts = ["-mcpu=baseline"],
+)
+
+bzl_library(
+    name = "non_incremental_binary",
+    srcs = ["non_incremental_binary.bzl"],
+)
+
+zig_test(
+    name = "worker_test",
+    size = "small",
+    main = "worker.zig",
+    visibility = ["//zig/tests:__pkg__"],
+)
+
+filegroup(
+    name = "all_files",
+    srcs = [
+        "BUILD.bazel",
+        "non_incremental_binary.bzl",
+        "worker.zig",
+    ],
+    visibility = ["//zig/private:__pkg__"],
+)
