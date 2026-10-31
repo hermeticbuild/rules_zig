@@ -75,7 +75,7 @@ zig_static_library(
 
 zig_binary(
     name = "native_archive_binary",
-    main = "bindings.zig",
+    main = "native_archive_main.zig",
     visibility = ["//zig/tests:__pkg__"],
     deps = ["native_archive"],
 )
