@@ -83,27 +83,13 @@ const Compilation = struct {
         return result;
     }
 
-    fn compilerArgs(self: Compilation, diagnostics: *Io.Writer) ![]const []const u8 {
-        var i: usize = 0;
-        while (i < self.arguments.len) : (i += 1) {
-            const arg = self.arguments[i];
-            if (reserved(arg) or (self.output_kind != .executable and (std.mem.eql(u8, arg, "-dynamic") or std.mem.eql(u8, arg, "-static")))) {
-                try diagnostics.print("zig incremental compilation: option {s} is owned by rules_zig\n", .{arg});
-                return error.ConflictingCompilerOption;
-            }
-            // Check the switch before skipping its value: worker-owned controls
-            // must still fail if they reach the request.
-            if (optionTakesValue(arg)) {
-                i += 1;
-            }
-        }
+    fn checkConfiguration(self: Compilation, diagnostics: *Io.Writer) !void {
         if (self.output_kind == .shared_library) {
             const emits_llvm = for (self.outputs) |output| {
                 if (output.kind == .llvm_ir or output.kind == .llvm_bc) break true;
             } else false;
             try checkSharedLibraryArgs(self.arguments, emits_llvm, diagnostics);
         }
-        return self.arguments;
     }
 
     fn inputs(self: Compilation, a: Allocator, supplied: []const Input) ![]const Input {
@@ -137,20 +123,13 @@ const Compilation = struct {
 fn checkSharedLibraryArgs(arguments: []const []const u8, emits_llvm: bool, diagnostics: *Io.Writer) !void {
     var llvm = emits_llvm;
     var lld = false;
-    var i: usize = 0;
-    while (i < arguments.len) : (i += 1) {
-        const arg = arguments[i];
+    // This is a capability check, not a Zig argument parser. Flag-shaped
+    // operands can cause false acceptance or rejection; that ambiguity is
+    // accepted to avoid maintaining Zig's option-arity table.
+    for (arguments) |arg| {
         if (std.mem.eql(u8, arg, "--version")) {
             try diagnostics.writeAll("zig incremental compilation: versioned shared-library artifacts (--version) are unsupported\n");
             return error.UnsupportedSharedLibraryVersion;
-        }
-        if (std.mem.eql(u8, arg, "-cflags") or std.mem.eql(u8, arg, "-rcflags")) {
-            try diagnostics.writeAll("zig incremental compilation: native compiler flag groups are unsupported\n");
-            return error.UnsupportedNativeCompilerFlags;
-        }
-        if (optionTakesValue(arg)) {
-            i += 1;
-            continue;
         }
         // These global switches use their last occurrence, as in Zig itself.
         if (std.mem.eql(u8, arg, "-fllvm")) llvm = true;
@@ -162,33 +141,6 @@ fn checkSharedLibraryArgs(arguments: []const []const u8, emits_llvm: bool, diagn
         try diagnostics.writeAll("zig incremental compilation: shared libraries require LLVM (-fllvm or LLVM output) and explicit -flld; the Zig 0.17 self-hosted shared-library configuration is unsupported\n");
         return error.UnsupportedSharedLibraryBackend;
     }
-}
-
-fn optionTakesValue(arg: []const u8) bool {
-    // Zig 0.17 src/main.zig's build-command option arity. This read-only
-    // capability check must skip operands (even ones named '-flld'). It
-    // neither constructs nor changes the compiler's semantic argv.
-    for ([_][]const u8{
-        "--dep",              "--error-limit",          "-rcincludes",       "--color",
-        "--subsystem",        "-O",                     "--force_undefined", "--stack",
-        "--image-base",       "--name",                 "-rpath",            "--library-directory",
-        "-L",                 "-F",                     "-framework",        "-weak_framework",
-        "-needed_framework",  "-install_name",          "-pagezero_size",    "-headerpad",
-        "-T",                 "--script",               "-version-script",   "--version-script",
-        "--library",          "-l",                     "--needed-library",  "-needed-l",
-        "-needed_library",    "-weak_library",          "-weak-l",           "-D",
-        "-I",                 "-isystem",               "-iwithsysroot",     "-idirafter",
-        "-iframework",        "-iframeworkwithsysroot", "-target",           "-mcpu",
-        "-mcmodel",           "--dynamic-linker",       "--sysroot",         "--libc",
-        "--test-filter",      "--test-runner",          "--test-cmd",        "--cache-dir",
-        "--global-cache-dir", "--zig-lib-dir",          "--build-root",      "--debug-log",
-        "--listen",           "--entitlements",         "-z",                "-x",
-    }) |option| {
-        if (std.mem.eql(u8, arg, option)) {
-            return true;
-        }
-    }
-    return false;
 }
 
 test "request framing preserves empty operands and delimiter-shaped names" {
@@ -217,53 +169,16 @@ test "request framing preserves empty operands and delimiter-shaped names" {
     try std.testing.expectEqualStrings("", inputs[1].digest);
 }
 
-test "shared backend checks distinguish switches from option operands" {
+test "shared libraries require LLVM and effective LLD selection" {
     var diagnostics: Io.Writer.Allocating = .init(std.testing.allocator);
     defer diagnostics.deinit();
-    try std.testing.expectError(error.UnsupportedSharedLibraryBackend, checkSharedLibraryArgs(&.{ "-fllvm", "-fno-lld", "-rpath", "-flld" }, false, &diagnostics.writer));
-    try checkSharedLibraryArgs(&.{ "-fllvm", "-flld", "-rpath", "-fno-llvm" }, false, &diagnostics.writer);
+    try std.testing.expectError(error.UnsupportedSharedLibraryBackend, checkSharedLibraryArgs(&.{}, false, &diagnostics.writer));
+    try std.testing.expectError(error.UnsupportedSharedLibraryBackend, checkSharedLibraryArgs(&.{ "-fllvm", "-flld", "-fno-lld" }, false, &diagnostics.writer));
+    try std.testing.expectError(error.UnsupportedSharedLibraryBackend, checkSharedLibraryArgs(&.{ "-fllvm", "-flld", "-fno-llvm" }, false, &diagnostics.writer));
     try checkSharedLibraryArgs(&.{ "-fno-llvm", "-fno-lld", "-fllvm", "-flld" }, false, &diagnostics.writer);
     try std.testing.expectError(error.UnsupportedSharedLibraryVersion, checkSharedLibraryArgs(&.{ "-fllvm", "-flld", "--version", "1.2.3" }, false, &diagnostics.writer));
     try checkSharedLibraryArgs(&.{"-flld"}, true, &diagnostics.writer);
     try std.testing.expectError(error.UnsupportedSharedLibraryBackend, checkSharedLibraryArgs(&.{ "-flld", "-fno-llvm" }, true, &diagnostics.writer));
-}
-
-test "reserved controls are rejected as switches, not option values" {
-    var diagnostics: Io.Writer.Allocating = .init(std.testing.allocator);
-    defer diagnostics.deinit();
-    var compilation: Compilation = .{
-        .command = "test",
-        .output_kind = .executable,
-        .name = "root",
-        .outputs = &.{.{ .kind = .bin, .path = "out" }},
-        .arguments = &.{ "--test-filter", "--cache-dir", "-Mroot=main.zig" },
-        .input_paths = &.{"main.zig"},
-    };
-    try std.testing.expectEqualSlices([]const u8, compilation.arguments, try compilation.compilerArgs(&diagnostics.writer));
-
-    const rejected = [_][]const []const u8{
-        &.{ "--cache-dir", "cache" },
-        &.{"--cache-dir=cache"},
-        &.{ "--global-cache-dir", "cache" },
-        &.{ "--zig-lib-dir", "lib" },
-        &.{"--listen=-"},
-        &.{"-femit-bin=out"},
-        &.{ "--test-filter", "--cache-dir", "--cache-dir", "cache" },
-        &.{ "--test-filter", "", "--cache-dir", "cache" },
-        &.{ "-OReleaseFast", "--cache-dir", "cache" },
-    };
-    for (rejected) |arguments| {
-        compilation.arguments = arguments;
-        try std.testing.expectError(error.ConflictingCompilerOption, compilation.compilerArgs(&diagnostics.writer));
-    }
-}
-
-fn reserved(arg: []const u8) bool {
-    if (std.mem.startsWith(u8, arg, "@") or std.mem.startsWith(u8, arg, "-femit-") or std.mem.startsWith(u8, arg, "-fno-emit-")) return true;
-    inline for (.{ "--listen", "--cache-dir", "--global-cache-dir", "--zig-lib-dir", "--build-root", "--name", "-fincremental", "-fno-incremental", "--debug-incremental", "--show-builtin" }) |flag| {
-        if (std.mem.eql(u8, arg, flag) or (std.mem.startsWith(u8, arg, flag) and arg.len > flag.len and arg[flag.len] == '=')) return true;
-    }
-    return false;
 }
 
 fn readLines(a: Allocator, io: Io, path: []const u8, result: *std.array_list.Managed([]const u8)) !void {
@@ -274,6 +189,10 @@ fn readLines(a: Allocator, io: Io, path: []const u8, result: *std.array_list.Man
     while (lines.next()) |line| try result.append(line);
 }
 
+// User-supplied response files are unsupported. Zig reads their options
+// only at startup, so changed contents would not update a reused compiler.
+// Nested response files can also discard remaining outer arguments.
+// Our generated response file is derived entirely from the session-key argv.
 fn appendResponseFile(argv: *std.array_list.Managed([]const u8), io: Io, root: []const u8, arguments: []const []const u8) !void {
     if (arguments.len == 0) return;
     const a = argv.allocator;
@@ -442,6 +361,10 @@ const Worker = struct {
         const direct = for (arguments) |arg| {
             if (std.mem.findScalar(u8, arg, '\'') != null) break true;
         } else false;
+        // Raw arguments pass through unchanged. They must preserve the adapter's
+        // protocol, incremental mode, SDK/cache locations, and output metadata.
+        // Conflicting overrides are not validated: they can fail publication,
+        // break the protocol, or hang when the compiler stops speaking on stdio.
         if (direct) try argv.appendSlice(arguments) else try appendResponseFile(&argv, self.io, root, arguments);
         const stderr = try Dir.cwd().createFile(self.io, try std.fs.path.join(a, &.{ root, "stderr" }), .{ .read = true });
         errdefer stderr.close(self.io);
@@ -491,7 +414,8 @@ const Worker = struct {
         if (request.requestId != 0 or request.cancel or request.sandboxDir.len != 0)
             return error.OnlySingleplexSupported;
         const compilation = try Compilation.parse(a, request.arguments);
-        const arguments = try compilation.compilerArgs(diagnostics);
+        try compilation.checkConfiguration(diagnostics);
+        const arguments = compilation.arguments;
         const inputs = try compilation.inputs(a, request.inputs);
         const key = try std.json.Stringify.valueAlloc(a, .{ compilation.command, compilation.output_kind, compilation.name, compilation.outputs, arguments }, .{});
         try self.selectSession(key);
@@ -542,6 +466,9 @@ const Worker = struct {
                         if (path.len == 0) continue;
                         // cwd inputs must belong to this request. SDK and
                         // compiler-generated cache inputs have other prefixes.
+                        // Trusting SDK/cache/build-root prefixes assumes their
+                        // locations follow the adapter's configuration. Raw
+                        // directory overrides can bypass declared-input checks.
                         if (path[0] == 1) {
                             // Zig can report sibling module roots as absolute
                             // paths. Normalize lexically against the staged cwd

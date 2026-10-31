@@ -51,9 +51,8 @@ bazel build --@rules_zig//zig/settings:incremental \
 The adapter checks that selection without rewriting arguments. An unsupported
 backend selection, including a later `-fno-llvm` or `-fno-lld`, fails before
 starting the compiler.
-Option operands are skipped when checking the backend, so an rpath named `-flld`
-does not enable LLD. Versioned shared libraries (`--version`) and native compiler
-flag groups remain unsupported and fail explicitly.
+This is a simple flag scan, not a full Zig argument parser. Versioned shared
+libraries (`--version`) remain unsupported and fail explicitly.
 
 Zig 0.17's self-hosted incremental shared-library output failed execution in
 qualification. LLVM still retains frontend state; LLD performs a full relink.
@@ -196,15 +195,11 @@ through a symlink. Ordinary builds have no dependency on the adapter binary.
 The adapter uses the normal execution-tool build settings and explicit baseline
 CPU features. Custom hermetic SDK toolchains need no worker-specific attributes.
 
-Adapter-owned controls are reserved: compiler server mode, incremental mode, SDK
-and cache directories, compilation naming, build root, response files, and output
-selection. For libraries and test objects, `-static` and `-dynamic` are also
-adapter-owned.
-Conflicting `zigopts` fail with a diagnostic. These checks distinguish switches
-from their values: `--test-filter --cache-dir` uses `--cache-dir` as filter text,
-while an actual `--cache-dir` switch remains rejected. Other compiler arguments
-retain their original order. Invalid options or options that undermine Bazel's
-declared input/output model are not a supported interface.
+The adapter supplies compiler-server, incremental, SDK, cache, naming, and output
+options from the action's metadata. User compiler arguments pass through unchanged
+and in their original order. Overriding adapter controls through raw options is
+outside the supported interface; the worker does not police such overrides or
+maintain a general Zig argument parser.
 
 The adapter uses a single compiler response file to preserve argument ordering.
 Zig 0.17 cannot represent apostrophes in that format; compilations containing them

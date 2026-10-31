@@ -134,12 +134,13 @@ depend recursively on itself.
 Pass explicit adapter metadata for compiler identity, compilation kind, and
 output mappings alongside the existing ordered compiler arguments. Preserve those
 arguments rather than reconstructing Zig's module graph or duplicating its option
-parser. Reserve adapter-owned protocol, incremental-mode, SDK, cache, and output
-controls; conflicting `zigopts` are unsupported and should produce a clear error,
-not be silently stripped. Do not accommodate combinations that violate the rule's
-declared action contract. Persistent and one-shot execution must consume the same
-request contract. Keep Bazel's ordinary action identity separate from the identity
-of a mutable incremental session.
+parser. Supply adapter-owned protocol, incremental-mode, SDK, cache, and output
+controls from that metadata. Conflicting raw options are outside the supported
+interface; do not strip them or maintain a general validator for them. Retain
+only the checks needed to identify supported compilation configurations.
+Persistent and one-shot execution must consume the same request contract.
+Keep Bazel's ordinary action identity separate from the identity of a mutable
+incremental session.
 
 Build bounded session management behind that adapter, independently of the
 public rules. Measure a per-target session pool before choosing multiplexing;

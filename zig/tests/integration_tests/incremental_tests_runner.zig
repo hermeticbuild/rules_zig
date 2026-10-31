@@ -260,11 +260,6 @@ test "incremental binaries retain current inputs and independent outputs in each
         try ctx.writeWorkspaceFile("incremental_leaf.zig", "pub const value: u32 = 46;\n");
         try expectBuild(ctx, mode, &.{ "--strategy=ZigIncrementalCompile=sandboxed", "--@rules_zig//zig/settings:zigopt=--dynamic-linker", "--@rules_zig//zig/settings:zigopt=" });
         try expectProgram(ctx, "bazel-bin/incremental", "46:world\n");
-
-        const conflict = try build(ctx, mode, &.{"--@rules_zig//zig/settings:zigopt=--cache-dir"});
-        defer conflict.deinit();
-        try std.testing.expect(!conflict.success);
-        try std.testing.expect(std.mem.find(u8, conflict.stderr, "owned by rules_zig") != null);
     }
     // Establish a live session, then verify Bazel teardown also ends its compiler.
     const last_mode = modes[modes.len - 1];
@@ -434,7 +429,6 @@ test "incremental tests and libraries preserve updates and reject unsupported co
         &.{"--@rules_zig//zig/settings:zigopt=-fllvm"},
         &.{ "--@rules_zig//zig/settings:zigopt=-fllvm", "--@rules_zig//zig/settings:zigopt=-flld", "--@rules_zig//zig/settings:zigopt=-fno-lld" },
         &.{ "--@rules_zig//zig/settings:zigopt=-fllvm", "--@rules_zig//zig/settings:zigopt=-flld", "--@rules_zig//zig/settings:zigopt=-fno-llvm" },
-        &.{ "--@rules_zig//zig/settings:zigopt=-fllvm", "--@rules_zig//zig/settings:zigopt=-fno-lld", "--@rules_zig//zig/settings:zigopt=-rpath", "--@rules_zig//zig/settings:zigopt=-flld" },
     };
     for (rejected) |backend| {
         const result = try buildTarget(ctx, modes[2], backend, "//:incremental_shared");
@@ -447,7 +441,6 @@ test "incremental tests and libraries preserve updates and reject unsupported co
     const versioned = try buildTarget(ctx, modes[2], &.{ "--@rules_zig//zig/settings:zigopt=-fllvm", "--@rules_zig//zig/settings:zigopt=-flld", "--@rules_zig//zig/settings:zigopt=--version", "--@rules_zig//zig/settings:zigopt=1.2.3" }, "//:incremental_shared");
     defer versioned.deinit();
     try expectFailure(versioned, "versioned shared-library artifacts (--version) are unsupported");
-    try expectTarget(ctx, modes[2], &.{ "--@rules_zig//zig/settings:zigopt=-fllvm", "--@rules_zig//zig/settings:zigopt=-flld", "--@rules_zig//zig/settings:zigopt=-rpath", "--@rules_zig//zig/settings:zigopt=-fno-llvm" }, "//:incremental_shared");
     try expectTarget(ctx, modes[2], llvm_backend, "//:incremental_shared");
     try ctx.writeWorkspaceFile("incremental_value.zig", "pub const value: u32 = 44;\n");
     const bazel_test = try ctx.exec_bazel(.{ .argv = &.{ "test", "--@rules_zig//zig/settings:incremental", "--worker_sandboxing", "--experimental_worker_sandbox_hardening", "--test_output=errors", "//:incremental_test" } });
