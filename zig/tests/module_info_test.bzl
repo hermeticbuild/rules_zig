@@ -268,9 +268,9 @@ def _write_simple_module_with_c_expected_specs_args_impl(ctx):
     expected.extend(["--dep", bazel_builtins["data"].dep])
     expected.extend(["'-M{name}={src}'".format(
         name = mods["data"].canonical_name,
-        src = mods["data"].module_context.main,
+        src = mods["data"].module_context.main.path,
     )])
-    expected.extend(["'-M{}={}'".format(mods["data_c_zig"].canonical_name, mods["data_c_zig"].module_context.main)])
+    expected.extend(["'-M{}={}'".format(mods["data_c_zig"].canonical_name, mods["data_c_zig"].module_context.main.path)])
     expected.extend(bazel_builtins["data"].mod_flags)
 
     ctx.actions.write(
@@ -313,12 +313,12 @@ def _write_simple_module_with_global_c_expected_specs_args_impl(ctx):
     expected.extend(_expected_cdeps_copts(mods["data_global_c"].module_context.compilation_context))
     expected.extend(["'-M{name}={src}'".format(
         name = mods["data_global_c"].canonical_name,
-        src = mods["data_global_c"].module_context.main,
+        src = mods["data_global_c"].module_context.main.path,
     )])
     expected.extend(bazel_builtins["data_global_c"].mod_flags)
     expected.extend(["'-M{name}={src}'".format(
         name = mods["data_c_zig"].canonical_name,
-        src = mods["data_c_zig"].module_context.main,
+        src = mods["data_c_zig"].module_context.main.path,
     )])
 
     ctx.actions.write(

@@ -129,9 +129,9 @@ def _zls_write_build_config_impl(ctx):
     output = {
         "dependencies": {},
         "modules": {
-            format_main_file(mod.main): {
+            format_main_file(mod.main.path): {
                 "import_table": {
-                    dep.name: format_main_file(modules.get(dep.canonical_name, "").main)
+                    dep.name: format_main_file(modules.get(dep.canonical_name, "").main.path)
                     for dep in mod.dependency_mappings
                 },
                 "c_macros": [],
