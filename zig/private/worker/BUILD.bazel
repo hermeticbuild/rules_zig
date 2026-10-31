@@ -50,8 +50,6 @@ filegroup(
     name = "all_files",
     srcs = [
         "BUILD.bazel",
-        "DESIGN.md",
-        "PLAN.md",
         "non_incremental_binary.bzl",
         "probe.py",
         "worker.zig",
