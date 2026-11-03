@@ -187,11 +187,11 @@ jobs:
           zigVersion: ${{ fromJSON(needs.matrix-prep-zigversion.outputs.zigversions)[0] }}
           targetPattern: "//..."
           tagFilters: ""
-          # No remote services while bringing up Windows.
-          remoteBes: false
+          # No remote cache or execution while bringing up Windows.
           remoteCache: false
           remoteExec: false
           bazelFlags: "--config=windows"
+          buildbuddyApiKey: ${{ secrets.BUILDBUDDY_API_KEY || '' }}
 
   # Zig documentation builds are separated to work around the following issue:
   # https://github.com/hermeticbuild/rules_zig/issues/273
