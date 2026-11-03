@@ -22,12 +22,20 @@ inputs:
   tagFilters:
     description: "The Bazel build and test tag filters."
     required: true
-  remoteEnabled:
-    description: "Whether to enable remote execution."
+  remoteBes:
+    description: "Whether to upload the build event stream to BuildBuddy."
+    default: "true"
+    required: false
+  remoteCache:
+    description: "Whether to enable the BuildBuddy remote cache."
+    default: "true"
+    required: false
+  remoteExec:
+    description: "Whether to enable BuildBuddy remote execution on Linux."
     default: "true"
     required: false
   buildbuddyApiKey:
-    description: "The API key for BuildBuddy remote cache and execution."
+    description: "The API key for BuildBuddy BES, remote cache and execution."
     default: ""
     required: false
   bazelFlags:
@@ -57,25 +65,30 @@ runs:
         restore-keys: |
           bazel-cache-${{ inputs.os }}-${{ inputs.zigVersion }}-${{ inputs.bazelVersion }}-${{ inputs.folder }}-${{ inputs.targetPattern }}
 
-    - name: Configure remote cache and execution
-      if: ${{ inputs.remoteEnabled == 'true' && inputs.buildbuddyApiKey != '' }}
+    - name: Configure remote services
+      if: ${{ inputs.buildbuddyApiKey != '' && (inputs.remoteBes == 'true' || inputs.remoteCache == 'true' || inputs.remoteExec == 'true') }}
       working-directory: ${{ inputs.folder }}
       shell: bash
       env:
         BUILDBUDDY_API_KEY: ${{ inputs.buildbuddyApiKey }}
+        REMOTE_BES: ${{ inputs.remoteBes }}
+        REMOTE_CACHE: ${{ inputs.remoteCache }}
+        REMOTE_EXEC: ${{ inputs.remoteExec }}
       run: |
-        cat <<EOF >>.bazelrc.user
-        build --build_metadata=ROLE=CI
-        build --config=remote-bes --config=remote-cache --remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY
-        # Remote execution on non-Linux is only available for BuildBuddy Enterprise.
-        build:linux --config=remote
-        EOF
-        cat <<EOF >>.bazelrc.ic.user
-        build --build_metadata=ROLE=CI
-        build --config=remote-bes --config=remote-cache --remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY
-        # Remote execution on non-Linux is only available for BuildBuddy Enterprise.
-        build:linux --config=remote
-        EOF
+        {
+          echo "build --build_metadata=ROLE=CI"
+          echo "build --remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY"
+          if [[ $REMOTE_BES == true ]]; then
+            echo "build --config=remote-bes"
+          fi
+          if [[ $REMOTE_CACHE == true ]]; then
+            echo "build --config=remote-cache"
+          fi
+          # Remote execution on non-Linux is only available for BuildBuddy Enterprise.
+          if [[ $REMOTE_EXEC == true ]]; then
+            echo "build:linux --config=remote-exec"
+          fi
+        } | tee -a .bazelrc.user >>.bazelrc.ic.user
 
     - name: Configure Bazel version
       working-directory: ${{ inputs.folder }}
