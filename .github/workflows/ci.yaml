@@ -188,8 +188,10 @@ jobs:
           targetPattern: "//..."
           tagFilters: ""
           # No remote cache or execution while bringing up Windows.
-          remoteEnabled: false
+          remoteCache: false
+          remoteExec: false
           bazelFlags: "--config=windows"
+          buildbuddyApiKey: ${{ secrets.BUILDBUDDY_API_KEY || '' }}
 
   # Zig documentation builds are separated to work around the following issue:
   # https://github.com/hermeticbuild/rules_zig/issues/273
