@@ -41,7 +41,7 @@ def _zig_module_context(name, canonical_name, main, deps, cdeps, compilation_con
     return struct(
         name = name,
         canonical_name = canonical_name,
-        main = main.path,
+        main = main,
         compilation_context = compilation_context,
         zigopts = tuple(zigopts),
         dependency_mappings = tuple(mappings),
@@ -93,7 +93,7 @@ def _render_per_module_args(module):
     args.extend(zig_cdeps_copts(module.compilation_context))
     args.extend(module.zigopts)
 
-    args.append("-M{name}={src}".format(name = module.canonical_name, src = module.main))
+    args.append("-M{name}={src}".format(name = module.canonical_name, src = module.main.path))
 
     return args
 
