@@ -50,7 +50,9 @@ test "completion print_build_config emits valid json" {
     const workspace_dir = try workspaceDirFromConfigPath(config_path, package_name);
     const execution_root = workspace_dir;
 
-    var child_env_map: std.process.Environ.Map = .init(std.testing.allocator);
+    // Start from the parent's environment so the child inherits
+    // RUNFILES_DIR / RUNFILES_MANIFEST_FILE (needed to find its own runfiles).
+    var child_env_map = try std.testing.environ.createMap(std.testing.allocator);
     defer child_env_map.deinit();
     try child_env_map.put("BUILD_WORKSPACE_DIRECTORY", workspace_dir);
     try child_env_map.put("BAZEL_EXECUTION_ROOT", execution_root);

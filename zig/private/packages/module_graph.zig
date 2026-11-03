@@ -146,6 +146,15 @@ pub fn createBuilder(
     return try Build.create(graph, build_root, dependencies);
 }
 
+/// Asserts `expected` (written with `/`) equals `actual` after normalizing
+/// native separators, so the same test passes on POSIX and Windows.
+fn expectEqualPath(expected: []const u8, actual: []const u8) !void {
+    const buf = try std.testing.allocator.dupe(u8, actual);
+    defer std.testing.allocator.free(buf);
+    std.mem.replaceScalar(u8, buf, '\\', '/');
+    try std.testing.expectEqualStrings(expected, buf);
+}
+
 test "emits registered modules and their import edges" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
@@ -172,12 +181,12 @@ test "emits registered modules and their import edges" {
     const util_entry = modules[0].object;
     try std.testing.expectEqualStrings("util", util_entry.get("name").?.string);
     try std.testing.expectEqualStrings("", util_entry.get("package").?.string);
-    try std.testing.expectEqualStrings("src/util.zig", util_entry.get("root_source").?.string);
+    try expectEqualPath("src/util.zig", util_entry.get("root_source").?.string);
     try std.testing.expectEqual(0, util_entry.get("imports").?.array.items.len);
 
     const lib_entry = modules[1].object;
     try std.testing.expectEqualStrings("lib", lib_entry.get("name").?.string);
-    try std.testing.expectEqualStrings("src/lib.zig", lib_entry.get("root_source").?.string);
+    try expectEqualPath("src/lib.zig", lib_entry.get("root_source").?.string);
     const imports = lib_entry.get("imports").?.array.items;
     try std.testing.expectEqual(1, imports.len);
     try std.testing.expectEqualStrings("helper", imports[0].object.get("name").?.string);

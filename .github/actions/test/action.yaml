@@ -96,12 +96,21 @@ runs:
       run: echo "build --@zig_toolchains//:version=${{ inputs.zigVersion }}" >> .bazelrc.user
 
     - name: Test generated files
-      if: inputs.folder == '.' && inputs.targetPattern == '//...'
+      # Generated files are platform independent, so Linux and macOS already
+      # cover this check.
+      if: inputs.folder == '.' && inputs.targetPattern == '//...' && runner.os != 'Windows'
       working-directory: ${{ inputs.folder }}
       shell: bash
+      env:
+        # Note [MSYS PATHCONV] Git Bash on Windows rewrites arguments that
+        # look like POSIX paths, turning the label `//util:update` into `/util:update`.
+        MSYS_NO_PATHCONV: "1"
       run: |
         # Bazelisk will download bazel to here, ensure it is cached between runs.
-        export XDG_CACHE_HOME="$HOME/.cache/bazel-repo"
+        # Note [Windows Cygpath] On Windows, Git Bash's $HOME is a POSIX path
+        # (/c/Users/...), which native tools such as Bazel's symlink creation
+        # reject. Use cygpath to get a mixed path (C:/Users/...) there.
+        export XDG_CACHE_HOME="$(cygpath -m "$HOME" 2>/dev/null || echo "$HOME")/.cache/bazel-repo"
         bazel --bazelrc=$GITHUB_WORKSPACE/.github/workflows/ci.bazelrc --bazelrc=.bazelrc run //util:update
         [ -z "$(git status --porcelain=v1 2>/dev/null)" ] || {
           echo 'Update generated files using `bazel run //util:update`' >&2
@@ -112,7 +121,11 @@ runs:
     - name: bazel test ${{ inputs.targetPattern }}
       working-directory: ${{ inputs.folder }}
       shell: bash
+      env:
+        # See Note [MSYS PATHCONV]
+        MSYS_NO_PATHCONV: "1"
       run: |
         # Bazelisk will download bazel to here, ensure it is cached between runs.
-        export XDG_CACHE_HOME="$HOME/.cache/bazel-repo"
+        # See [Note Cygpath]
+        export XDG_CACHE_HOME="$(cygpath -m "$HOME" 2>/dev/null || echo "$HOME")/.cache/bazel-repo"
         bazel --bazelrc=$GITHUB_WORKSPACE/.github/workflows/ci.bazelrc --bazelrc=.bazelrc test ${{ inputs.targetPattern }} ${{ inputs.tagFilters != '' && format('--build_tag_filters={0} --test_tag_filters={0}', inputs.tagFilters) || '' }} ${{ inputs.bazelFlags }}

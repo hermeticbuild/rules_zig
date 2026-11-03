@@ -160,6 +160,37 @@ jobs:
           tagFilters: ${{ matrix.tagFilters }}
           buildbuddyApiKey: ${{ secrets.BUILDBUDDY_API_KEY || '' }}
 
+  # Minimal smoke test to verify that rules_zig builds and tests on Windows.
+  # Not yet part of all_tests, so a failure does not block merging.
+  test-windows:
+    runs-on: windows-latest
+    # gha_join_jobs in all_tests checks every job in the run, not only those in
+    # its `needs`. With continue-on-error, a failing job is reported as
+    # successful, so it doesn't fail all_tests. Remove once Windows is stable.
+    continue-on-error: true
+
+    needs:
+      - matrix-prep-bazelversion
+      - matrix-prep-zigversion
+
+    name: Test //... with Zig ${{ fromJSON(needs.matrix-prep-zigversion.outputs.zigversions)[0] }}, and Bazel ${{ fromJSON(needs.matrix-prep-bazelversion.outputs.bazelversions)[0] }} on windows-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: ./.github/actions/test
+        with:
+          os: windows-latest
+          folder: "."
+          bazelVersion: ${{ fromJSON(needs.matrix-prep-bazelversion.outputs.bazelversions)[0] }}
+          docsEnabled: false
+          zigVersion: ${{ fromJSON(needs.matrix-prep-zigversion.outputs.zigversions)[0] }}
+          targetPattern: "//..."
+          tagFilters: ""
+          # No remote cache or execution while bringing up Windows.
+          remoteEnabled: false
+          bazelFlags: "--config=windows"
+
   # Zig documentation builds are separated to work around the following issue:
   # https://github.com/hermeticbuild/rules_zig/issues/273
   #test-zig-docs:
