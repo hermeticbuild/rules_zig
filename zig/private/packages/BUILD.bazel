@@ -9,7 +9,7 @@ zig_test(
     size = "small",
     main = "resolver.zig",
     target_compatible_with = select({
-        "@zig_toolchains//:0.17.0": [],
+        "@zig_toolchains//:any_0.17.release": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
 )
@@ -19,7 +19,7 @@ zig_test(
     size = "small",
     main = "module_graph.zig",
     target_compatible_with = select({
-        "@zig_toolchains//:0.17.0": [],
+        "@zig_toolchains//:any_0.17.release": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
 )

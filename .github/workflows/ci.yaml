@@ -57,7 +57,8 @@ jobs:
               | capture("^(?<v>[^-]+)(?:-(?<p>.*))?$") | [.v, .p // empty]
               | map(split(".") | map(opt(tonumber)))
               | .[1] |= (. // {});'
-          echo "zigversions=$(jq -c "$jq_semver_cmp"'keys|sort_by(semver_cmp)|reverse' zig/private/versions.json)" >> $GITHUB_OUTPUT
+          # Test the latest patch in each minor release; keep older patches in the catalog.
+          echo "zigversions=$(jq -c "$jq_semver_cmp"'keys|group_by(split(".")[:2])|map(max_by(semver_cmp))|sort_by(semver_cmp)|reverse' zig/private/versions.json)" >> $GITHUB_OUTPUT
     outputs:
       # Sorted in descending semver order.
       zigversions: ${{ steps.versions_from_zig_versions_json.outputs.zigversions }}

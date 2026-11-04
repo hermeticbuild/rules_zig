@@ -15,6 +15,10 @@ zig = use_extension(
     "zig",
     dev_dependency = True,
 )
+zig.toolchain(
+    default = True,
+    zig_version = "0.17.1",
+)
 zig.toolchain(zig_version = "0.17.0")
 zig.toolchain(zig_version = "0.16.0")
 use_repo(zig, "zig_toolchains")
