@@ -66,7 +66,7 @@ ATTRS = {
     ),
 } | BAZEL_BUILTIN_ATTRS | apple_support.action_required_attrs()
 
-TOOLCHAINS = use_cc_toolchain(mandatory = False)
+TOOLCHAINS = ["//zig/target:toolchain_type"] + use_cc_toolchain(mandatory = False)
 
 EXEC_GROUPS = ZIG_EXEC_GROUPS
 
