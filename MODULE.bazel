@@ -52,9 +52,9 @@ zig_dev = use_extension(
 )
 zig_dev.toolchain(
     default = True,
-    zig_version = "0.17.0",
+    zig_version = "0.17.1",
 )
-zig_dev.toolchain(zig_version = "0.17.1")
+zig_dev.toolchain(zig_version = "0.17.0")
 zig_dev.toolchain(zig_version = "0.16.0")
 
 zls_dev = use_extension(
