@@ -26,6 +26,13 @@ zig_c_library(
     visibility = ["//zig/tests:__pkg__"],
 )
 
+# Analysis-only target that can be configured without a cross C compiler.
+zig_c_library(
+    name = "c_module_cross",
+    cdeps = [],
+    visibility = ["//zig/tests:__pkg__"],
+)
+
 fake_translate_c(
     name = "fake_translate_c",
 )

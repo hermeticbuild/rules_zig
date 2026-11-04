@@ -64,6 +64,30 @@ _external_translate_c_action_test = analysistest.make(
     },
 )
 
+def _external_translate_c_target_test_impl(ctx):
+    env = analysistest.begin(ctx)
+
+    argv = assert_find_action(env, "ZigTranslateC").argv
+    asserts.true(env, "--" in argv, "expected the translate-c 2.x option separator")
+    if "--" in argv:
+        asserts.true(
+            env,
+            "--target=aarch64-linux-gnu.2.17" in argv[:argv.index("--")],
+            "translate-c should receive the configured Zig target before the C arguments",
+        )
+
+    return analysistest.end(env)
+
+_external_translate_c_target_test = analysistest.make(
+    _external_translate_c_target_test_impl,
+    config_settings = {
+        _EXTRA_TOOLCHAINS: "//zig/tests/translate-c-action:fake_translate_c_toolchain",
+        _SETTINGS_TRANSLATE_C: True,
+        "//command_line_option:platforms": canonical_label("@//zig/tests/platforms:aarch64-linux"),
+        canonical_label("@zig_toolchains//:version"): "0.17.0",
+    },
+)
+
 def _translate_c_copts_test_impl(ctx):
     env = analysistest.begin(ctx)
 
@@ -106,6 +130,11 @@ def translate_c_action_test_suite(name):
         partial.make(
             _external_translate_c_action_test,
             target_under_test = "//zig/tests/translate-c-action:c_module",
+            size = "small",
+        ),
+        partial.make(
+            _external_translate_c_target_test,
+            target_under_test = "//zig/tests/translate-c-action:c_module_cross",
             size = "small",
         ),
         partial.make(
