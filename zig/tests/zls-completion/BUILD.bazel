@@ -15,7 +15,7 @@ zls_completion(
     testonly = True,
     target_compatible_with = select({
         # Drop once ZLS 0.17.0 is supported.
-        "@zig_toolchains//:0.17.0": ["@platforms//:incompatible"],
+        "@zig_toolchains//:any_0.17.release": ["@platforms//:incompatible"],
         "//conditions:default": [],
     }),
     deps = [":lib"],

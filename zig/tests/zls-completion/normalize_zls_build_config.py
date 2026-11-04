@@ -26,7 +26,7 @@ def main(argv):
     with open(argv[1], encoding="utf-8") as input_file:
         config = json.load(input_file)
 
-    with open(argv[2], "w", encoding="utf-8") as output_file:
+    with open(argv[2], "w", encoding="utf-8", newline="\n") as output_file:
         json.dump(normalize(config), output_file, indent=2, sort_keys=True)
         output_file.write("\n")
 

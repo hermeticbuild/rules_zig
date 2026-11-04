@@ -22,12 +22,20 @@ inputs:
   tagFilters:
     description: "The Bazel build and test tag filters."
     required: true
-  remoteEnabled:
-    description: "Whether to enable remote execution."
+  remoteBes:
+    description: "Whether to upload the build event stream to BuildBuddy."
+    default: "true"
+    required: false
+  remoteCache:
+    description: "Whether to enable the BuildBuddy remote cache."
+    default: "true"
+    required: false
+  remoteExec:
+    description: "Whether to enable BuildBuddy remote execution on Linux."
     default: "true"
     required: false
   buildbuddyApiKey:
-    description: "The API key for BuildBuddy remote cache and execution."
+    description: "The API key for BuildBuddy BES, remote cache and execution."
     default: ""
     required: false
   bazelFlags:
@@ -57,25 +65,30 @@ runs:
         restore-keys: |
           bazel-cache-${{ inputs.os }}-${{ inputs.zigVersion }}-${{ inputs.bazelVersion }}-${{ inputs.folder }}-${{ inputs.targetPattern }}
 
-    - name: Configure remote cache and execution
-      if: ${{ inputs.remoteEnabled == 'true' && inputs.buildbuddyApiKey != '' }}
+    - name: Configure remote services
+      if: ${{ inputs.buildbuddyApiKey != '' && (inputs.remoteBes == 'true' || inputs.remoteCache == 'true' || inputs.remoteExec == 'true') }}
       working-directory: ${{ inputs.folder }}
       shell: bash
       env:
         BUILDBUDDY_API_KEY: ${{ inputs.buildbuddyApiKey }}
+        REMOTE_BES: ${{ inputs.remoteBes }}
+        REMOTE_CACHE: ${{ inputs.remoteCache }}
+        REMOTE_EXEC: ${{ inputs.remoteExec }}
       run: |
-        cat <<EOF >>.bazelrc.user
-        build --build_metadata=ROLE=CI
-        build --config=remote-bes --config=remote-cache --remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY
-        # Remote execution on non-Linux is only available for BuildBuddy Enterprise.
-        build:linux --config=remote
-        EOF
-        cat <<EOF >>.bazelrc.ic.user
-        build --build_metadata=ROLE=CI
-        build --config=remote-bes --config=remote-cache --remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY
-        # Remote execution on non-Linux is only available for BuildBuddy Enterprise.
-        build:linux --config=remote
-        EOF
+        {
+          echo "build --build_metadata=ROLE=CI"
+          echo "build --remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY"
+          if [[ $REMOTE_BES == true ]]; then
+            echo "build --config=remote-bes"
+          fi
+          if [[ $REMOTE_CACHE == true ]]; then
+            echo "build --config=remote-cache"
+          fi
+          # Remote execution on non-Linux is only available for BuildBuddy Enterprise.
+          if [[ $REMOTE_EXEC == true ]]; then
+            echo "build:linux --config=remote-exec"
+          fi
+        } | tee -a .bazelrc.user >>.bazelrc.ic.user
 
     - name: Configure Bazel version
       working-directory: ${{ inputs.folder }}
@@ -96,12 +109,21 @@ runs:
       run: echo "build --@zig_toolchains//:version=${{ inputs.zigVersion }}" >> .bazelrc.user
 
     - name: Test generated files
-      if: inputs.folder == '.' && inputs.targetPattern == '//...'
+      # Generated files are platform independent, so Linux and macOS already
+      # cover this check.
+      if: inputs.folder == '.' && inputs.targetPattern == '//...' && runner.os != 'Windows'
       working-directory: ${{ inputs.folder }}
       shell: bash
+      env:
+        # Note [MSYS PATHCONV] Git Bash on Windows rewrites arguments that
+        # look like POSIX paths, turning the label `//util:update` into `/util:update`.
+        MSYS_NO_PATHCONV: "1"
       run: |
         # Bazelisk will download bazel to here, ensure it is cached between runs.
-        export XDG_CACHE_HOME="$HOME/.cache/bazel-repo"
+        # Note [Windows Cygpath] On Windows, Git Bash's $HOME is a POSIX path
+        # (/c/Users/...), which native tools such as Bazel's symlink creation
+        # reject. Use cygpath to get a mixed path (C:/Users/...) there.
+        export XDG_CACHE_HOME="$(cygpath -m "$HOME" 2>/dev/null || echo "$HOME")/.cache/bazel-repo"
         bazel --bazelrc=$GITHUB_WORKSPACE/.github/workflows/ci.bazelrc --bazelrc=.bazelrc run //util:update
         [ -z "$(git status --porcelain=v1 2>/dev/null)" ] || {
           echo 'Update generated files using `bazel run //util:update`' >&2
@@ -112,7 +134,11 @@ runs:
     - name: bazel test ${{ inputs.targetPattern }}
       working-directory: ${{ inputs.folder }}
       shell: bash
+      env:
+        # See Note [MSYS PATHCONV]
+        MSYS_NO_PATHCONV: "1"
       run: |
         # Bazelisk will download bazel to here, ensure it is cached between runs.
-        export XDG_CACHE_HOME="$HOME/.cache/bazel-repo"
+        # See [Note Cygpath]
+        export XDG_CACHE_HOME="$(cygpath -m "$HOME" 2>/dev/null || echo "$HOME")/.cache/bazel-repo"
         bazel --bazelrc=$GITHUB_WORKSPACE/.github/workflows/ci.bazelrc --bazelrc=.bazelrc test ${{ inputs.targetPattern }} ${{ inputs.tagFilters != '' && format('--build_tag_filters={0} --test_tag_filters={0}', inputs.tagFilters) || '' }} ${{ inputs.bazelFlags }}
