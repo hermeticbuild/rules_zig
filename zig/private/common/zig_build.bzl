@@ -280,10 +280,12 @@ def _compile(ctx, *, worker, zigtoolchaininfo, command, global_args, args, outpu
         executable = worker
         arguments = [startup, args]
         mnemonic = "ZigIncrementalCompile"
+
+        # The adapter also supports one-shot execution. Let the selected
+        # execution platform determine whether the action may run remotely.
         kwargs["execution_requirements"] = kwargs["execution_requirements"] | {
             "supports-workers": "1",
             "requires-worker-protocol": "json",
-            "no-remote-exec": "1",
             "no-remote-cache": "1",
         }
     ctx.actions.run(
