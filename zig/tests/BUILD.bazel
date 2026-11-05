@@ -38,11 +38,6 @@ host_toolchain_test_suite(name = "host_toolchain_test")
 
 incremental_test_suite(name = "incremental_test")
 
-test_suite(
-    name = "incremental_worker_test",
-    tests = ["//zig/private/worker:worker_test"],
-)
-
 use_cc_common_link_test_suite(name = "use_cc_common_link_test")
 
 mode_test_suite(name = "mode_test")

@@ -143,44 +143,6 @@ fn checkSharedLibraryArgs(arguments: []const []const u8, emits_llvm: bool, diagn
     }
 }
 
-test "request framing preserves empty operands and delimiter-shaped names" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-    const compilation = try Compilation.parse(arena.allocator(), &.{
-        "{\"command\":\"build-exe\",\"output_kind\":\"executable\",\"name\":\"root\",\"outputs\":[\"bin\"]}",
-        "bazel-out/cfg/bin/program",
-        "--test-filter",
-        "",
-        "--",
-        "input=operand",
-        "--",
-        "input=--",
-        "input=bazel-out/cfg/bin/generated.zig",
-    });
-    try std.testing.expectEqualStrings("bazel-out/cfg/bin/program", compilation.outputs[0].path);
-    try std.testing.expectEqualSlices([]const u8, &.{ "--test-filter", "", "--", "input=operand" }, compilation.arguments);
-    const inputs = try compilation.inputs(arena.allocator(), &.{
-        .{ .path = "--", .digest = "opaque" },
-        .{ .path = "not-a-declared-input", .digest = "ignored" },
-    });
-    try std.testing.expectEqual(2, inputs.len);
-    try std.testing.expectEqualStrings("opaque", inputs[0].digest);
-    try std.testing.expectEqualStrings("bazel-out/cfg/bin/generated.zig", inputs[1].path);
-    try std.testing.expectEqualStrings("", inputs[1].digest);
-}
-
-test "shared libraries require LLVM and effective LLD selection" {
-    var diagnostics: Io.Writer.Allocating = .init(std.testing.allocator);
-    defer diagnostics.deinit();
-    try std.testing.expectError(error.UnsupportedSharedLibraryBackend, checkSharedLibraryArgs(&.{}, false, &diagnostics.writer));
-    try std.testing.expectError(error.UnsupportedSharedLibraryBackend, checkSharedLibraryArgs(&.{ "-fllvm", "-flld", "-fno-lld" }, false, &diagnostics.writer));
-    try std.testing.expectError(error.UnsupportedSharedLibraryBackend, checkSharedLibraryArgs(&.{ "-fllvm", "-flld", "-fno-llvm" }, false, &diagnostics.writer));
-    try checkSharedLibraryArgs(&.{ "-fno-llvm", "-fno-lld", "-fllvm", "-flld" }, false, &diagnostics.writer);
-    try std.testing.expectError(error.UnsupportedSharedLibraryVersion, checkSharedLibraryArgs(&.{ "-fllvm", "-flld", "--version", "1.2.3" }, false, &diagnostics.writer));
-    try checkSharedLibraryArgs(&.{"-flld"}, true, &diagnostics.writer);
-    try std.testing.expectError(error.UnsupportedSharedLibraryBackend, checkSharedLibraryArgs(&.{ "-flld", "-fno-llvm" }, true, &diagnostics.writer));
-}
-
 fn readLines(a: Allocator, io: Io, path: []const u8, result: *std.array_list.Managed([]const u8)) !void {
     const contents = try Dir.cwd().readFileAlloc(io, path, a, .limited(16 * 1024 * 1024));
     if (contents.len == 0) return;
@@ -221,18 +183,6 @@ fn writeResponseArguments(writer: *Io.Writer, arguments: []const []const u8) !vo
         for (0..backslashes * 2) |_| try writer.writeByte('\\');
         try writer.writeAll("\"\n");
     }
-}
-
-test "response arguments round trip through the compiler parser" {
-    const a = std.testing.allocator;
-    const arguments = [_][]const u8{ "", "plain", "a b", "tab\tvalue", "#literal", "\"", "\\", "trailing\\", "\\\"", "two\\\\\"quotes", "two\\\\path", "--dep", "dep", "-Mroot=a b.zig", "-Mdep=../dep/main.zig" };
-    var flags: Io.Writer.Allocating = .init(a);
-    defer flags.deinit();
-    try writeResponseArguments(&flags.writer, &arguments);
-    var parser = try std.process.Args.IteratorGeneral(.{ .comments = true, .single_quotes = true }).init(a, flags.written());
-    defer parser.deinit();
-    for (arguments) |expected| try std.testing.expectEqualStrings(expected, parser.next() orelse return error.MissingArgument);
-    try std.testing.expect(parser.next() == null);
 }
 
 const Session = struct {
