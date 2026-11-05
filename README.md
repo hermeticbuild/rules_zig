@@ -117,6 +117,15 @@ them through Bazel by using the `--repo_env` flag.
 > build:windows --sandbox_add_mount_pair=C:\Temp
 > ```
 
+#### Execution Groups
+
+Zig compiler actions use the `zig` execution group. When `use_cc_common_link`
+is enabled, the final C/C++ link uses `cpp_link`. This group resolves both the
+Zig SDK and the C/C++ toolchain, so the SDK's execution constraints also apply
+to the final link. Use Bazel's `exec_group_compatible_with` and group-prefixed
+`exec_properties` attributes to configure these groups. C preprocessing and
+other linking helper actions may still use the default execution context.
+
 ## Usage Examples
 
 <!-- TODO[AH] Create an instructive example.
