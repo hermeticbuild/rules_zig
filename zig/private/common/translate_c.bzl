@@ -207,6 +207,7 @@ def _external_translate_c(*, ctx, zigtoolchaininfo, translatectoolchaininfo, com
     if semver.gte(zigtoolchaininfo.zig_version, _TRANSLATE_C_2_MIN_ZIG_VERSION):
         args.add(zig_out, format = "-o=%s")
         args.add(zig_toolchain_lib_dir_path(zigtoolchaininfo), format = "--zig-lib=%s")
+        args.add(ctx.toolchains["//zig/target:toolchain_type"].zigtargetinfo.target, format = "--target=%s")
         args.add("--")
         if zigtoolchaininfo.zig_lib.file != None:
             inputs.append(zigtoolchaininfo.zig_lib.file)
