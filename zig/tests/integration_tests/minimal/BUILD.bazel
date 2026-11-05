@@ -1,3 +1,4 @@
+load("@bazel_skylib//:bzl_library.bzl", "bzl_library")
 load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_library", "zig_shared_library", "zig_static_library", "zig_test")
 load(":incremental_generated.bzl", "incremental_generated")
 
@@ -121,4 +122,10 @@ zig_shared_library(
     shared_lib_name = "liboutputs_custom.so",
     tags = ["manual"],
     zigopts = ["-flld"],
+)
+
+bzl_library(
+    name = "incremental_generated",
+    srcs = ["incremental_generated.bzl"],
+    visibility = ["//visibility:public"],
 )

@@ -20,6 +20,17 @@ alias(
 
 filegroup(name = "disabled")
 
+# Execute `bazel run //util:update_filegroups` to update this target.
+filegroup(
+    name = "all_files",
+    srcs = [
+        ":BUILD.bazel",
+        ":non_incremental_binary.bzl",
+        ":worker.zig",
+    ],
+    visibility = ["//zig/private:__pkg__"],
+)
+
 non_incremental_binary(
     name = "configured_worker",
     actual = "worker",
@@ -34,11 +45,6 @@ zig_binary(
     zigopts = ["-mcpu=baseline"],
 )
 
-bzl_library(
-    name = "non_incremental_binary",
-    srcs = ["non_incremental_binary.bzl"],
-)
-
 zig_test(
     name = "worker_test",
     size = "small",
@@ -46,12 +52,8 @@ zig_test(
     visibility = ["//zig/tests:__pkg__"],
 )
 
-filegroup(
-    name = "all_files",
-    srcs = [
-        "BUILD.bazel",
-        "non_incremental_binary.bzl",
-        "worker.zig",
-    ],
-    visibility = ["//zig/private:__pkg__"],
+bzl_library(
+    name = "non_incremental_binary",
+    srcs = ["non_incremental_binary.bzl"],
+    visibility = ["//zig:__subpackages__"],
 )
