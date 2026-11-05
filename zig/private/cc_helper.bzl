@@ -12,7 +12,7 @@ def find_cc_toolchain(ctx, *, mandatory, exec_group = None, features = [], disab
     Args:
         ctx (ctx): The current target's rule context object
         mandatory (bool): Whether the toolchain is mandatory
-        exec_group (str|None): Execution group to read, or the default context when None
+        exec_group: Execution group name, or None to use the default context
         features (list): A list of features to enable in the toolchain
         disabled_features (list): A list of features to disable in the toolchain
 
