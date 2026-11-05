@@ -110,6 +110,22 @@ jobs:
           tagFilters: ${{ matrix.tagFilters }}
           buildbuddyApiKey: ${{ secrets.BUILDBUDDY_API_KEY || '' }}
 
+      - name: Test incremental compilation
+        # Bazel 8.4.1 crashes in WorkerFilesHash on the Zig SDK directory input.
+        # Keep execution on current Bazel; analysis runs across Bazel versions.
+        if: matrix.os == 'ubuntu-latest' && matrix.folder == 'e2e/workspace' && matrix.bazelVersion == fromJSON(needs.matrix-prep-bazelversion.outputs.bazelversions)[0]
+        uses: ./.github/actions/test
+        with:
+          os: ${{ matrix.os }}
+          folder: ${{ matrix.folder }}
+          bazelVersion: ${{ matrix.bazelVersion }}
+          docsEnabled: false
+          zigVersion: ${{ matrix.zigVersion }}
+          targetPattern: "//configure-incremental/..."
+          tagFilters: ""
+          bazelFlags: "--@rules_zig//zig/settings:incremental --strategy=ZigIncrementalCompile=worker"
+          buildbuddyApiKey: ${{ secrets.BUILDBUDDY_API_KEY || '' }}
+
   test-zig-versions:
     # The type of runner that the job will run on
     runs-on: ${{ matrix.os }}
