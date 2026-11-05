@@ -93,4 +93,6 @@ def use_cc_common_link_test_suite(name):
         # Test Zig build use_cc_common_link on a test target
         partial.make(_build_test_use_cc_common_link_cc_test, target_under_test = "//zig/tests/simple-test:test", size = "small"),
         partial.make(_build_test_use_cc_common_link_zig_test, target_under_test = "//zig/tests/simple-test:test", size = "small"),
+        # The final link accepts cpp_link-scoped execution properties.
+        partial.make(_build_exe_use_cc_common_link_cc_test, target_under_test = "//zig/tests/simple-binary:binary_link_exec_properties", size = "small"),
     )
