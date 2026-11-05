@@ -5,3 +5,11 @@ zig_binary(
     main = "main.zig",
     visibility = ["//zig/tests:__pkg__"],
 )
+
+zig_binary(
+    name = "binary_link_exec_properties",
+    exec_properties = {"cpp_link.no-remote-exec": "1"},
+    main = "main.zig",
+    tags = ["manual"],
+    visibility = ["//zig/tests:__pkg__"],
+)

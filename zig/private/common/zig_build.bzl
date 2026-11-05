@@ -19,6 +19,7 @@ load("//zig/private/common:escape_label.bzl", "escape_label")
 load(
     "//zig/private/common:exec_groups.bzl",
     "ZIG_EXEC_GROUPS",
+    "ZIG_TOOLCHAIN_TYPE",
     "translate_c_exec_group_toolchain",
     "zig_exec_group_action_kwargs",
     "zig_exec_group_toolchain",
@@ -228,7 +229,13 @@ TOOLCHAINS = [
     "//zig/target:toolchain_type",
 ] + use_cc_toolchain(mandatory = False)
 
-EXEC_GROUPS = ZIG_EXEC_GROUPS
+EXEC_GROUPS = ZIG_EXEC_GROUPS | {
+    # cc_common.link uses this group when it is declared. Require the Zig SDK
+    # so its execution constraints also apply to the final C/C++ link.
+    "cpp_link": exec_group(
+        toolchains = [ZIG_TOOLCHAIN_TYPE] + use_cc_toolchain(mandatory = False),
+    ),
+}
 
 FRAGMENTS = ["cpp"]
 
@@ -347,7 +354,11 @@ def zig_build_impl(ctx, *, kind):
     feature_configuration = None
     generate_dsym_file = False
     if use_cc_common_link and kind != "zig_static_library":
-        cc_toolchain, feature_configuration = find_cc_toolchain(ctx, mandatory = True)
+        cc_toolchain, feature_configuration = find_cc_toolchain(
+            ctx,
+            mandatory = True,
+            exec_group = "cpp_link",
+        )
         generate_dsym_file = cc_common.is_enabled(
             feature_configuration = feature_configuration,
             feature_name = "generate_dsym_file",
