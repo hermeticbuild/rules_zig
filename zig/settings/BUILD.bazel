@@ -13,11 +13,18 @@ settings(
     host_threaded = ":host_threaded",
     host_use_cc_common_link = ":host_use_cc_common_link",
     host_zigopt = ":host_zigopt",
+    incremental = ":incremental",
     mode = ":mode",
     threaded = ":threaded",
     use_cc_common_link = ":use_cc_common_link",
     visibility = ["//visibility:public"],
     zigopt = ":zigopt",
+)
+
+bool_flag(
+    name = "incremental",
+    build_setting_default = False,
+    visibility = ["//visibility:public"],
 )
 
 bazel_strip(
