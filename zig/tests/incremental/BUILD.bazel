@@ -1,0 +1,80 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("//zig:defs.bzl", "zig_binary", "zig_shared_library", "zig_static_library", "zig_test")
+
+# Fixtures for //zig/tests:incremental_test, never built by //....
+zig_binary(
+    name = "binary",
+    main = "main.zig",
+    tags = ["manual"],
+    visibility = ["//zig/tests:__pkg__"],
+)
+
+zig_test(
+    name = "test_binary",
+    main = "test.zig",
+    tags = ["manual"],
+    visibility = ["//zig/tests:__pkg__"],
+)
+
+zig_static_library(
+    name = "static_library",
+    main = "library.zig",
+    tags = ["manual"],
+    visibility = ["//zig/tests:__pkg__"],
+)
+
+zig_shared_library(
+    name = "shared_library",
+    main = "library.zig",
+    tags = ["manual"],
+    visibility = ["//zig/tests:__pkg__"],
+    zigopts = [
+        "-fllvm",
+        "-flld",
+    ],
+)
+
+cc_library(
+    name = "native",
+    srcs = ["native.c"],
+    tags = ["manual"],
+    visibility = ["//zig/tests:__pkg__"],
+)
+
+zig_binary(
+    name = "native_binary",
+    linkopts = ["-Wl,-z,now"],
+    main = "main.zig",
+    tags = ["manual"],
+    visibility = ["//zig/tests:__pkg__"],
+    deps = ["native"],
+)
+
+zig_binary(
+    name = "auxiliary_outputs",
+    emit_asm = True,
+    emit_llvm_bc = True,
+    emit_llvm_ir = True,
+    main = "main.zig",
+    tags = ["manual"],
+    visibility = ["//zig/tests:__pkg__"],
+)
+
+zig_static_library(
+    name = "auxiliary_only",
+    emit_asm = True,
+    emit_bin = False,
+    emit_llvm_bc = True,
+    emit_llvm_ir = True,
+    main = "library.zig",
+    tags = ["manual"],
+    visibility = ["//zig/tests:__pkg__"],
+)
+
+zig_binary(
+    name = "c_sources",
+    csrcs = ["native.c"],
+    main = "main.zig",
+    tags = ["manual"],
+    visibility = ["//zig/tests:__pkg__"],
+)
