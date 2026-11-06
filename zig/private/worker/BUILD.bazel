@@ -1,0 +1,19 @@
+load("//zig:defs.bzl", "zig_binary")
+
+zig_binary(
+    name = "worker",
+    main = "worker.zig",
+    tags = ["manual"],
+    visibility = ["//zig:__subpackages__"],
+    zigopts = ["-mcpu=baseline"],
+)
+
+# Execute `bazel run //util:update_filegroups` to update this target.
+filegroup(
+    name = "all_files",
+    srcs = [
+        ":BUILD.bazel",
+        ":worker.zig",
+    ],
+    visibility = ["//zig/private:__pkg__"],
+)

@@ -197,6 +197,7 @@ filegroup(
         "//zig/private/packages:all_files",
         "//zig/private/providers:all_files",
         "//zig/private/repo:all_files",
+        "//zig/private/worker:all_files",
     ],
     visibility = ["//zig:__pkg__"],
 )
