@@ -40,14 +40,6 @@ platform(
 )
 
 platform(
-    name = "x86_64-macos",
-    constraint_values = [
-        "@platforms//os:macos",
-        "@platforms//cpu:x86_64",
-    ],
-)
-
-platform(
     name = "aarch64-macos",
     constraint_values = [
         "@platforms//os:macos",
@@ -69,6 +61,14 @@ platform(
     constraint_values = [
         "@platforms//os:windows",
         "@platforms//cpu:x86_64",
+    ],
+)
+
+platform(
+    name = "aarch64-windows",
+    constraint_values = [
+        "@platforms//os:windows",
+        "@platforms//cpu:aarch64",
     ],
 )
 
