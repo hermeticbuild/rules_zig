@@ -77,3 +77,10 @@ bazel_dep(
     version = "0.15.1",
     dev_dependency = True,
 )
+
+# Use the runner's pkg-config instead of letting rules_foreign_cc bootstrap one
+# from source, which breaks with newer host C compilers.
+register_toolchains(
+    "@rules_foreign_cc//toolchains:preinstalled_pkgconfig_toolchain",
+    dev_dependency = True,
+)

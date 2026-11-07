@@ -194,6 +194,17 @@ jobs:
           bazelFlags: "--config=windows"
           buildbuddyApiKey: ${{ secrets.BUILDBUDDY_API_KEY || '' }}
 
+  # Cross-compilation check, see cross-compile.yaml. Not yet part of all_tests,
+  # so a failure does not block merging.
+  cross-compile:
+    needs:
+      - matrix-prep-bazelversion
+      - matrix-prep-zigversion
+    uses: ./.github/workflows/cross-compile.yaml
+    with:
+      bazelVersion: ${{ fromJSON(needs.matrix-prep-bazelversion.outputs.bazelversions)[0] }}
+      zigVersion: ${{ fromJSON(needs.matrix-prep-zigversion.outputs.zigversions)[0] }}
+
   # Zig documentation builds are separated to work around the following issue:
   # https://github.com/hermeticbuild/rules_zig/issues/273
   #test-zig-docs:
