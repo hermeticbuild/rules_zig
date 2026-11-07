@@ -194,6 +194,131 @@ jobs:
           bazelFlags: "--config=windows"
           buildbuddyApiKey: ${{ secrets.BUILDBUDDY_API_KEY || '' }}
 
+  # Cross-compilation check. Every build host cross-builds the simple binary
+  # for every target platform. Each binary is then run on a real machine of
+  # its target platform. This covers all host x target permutations.
+  # Not yet part of all_tests, so a failure does not block merging.
+  cross-build:
+    runs-on: ${{ matrix.host }}
+    continue-on-error: true
+
+    needs:
+      - matrix-prep-bazelversion
+      - matrix-prep-zigversion
+
+    strategy:
+      fail-fast: false
+      matrix:
+        host:
+          - ubuntu-latest # x86_64-linux
+          - ubuntu-24.04-arm # aarch64-linux
+          - macos-15-intel # x86_64-macos
+          - macos-latest # aarch64-macos
+          - windows-latest # x86_64-windows
+        target:
+          - x86_64-linux
+          - aarch64-linux
+          - x86_64-macos
+          - aarch64-macos
+          - x86_64-windows
+
+    name: Cross-build for ${{ matrix.target }} on ${{ matrix.host }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build //zig/tests/simple-binary for ${{ matrix.target }}
+        shell: bash
+        env:
+          USE_BAZEL_VERSION: ${{ fromJSON(needs.matrix-prep-bazelversion.outputs.bazelversions)[0] }}
+          ZIG_VERSION: ${{ fromJSON(needs.matrix-prep-zigversion.outputs.zigversions)[0] }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          flags=(
+            --platforms=//zig/tests/platforms:"$TARGET"
+            --@zig_toolchains//:version="$ZIG_VERSION"
+          )
+          bazel build "${flags[@]}" //zig/tests/simple-binary:binary
+          # The target must have exactly one output file. Copy it to a fixed
+          # name so that the run job doesn't have to guess.
+          mapfile -t outputs < <(bazel cquery "${flags[@]}" --output=files //zig/tests/simple-binary:binary)
+          if [[ ${#outputs[@]} -ne 1 ]]; then
+            echo "::error::Expected exactly one output file, got ${#outputs[@]}: ${outputs[*]}"
+            exit 1
+          fi
+          name=binary
+          [[ "$TARGET" == *-windows ]] && name=binary.exe
+          mkdir -p dist
+          cp -v "${outputs[0]}" "dist/$name"
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cross-binary-${{ matrix.target }}-from-${{ matrix.host }}
+          path: dist/
+          if-no-files-found: error
+
+  cross-run:
+    # Runs on the machine type matching each target platform.
+    runs-on: ${{ matrix.runner }}
+    continue-on-error: true
+
+    needs:
+      - cross-build
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-linux
+            runner: ubuntu-latest
+          - target: aarch64-linux
+            runner: ubuntu-24.04-arm
+          - target: x86_64-macos
+            runner: macos-15-intel
+          - target: aarch64-macos
+            runner: macos-latest
+          - target: x86_64-windows
+            runner: windows-latest
+
+    name: Run binaries cross-built for ${{ matrix.target }} on ${{ matrix.runner }}
+
+    steps:
+      # Downloads the binaries built for this target on every build host, each
+      # in its own sub-directory named after the artifact.
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: cross-binary-${{ matrix.target }}-from-*
+          path: dist
+
+      - name: Run each binary and check its output
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -o pipefail
+          name=binary
+          [[ "$TARGET" == *-windows ]] && name=binary.exe
+          status=0
+          for dir in dist/*/; do
+            bin="$dir$name"
+            if [[ ! -f "$bin" ]]; then
+              echo "::error::Missing $bin"
+              status=1
+              continue
+            fi
+            chmod +x "$bin"
+            echo "::group::$bin"
+            if "$bin" | tee output.txt && grep -qx 'Hello World!' output.txt; then
+              echo "OK: $dir"
+            else
+              echo "::error::FAILED: $dir"
+              status=1
+            fi
+            echo "::endgroup::"
+          done
+          exit $status
+
   # Zig documentation builds are separated to work around the following issue:
   # https://github.com/hermeticbuild/rules_zig/issues/273
   #test-zig-docs:
