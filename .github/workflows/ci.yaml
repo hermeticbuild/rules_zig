@@ -241,15 +241,17 @@ jobs:
           bazel build "${flags[@]}" //zig/tests/simple-binary:binary
           # The target must have exactly one output file. Copy it to a fixed
           # name so that the run job doesn't have to guess.
-          mapfile -t outputs < <(bazel cquery "${flags[@]}" --output=files //zig/tests/simple-binary:binary)
-          if [[ ${#outputs[@]} -ne 1 ]]; then
-            echo "::error::Expected exactly one output file, got ${#outputs[@]}: ${outputs[*]}"
+          # (No mapfile: macOS runners ship a bash where it's unavailable)
+          outputs=$(bazel cquery "${flags[@]}" --output=files //zig/tests/simple-binary:binary)
+          count=$(printf '%s\n' "$outputs" | grep -c . || true)
+          if [[ "$count" -ne 1 ]]; then
+            echo "::error::Expected exactly one output file, got $count: $outputs"
             exit 1
           fi
           name=binary
           [[ "$TARGET" == *-windows ]] && name=binary.exe
           mkdir -p dist
-          cp -v "${outputs[0]}" "dist/$name"
+          cp -v "$outputs" "dist/$name"
           ls -l dist
 
       - uses: actions/upload-artifact@v4
