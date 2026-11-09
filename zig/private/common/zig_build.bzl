@@ -498,19 +498,63 @@ def zig_build_impl(ctx, *, kind):
     compile_outputs = [emission.file for emission in emissions]
     emitted_outputs = {emission.kind: emission.file for emission in emissions}
 
+    zigopts = location_expansion(
+        ctx = ctx,
+        targets = location_targets,
+        outputs = outputs,
+        attribute_name = "zigopts",
+        strings = ctx.attr.zigopts,
+    )
+
+    zdeps = []
+    cdeps = []
+    dep_canonical_names = {}
+    for dep in ctx.attr.deps:
+        if ZigModuleInfo in dep:
+            zdeps.append(dep[ZigModuleInfo])
+            dep_canonical_names[dep[ZigModuleInfo].canonical_name] = None
+        elif CcInfo in dep:
+            cdeps.append(dep[CcInfo])
+
+    import_names = {}
+    for dep, import_name in ctx.attr.import_names.items():
+        canonical_name = dep[ZigModuleInfo].canonical_name
+        if canonical_name not in dep_canonical_names:
+            fail("import_names: '{}' must also be listed in deps.".format(dep.label))
+        import_names[canonical_name] = import_name
+
+    if root_module_is_only_dep:
+        if ctx.attr.import_names:
+            fail("import_names has no effect when a single dependency is used as the root module; set `main` to define a module.")
+        root_module = ctx.attr.deps[0][ZigModuleInfo]
+    else:
+        root_module = zig_module_info(
+            name = ctx.attr.name,
+            canonical_name = escape_label(label = ctx.label),
+            main = ctx.file.main,
+            srcs = ctx.files.srcs,
+            extra_srcs = ctx.files.extra_srcs,
+            deps = zdeps + [bazel_builtin_module(ctx)],
+            cdeps = cdeps,
+            zigopts = zigopts,
+            import_names = import_names,
+        )
+
     args = ctx.actions.args()
     args.use_param_file("@%s")
     if incremental_worker:
-        command, output_kind = {
-            "zig_binary": ("build-exe", "executable"),
-            "zig_test": ("test-obj", "object") if test_obj else ("test", "executable"),
-            "zig_static_library": ("build-lib", "static_library"),
-            "zig_shared_library": ("build-lib", "shared_library"),
-        }["zig_static_library" if cc_static_lib else kind]
+        if cc_static_lib or kind == "zig_static_library":
+            command, output_kind = "build-lib", "static_library"
+        elif kind == "zig_test":
+            command, output_kind = ("test-obj", "object") if test_obj else ("test", "executable")
+        elif kind == "zig_binary":
+            command, output_kind = "build-exe", "executable"
+        else:  # zig_shared_library
+            command, output_kind = "build-lib", "shared_library"
         args.add(json.encode({
             "command": command,
             "output_kind": output_kind,
-            "name": ctx.attr.deps[0][ZigModuleInfo].canonical_name if root_module_is_only_dep else escape_label(label = ctx.label),
+            "name": root_module.canonical_name,
             "outputs": emitted_outputs.keys(),
         }))
         args.add_all(emitted_outputs.values())
@@ -553,48 +597,6 @@ def zig_build_impl(ctx, *, kind):
         inputs = direct_inputs,
         args = args,
     )
-
-    zigopts = location_expansion(
-        ctx = ctx,
-        targets = location_targets,
-        outputs = outputs,
-        attribute_name = "zigopts",
-        strings = ctx.attr.zigopts,
-    )
-
-    zdeps = []
-    cdeps = []
-    dep_canonical_names = {}
-    for dep in ctx.attr.deps:
-        if ZigModuleInfo in dep:
-            zdeps.append(dep[ZigModuleInfo])
-            dep_canonical_names[dep[ZigModuleInfo].canonical_name] = None
-        elif CcInfo in dep:
-            cdeps.append(dep[CcInfo])
-
-    import_names = {}
-    for dep, import_name in ctx.attr.import_names.items():
-        canonical_name = dep[ZigModuleInfo].canonical_name
-        if canonical_name not in dep_canonical_names:
-            fail("import_names: '{}' must also be listed in deps.".format(dep.label))
-        import_names[canonical_name] = import_name
-
-    if root_module_is_only_dep:
-        if ctx.attr.import_names:
-            fail("import_names has no effect when a single dependency is used as the root module; set `main` to define a module.")
-        root_module = ctx.attr.deps[0][ZigModuleInfo]
-    else:
-        root_module = zig_module_info(
-            name = ctx.attr.name,
-            canonical_name = escape_label(label = ctx.label),
-            main = ctx.file.main,
-            srcs = ctx.files.srcs,
-            extra_srcs = ctx.files.extra_srcs,
-            deps = zdeps + [bazel_builtin_module(ctx)],
-            cdeps = cdeps,
-            zigopts = zigopts,
-            import_names = import_names,
-        )
 
     zig_settings(
         settings = settings,
