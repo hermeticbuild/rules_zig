@@ -47,6 +47,7 @@ const Compilation = struct {
     command: []const u8,
     output_kind: OutputKind,
     name: []const u8,
+    target: []const u8,
     outputs: []const EmittedOutput,
     arguments: []const []const u8,
     input_paths: []const []const u8,
@@ -55,6 +56,7 @@ const Compilation = struct {
         command: []const u8,
         output_kind: OutputKind,
         name: []const u8,
+        target: []const u8,
         outputs: []const EmitKind,
     };
 
@@ -85,17 +87,14 @@ const Compilation = struct {
             return error.UnsupportedCompilationRequest;
         }
 
+        if (data.len < arguments_start) return error.InvalidCompilationRequest;
+
         // Inputs are prefixed records, so the final '--' always frames them,
         // independently of empty arguments or '--' in the compiler vector.
-        var boundary = data.len;
-        while (boundary > arguments_start) {
-            boundary -= 1;
-            if (std.mem.eql(u8, data[boundary], "--")) break;
-        }
-
-        if (!std.mem.eql(u8, data[boundary], "--")) {
-            return error.InvalidCompilationRequest;
-        }
+        const boundary = for (0..data.len - arguments_start) |n| {
+            const i = data.len - 1 - n;
+            if (std.mem.eql(u8, data[i], "--")) break i;
+        } else return error.InvalidCompilationRequest;
 
         const paths = try a.alloc([]const u8, data.len - boundary - 1);
         for (paths, data[boundary + 1 ..]) |*path, record| {
@@ -107,6 +106,7 @@ const Compilation = struct {
             .command = metadata.command,
             .output_kind = metadata.output_kind,
             .name = metadata.name,
+            .target = metadata.target,
             .outputs = outputs,
             .arguments = data[arguments_start..boundary],
             .input_paths = paths,
@@ -126,6 +126,7 @@ const Compilation = struct {
             return error.InvalidCompilationName;
         }
 
+        _ = try result.binNameOptions();
         return result;
     }
 
@@ -157,18 +158,34 @@ const Compilation = struct {
         return result;
     }
 
-    fn artifactName(self: Compilation, a: Allocator, kind: EmitKind) ![]const u8 {
-        return switch (kind) {
-            .bin => switch (self.output_kind) {
-                .executable => self.name,
-                .object => std.fmt.allocPrint(a, "{s}.o", .{self.name}),
-                .static_library => std.fmt.allocPrint(a, "lib{s}.a", .{self.name}),
-                .shared_library => std.fmt.allocPrint(a, "lib{s}.so", .{self.name}),
+    fn binNameOptions(self: Compilation) !std.zig.BinNameOptions {
+        const target = try std.Target.Query.parse(.{ .arch_os_abi = self.target });
+        // Naming follows the action's target, never native host defaults.
+        const arch = target.cpu_arch orelse return error.InvalidCompilationTarget;
+        const os = target.os_tag orelse return error.InvalidCompilationTarget;
+        return .{
+            .root_name = self.name,
+            .cpu_arch = arch,
+            .os_tag = os,
+            .abi = target.abi orelse std.Target.Abi.default(arch, os),
+            .ofmt = std.Target.ObjectFormat.default(os, arch),
+            .output_mode = switch (self.output_kind) {
+                .executable => .Exe,
+                .object => .Obj,
+                .static_library, .shared_library => .Lib,
             },
-            .@"asm" => std.fmt.allocPrint(a, "{s}.s", .{self.name}),
-            .llvm_ir => std.fmt.allocPrint(a, "{s}.ll", .{self.name}),
-            .llvm_bc => std.fmt.allocPrint(a, "{s}.bc", .{self.name}),
+            .link_mode = if (self.output_kind == .shared_library) .dynamic else .static,
         };
+    }
+
+    fn artifactName(self: Compilation, a: Allocator, kind: EmitKind) ![]const u8 {
+        const artifact: std.zig.EmitArtifact = switch (kind) {
+            .bin => .bin,
+            .@"asm" => .@"asm",
+            .llvm_ir => .llvm_ir,
+            .llvm_bc => .llvm_bc,
+        };
+        return artifact.cacheName(a, try self.binNameOptions());
     }
 };
 
@@ -499,6 +516,7 @@ const Worker = struct {
             compilation.command,
             compilation.output_kind,
             compilation.name,
+            compilation.target,
             compilation.outputs,
             arguments,
         }, .{});
@@ -868,4 +886,73 @@ pub fn main(init: std.process.Init) !u8 {
     }
 
     return 0;
+}
+
+fn expectArtifactName(target: []const u8, output_kind: OutputKind, kind: EmitKind, expected: []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const compilation: Compilation = .{
+        .command = "",
+        .output_kind = output_kind,
+        .name = "probe",
+        .target = target,
+        .outputs = &.{},
+        .arguments = &.{},
+        .input_paths = &.{},
+    };
+    try std.testing.expectEqualStrings(expected, try compilation.artifactName(arena.allocator(), kind));
+}
+
+test "artifact names follow the target rather than the worker host" {
+    try expectArtifactName("x86_64-linux", .executable, .bin, "probe");
+    try expectArtifactName("x86_64-linux-musl", .object, .bin, "probe.o");
+    try expectArtifactName("x86_64-linux-gnu", .static_library, .bin, "libprobe.a");
+    try expectArtifactName("x86_64-linux-gnu", .shared_library, .bin, "libprobe.so");
+    try expectArtifactName("x86_64-windows-msvc", .executable, .bin, "probe.exe");
+    try expectArtifactName("x86_64-windows-msvc", .object, .bin, "probe.obj");
+    try expectArtifactName("x86_64-windows-msvc", .static_library, .bin, "probe.lib");
+    try expectArtifactName("x86_64-windows-msvc", .shared_library, .bin, "probe.dll");
+    try expectArtifactName("aarch64-macos.14.0", .shared_library, .bin, "libprobe.dylib");
+}
+
+test "auxiliary artifact names retain Zig's cache suffixes" {
+    try expectArtifactName("x86_64-linux", .static_library, .@"asm", "probe.s");
+    try expectArtifactName("x86_64-windows-msvc", .static_library, .llvm_ir, "probe.ll");
+    try expectArtifactName("aarch64-macos", .static_library, .llvm_bc, "probe.bc");
+}
+
+test "artifact naming requires explicit architecture and OS" {
+    try std.testing.expectError(error.InvalidCompilationTarget, expectArtifactName("native", .executable, .bin, "probe"));
+    try std.testing.expectError(error.InvalidCompilationTarget, expectArtifactName("x86_64-native", .executable, .bin, "probe"));
+}
+
+const test_metadata =
+    \\{"command":"build-lib","output_kind":"static_library","name":"probe","target":"x86_64-linux","outputs":["bin"]}
+;
+
+test "request framing uses the last separator and preserves compiler arguments" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const compilation = try Compilation.parse(arena.allocator(), &.{
+        test_metadata, "out.a", "", "--", "-Mroot=main.zig", "--", "input=main.zig", "input=--",
+    });
+    try std.testing.expectEqual(@as(usize, 3), compilation.arguments.len);
+    try std.testing.expectEqualStrings("", compilation.arguments[0]);
+    try std.testing.expectEqualStrings("--", compilation.arguments[1]);
+    try std.testing.expectEqualStrings("-Mroot=main.zig", compilation.arguments[2]);
+    try std.testing.expectEqualStrings("main.zig", compilation.input_paths[0]);
+    try std.testing.expectEqualStrings("--", compilation.input_paths[1]);
+}
+
+test "request framing rejects missing paths and separators" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try std.testing.expectError(error.InvalidCompilationRequest, Compilation.parse(a, &.{}));
+    try std.testing.expectError(error.InvalidCompilationRequest, Compilation.parse(a, &.{test_metadata}));
+    try std.testing.expectError(error.InvalidCompilationRequest, Compilation.parse(a, &.{ test_metadata, "out.a" }));
+    try std.testing.expectError(error.InvalidCompilationRequest, Compilation.parse(a, &.{ test_metadata, "out.a", "-Mroot=main.zig" }));
+    const compilation = try Compilation.parse(a, &.{ test_metadata, "out.a", "--" });
+    try std.testing.expectEqual(@as(usize, 0), compilation.arguments.len);
+    try std.testing.expectEqual(@as(usize, 0), compilation.input_paths.len);
 }
