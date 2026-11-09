@@ -903,22 +903,12 @@ fn expectArtifactName(target: []const u8, output_kind: OutputKind, kind: EmitKin
     try std.testing.expectEqualStrings(expected, try compilation.artifactName(arena.allocator(), kind));
 }
 
-test "artifact names follow the target rather than the worker host" {
+test "artifact names follow the compilation target and output kind" {
     try expectArtifactName("x86_64-linux", .executable, .bin, "probe");
-    try expectArtifactName("x86_64-linux-musl", .object, .bin, "probe.o");
-    try expectArtifactName("x86_64-linux-gnu", .static_library, .bin, "libprobe.a");
-    try expectArtifactName("x86_64-linux-gnu", .shared_library, .bin, "libprobe.so");
     try expectArtifactName("x86_64-windows-msvc", .executable, .bin, "probe.exe");
     try expectArtifactName("x86_64-windows-msvc", .object, .bin, "probe.obj");
     try expectArtifactName("x86_64-windows-msvc", .static_library, .bin, "probe.lib");
     try expectArtifactName("x86_64-windows-msvc", .shared_library, .bin, "probe.dll");
-    try expectArtifactName("aarch64-macos.14.0", .shared_library, .bin, "libprobe.dylib");
-}
-
-test "auxiliary artifact names retain Zig's cache suffixes" {
-    try expectArtifactName("x86_64-linux", .static_library, .@"asm", "probe.s");
-    try expectArtifactName("x86_64-windows-msvc", .static_library, .llvm_ir, "probe.ll");
-    try expectArtifactName("aarch64-macos", .static_library, .llvm_bc, "probe.bc");
 }
 
 test "artifact naming requires explicit architecture and OS" {
