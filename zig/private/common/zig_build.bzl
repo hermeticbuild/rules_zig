@@ -261,6 +261,14 @@ def _references_auto_c(root_module):
                 return True
     return False
 
+def _compile(ctx, *, zigtoolchaininfo, arguments, **kwargs):
+    """Register a compilation through a shared execution entry point."""
+    ctx.actions.run(
+        executable = zig_toolchain_executable(zigtoolchaininfo),
+        arguments = arguments,
+        **kwargs
+    )
+
 def zig_build_impl(ctx, *, kind):
     """Common implementation for Zig build rules.
 
@@ -607,10 +615,11 @@ def zig_build_impl(ctx, *, kind):
         if use_cc_common_link:
             static_lib = cc_static_lib
             args.add(primary_emission.file, format = primary_emission.flag)
-            ctx.actions.run(
+            _compile(
+                ctx,
+                zigtoolchaininfo = zigtoolchaininfo,
                 outputs = compile_outputs,
                 inputs = inputs,
-                executable = zig_toolchain_executable(zigtoolchaininfo),
                 arguments = ["build-lib", global_args, args],
                 mnemonic = "ZigBuildLib",
                 progress_message = "zig build-lib %{label}",
@@ -644,10 +653,11 @@ def zig_build_impl(ctx, *, kind):
             )
         else:
             args.add(primary_emission.file, format = primary_emission.flag)
-            ctx.actions.run(
+            _compile(
+                ctx,
+                zigtoolchaininfo = zigtoolchaininfo,
                 outputs = compile_outputs,
                 inputs = inputs,
-                executable = zig_toolchain_executable(zigtoolchaininfo),
                 arguments = ["build-exe", global_args, args],
                 mnemonic = "ZigBuildExe",
                 progress_message = "zig build-exe %{label}",
@@ -657,10 +667,11 @@ def zig_build_impl(ctx, *, kind):
         if use_cc_common_link:
             test_args = ctx.actions.args()
             test_args.add(primary_emission.file, format = primary_emission.flag)
-            ctx.actions.run(
+            _compile(
+                ctx,
+                zigtoolchaininfo = zigtoolchaininfo,
                 outputs = compile_outputs,
                 inputs = inputs,
-                executable = zig_toolchain_executable(zigtoolchaininfo),
                 arguments = ["test-obj", "--test-no-exec", global_args, args, test_args],
                 mnemonic = "ZigBuildTest",
                 progress_message = "zig test-obj %{label}",
@@ -680,10 +691,11 @@ def zig_build_impl(ctx, *, kind):
             ])
             lib_args.add(archive_emission.file, format = archive_emission.flag)
             lib_args.add(test_obj)
-            ctx.actions.run(
+            _compile(
+                ctx,
+                zigtoolchaininfo = zigtoolchaininfo,
                 outputs = [archive_emission.file],
                 inputs = [test_obj, zigtoolchaininfo.validation] + ([zigtoolchaininfo.zig_lib.file] if zigtoolchaininfo.zig_lib.file else []),
-                executable = zig_toolchain_executable(zigtoolchaininfo),
                 arguments = ["build-lib", global_args, lib_args],
                 mnemonic = "ZigBuildLib",
                 progress_message = "zig build-lib %{label}",
@@ -717,10 +729,11 @@ def zig_build_impl(ctx, *, kind):
             )
         else:
             args.add(primary_emission.file, format = primary_emission.flag)
-            ctx.actions.run(
+            _compile(
+                ctx,
+                zigtoolchaininfo = zigtoolchaininfo,
                 outputs = compile_outputs,
                 inputs = inputs,
-                executable = zig_toolchain_executable(zigtoolchaininfo),
                 arguments = ["test", "--test-no-exec", global_args, args],
                 mnemonic = "ZigBuildTest",
                 progress_message = "zig test %{label}",
@@ -731,10 +744,11 @@ def zig_build_impl(ctx, *, kind):
             args.add(primary_emission.file, format = primary_emission.flag)
         else:
             args.add("-fno-emit-bin")
-        ctx.actions.run(
+        _compile(
+            ctx,
+            zigtoolchaininfo = zigtoolchaininfo,
             outputs = compile_outputs,
             inputs = inputs,
-            executable = zig_toolchain_executable(zigtoolchaininfo),
             arguments = ["build-lib", global_args, args],
             mnemonic = "ZigBuildStaticLib",
             progress_message = "zig build-lib %{label}",
@@ -755,10 +769,11 @@ def zig_build_impl(ctx, *, kind):
         if use_cc_common_link:
             static_lib = cc_static_lib
             args.add(primary_emission.file, format = primary_emission.flag)
-            ctx.actions.run(
+            _compile(
+                ctx,
+                zigtoolchaininfo = zigtoolchaininfo,
                 outputs = compile_outputs,
                 inputs = inputs,
-                executable = zig_toolchain_executable(zigtoolchaininfo),
                 arguments = ["build-lib", global_args, args],
                 mnemonic = "ZigBuildLib",
                 progress_message = "zig build-lib %{label}",
@@ -807,10 +822,11 @@ def zig_build_impl(ctx, *, kind):
             # Here we explicitly set the SONAME to match the output filename.
             args.add(bin_output_name, format = "-fsoname=%s")
 
-            ctx.actions.run(
+            _compile(
+                ctx,
+                zigtoolchaininfo = zigtoolchaininfo,
                 outputs = compile_outputs,
                 inputs = inputs,
-                executable = zig_toolchain_executable(zigtoolchaininfo),
                 arguments = ["build-lib", "-dynamic", global_args, args],
                 mnemonic = "ZigBuildSharedLib",
                 progress_message = "zig build-lib -dynamic %{label}",
