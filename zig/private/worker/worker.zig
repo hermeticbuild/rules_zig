@@ -220,9 +220,12 @@ fn appendResponseFile(argv: *std.array_list.Managed([]const u8), io: Io, root: [
 
     const a = argv.allocator;
     const path = try std.fs.path.join(a, &.{ root, "compiler.args" });
-    var flags: Io.Writer.Allocating = .init(a);
-    try writeResponseArguments(&flags.writer, arguments);
-    try Dir.cwd().writeFile(io, .{ .sub_path = path, .data = flags.written() });
+    const file = try Dir.cwd().createFile(io, path, .{});
+    defer file.close(io);
+    var buffer: [8192]u8 = undefined;
+    var flags = file.writer(io, &buffer);
+    try writeResponseArguments(&flags.interface, arguments);
+    try flags.interface.flush();
     try argv.append(try std.fmt.allocPrint(a, "@{s}", .{path}));
 }
 
@@ -306,6 +309,7 @@ const Worker = struct {
     idle_sessions: std.array_list.Managed(*Session),
     max_sessions: usize = 1,
     generation: usize = 0,
+    message_buffer: std.ArrayList(u8) = .empty,
 
     fn reset(self: *Worker) void {
         if (self.session) |s| s.destroy(self.gpa, self.io);
@@ -316,6 +320,7 @@ const Worker = struct {
         self.reset();
         for (self.idle_sessions.items) |s| s.destroy(self.gpa, self.io);
         self.idle_sessions.deinit();
+        self.message_buffer.deinit(self.gpa);
     }
 
     fn selectSession(self: *Worker, key: []const u8) !void {
@@ -531,6 +536,8 @@ const Worker = struct {
         try client.serveBodylessMessage(.update);
 
         var digest: ?[]const u8 = null;
+        var digest_buffer: [std.Build.Cache.hex_digest_len]u8 = undefined;
+        var digest_body: [1 + std.Build.Cache.bin_digest_len]u8 = undefined;
         var undeclared_input = false;
         while (true) {
             const hdr = try client.receiveMessage();
@@ -539,7 +546,27 @@ const Worker = struct {
                 return error.CompilerMessageTooLarge;
             }
 
-            const body = try s.reader.interface.readAllocAll(a, hdr.bytes_len);
+            const body = switch (hdr.tag) {
+                .emit_digest => blk: {
+                    if (hdr.bytes_len != digest_body.len) {
+                        try s.reader.interface.discardAll(hdr.bytes_len);
+                        return error.InvalidEmitDigest;
+                    }
+                    try s.reader.interface.readSliceAll(&digest_body);
+                    break :blk &digest_body;
+                },
+                .zig_version, .error_bundle, .file_system_inputs => blk: {
+                    // These bodies are consumed before the next message. Keep
+                    // scratch storage across messages, requests, and sessions.
+                    try self.message_buffer.resize(self.gpa, hdr.bytes_len);
+                    try s.reader.interface.readSliceAll(self.message_buffer.items);
+                    break :blk self.message_buffer.items;
+                },
+                else => {
+                    try s.reader.interface.discardAll(hdr.bytes_len);
+                    continue;
+                },
+            };
             switch (hdr.tag) {
                 .zig_version => {
                     const version = std.SemanticVersion.parse(body) catch return error.UnsupportedZigVersion;
@@ -548,10 +575,7 @@ const Worker = struct {
                     }
                 },
                 .emit_digest => {
-                    if (body.len != 1 + std.Build.Cache.bin_digest_len) {
-                        return error.InvalidEmitDigest;
-                    }
-                    digest = try std.fmt.allocPrint(a, "{x}", .{body[1..]});
+                    digest = try std.fmt.bufPrint(&digest_buffer, "{x}", .{body[1..]});
                 },
                 .error_bundle => {
                     var bundle = try std.zig.Server.allocErrorBundle(a, body);
@@ -816,9 +840,11 @@ pub fn main(init: std.process.Init) !u8 {
     var stdin = Io.File.stdin().readerStreaming(io, in_buffer);
     var stdout = Io.File.stdout().writerStreaming(io, &out_buffer);
 
+    var request_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer request_arena.deinit();
     while (try stdin.interface.takeDelimiter('\n')) |line| {
-        var request_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-        defer request_arena.deinit();
+        // Reuse ordinary requests' storage without retaining an outlier forever.
+        defer _ = request_arena.reset(.{ .retain_with_limit = 8 * 1024 * 1024 });
 
         const ra = request_arena.allocator();
 
@@ -831,13 +857,12 @@ pub fn main(init: std.process.Init) !u8 {
             break :blk 1;
         };
 
-        const response = try std.json.Stringify.valueAlloc(ra, Response{
+        try std.json.Stringify.value(Response{
             .requestId = request.requestId,
             .exitCode = code,
             .output = diagnostics.written(),
-        }, .{});
+        }, .{}, &stdout.interface);
 
-        try stdout.interface.writeAll(response);
         try stdout.interface.writeByte('\n');
         try stdout.interface.flush();
     }
