@@ -124,6 +124,10 @@ def _cc_test_handoff_test_impl(ctx):
     archive = assert_find_action(env, "ZigBuildLib")
     link = assert_find_action(env, "CppLink")
 
+    for flag in ["--zig-lib-dir", "--cache-dir", "--global-cache-dir"]:
+        asserts.equals(env, 1, len([arg for arg in archive.argv if arg == flag]), "Ordinary packaging needs exactly one {}.".format(flag))
+        asserts.false(env, flag in compile.argv, "The worker owns its SDK/cache paths; {} must not leak into the request.".format(flag))
+
     objects = compile.outputs.to_list()
     asserts.equals(env, 1, len(objects))
     asserts.true(env, objects[0] in archive.inputs.to_list(), "Ordinary archive packaging must consume the worker's test object.")

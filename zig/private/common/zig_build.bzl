@@ -396,15 +396,16 @@ def zig_build_impl(ctx, *, kind):
         ]
         global_args.add_all(cc_link_compile_flags)
 
-    if not incremental_worker:
-        zig_lib_dir(
-            zigtoolchaininfo = zigtoolchaininfo,
-            args = global_args,
-        )
-        zig_cache_output(
-            zigtoolchaininfo = zigtoolchaininfo,
-            args = global_args,
-        )
+    # Ordinary actions need complete defaults. Worker dispatch replaces the
+    # supplied argument groups and configures its own SDK/cache paths.
+    zig_lib_dir(
+        zigtoolchaininfo = zigtoolchaininfo,
+        args = global_args,
+    )
+    zig_cache_output(
+        zigtoolchaininfo = zigtoolchaininfo,
+        args = global_args,
+    )
 
     location_targets = ctx.attr.data
 
@@ -774,17 +775,6 @@ def zig_build_impl(ctx, *, kind):
             )
             static_lib = archive_emission.file
             lib_args = ctx.actions.args()
-            if incremental_worker:
-                # Source compilation uses worker-owned SDK/cache paths, but
-                # packaging the emitted object remains an ordinary Zig action.
-                zig_lib_dir(
-                    zigtoolchaininfo = zigtoolchaininfo,
-                    args = lib_args,
-                )
-                zig_cache_output(
-                    zigtoolchaininfo = zigtoolchaininfo,
-                    args = lib_args,
-                )
             lib_args.add_all([
                 "-fPIC",
                 "-fcompiler-rt",
@@ -799,7 +789,7 @@ def zig_build_impl(ctx, *, kind):
                 arguments = ["build-lib", global_args, lib_args],
                 mnemonic = "ZigBuildLib",
                 progress_message = "zig build-lib %{label}",
-                **(compile_kwargs | {"worker": None, "worker_args": None})
+                **zig_build_kwargs
             )
 
             library_to_link = cc_common.create_library_to_link(
