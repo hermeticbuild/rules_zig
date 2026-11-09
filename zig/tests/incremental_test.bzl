@@ -45,6 +45,9 @@ def _binary_test_impl(ctx):
     target = analysistest.target_under_test(env)
     compile = assert_find_action(env, "ZigIncrementalCompile")
 
+    metadata = json.decode([arg for arg in compile.argv if arg.startswith("{")][0])
+    asserts.equals(env, compile.argv[compile.argv.index("-target") + 1], metadata.get("target"))
+
     executable = target[DefaultInfo].files_to_run.executable
     asserts.equals(env, [executable], target[DefaultInfo].files.to_list())
     asserts.equals(env, [executable], compile.outputs.to_list())

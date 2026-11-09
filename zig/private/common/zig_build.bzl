@@ -556,6 +556,7 @@ def zig_build_impl(ctx, *, kind):
             "command": command,
             "output_kind": output_kind,
             "name": root_module.canonical_name,
+            "target": zigtargetinfo.target,
             "outputs": emitted_outputs.keys(),
         }))
         args.add_all(emitted_outputs.values())
