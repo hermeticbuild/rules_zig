@@ -2,6 +2,7 @@
 
 load("@aspect_bazel_lib//lib:utils.bzl", "utils")
 load("@bazel_skylib//rules:expand_template.bzl", "expand_template")
+load("@platforms//host:constraints.bzl", "HOST_CONSTRAINTS")
 load("//zig:defs.bzl", "zig_binary", "zig_test")
 load("//zig/zls:zls_write_build_config.bzl", "zls_write_build_config")
 load("//zig/zls:zls_write_runner_zig_src.bzl", "zls_write_runner_zig_src")
@@ -90,6 +91,8 @@ def zls_completion(name, deps, testonly = False, **kwargs):
         name = name + ".runner",
         out = name + ".runner.zig",
         build_runner = ":" + name + ".build_runner.zig",
+        # These tools run in the editor, even when build actions run remotely.
+        exec_compatible_with = [Label(constraint) for constraint in HOST_CONSTRAINTS],
         testonly = testonly,
         target_compatible_with = kwargs.get("target_compatible_with"),
     )
@@ -98,8 +101,7 @@ def zls_completion(name, deps, testonly = False, **kwargs):
         name = name,
         main = name + ".runner",
         data = [
-            Label("//zig:resolved_toolchain"),
-            Label("//zig/zls:resolved_toolchain"),
+            name + ".runner",
             name + ".build_runner",
         ],
         deps = [
