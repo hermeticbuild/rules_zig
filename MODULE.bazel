@@ -67,14 +67,14 @@ zls_dev.toolchain(
     zls_version = "0.16.0",
 )
 
-# HermeticBuild's prebuilt includes the upstream absolute-path fix (bbd60390).
+# HermeticBuild's CI-built prebuilt includes the upstream absolute-path fix (bbd60390).
 zls_dev.toolchain(
     zig_version = "0.17.0",
-    zls_version = "0.17.0+bazel.bbd60390",
+    zls_version = "0.17.0+hermetic.1",
 )
 zls_dev.toolchain(
     zig_version = "0.17.1",
-    zls_version = "0.17.0+bazel.bbd60390",
+    zls_version = "0.17.0+hermetic.1",
 )
 
 bazel_dep(name = "toolchains_buildbuddy", version = "0.0.4", dev_dependency = True)

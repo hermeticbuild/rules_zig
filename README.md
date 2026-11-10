@@ -140,6 +140,9 @@ Examples can be found among the end-to-end tests under
 ZLS toolchains are provided by a separate extension and selected by the active
 Zig SDK version.
 
+See [how the ZLS integration works](./zig/zls/README.md) for the 0.17 flow and
+the responsibilities of each component.
+
 ```starlark
 zls = use_extension("@rules_zig//zig/zls:extensions.bzl", "zls")
 zls.index(file = "@rules_zig//zig/zls/private:versions.json")
@@ -158,13 +161,13 @@ builds are not necessarily compatible.
 Zig 0.17.0 and 0.17.1 require the ZLS absolute-path correction from
 [upstream commit bbd60390](https://github.com/zigtools/zls/commit/bbd60390ffc1c12cd1aa91688fd2940b22966ee9),
 which is absent from released ZLS 0.17.0. The catalog includes
-[HermeticBuild's prebuilt backport](https://github.com/hermeticbuild/zls-prebuilt/releases/tag/0.17.0%2Bbazel.bbd60390),
-identified as `0.17.0+bazel.bbd60390`:
+[HermeticBuild's CI-built prebuilt backport](https://github.com/hermeticbuild/zls-prebuilt/releases/tag/0.17.0%2Bhermetic.1),
+identified as `0.17.0+hermetic.1`:
 
 ```starlark
 zls.toolchain(
     zig_version = "0.17.0",  # Use "0.17.1" for that SDK instead.
-    zls_version = "0.17.0+bazel.bbd60390",
+    zls_version = "0.17.0+hermetic.1",
 )
 ```
 

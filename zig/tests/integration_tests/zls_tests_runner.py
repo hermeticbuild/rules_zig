@@ -37,7 +37,7 @@ register_toolchains("@zls_toolchains//:all")
 bazel_dep(name = "zls_external", version = "0.0.0")
 local_path_override(module_name = "zls_external", path = "zls_external_a")
 ''')
-        zls_version = "0.16.0" if version == "0.16.0" else "0.17.0+bazel.bbd60390"
+        zls_version = "0.16.0" if version == "0.16.0" else "0.17.0+hermetic.1"
         module.write_text(module.read_text() + f'zls.toolchain(zig_version = "{version}", zls_version = "{zls_version}")\n')
         original_module = module.read_text()
         for name in ["a", "b"]:
@@ -110,7 +110,7 @@ zls_completion(name="completion", deps=[":application", ":second", "//zls_fixtur
             bazel("build", "--config=remote-cache", flag, "//zls_fixture:completion")
             launcher = workspace / "bazel-bin/zls_fixture/completion"
             actual = subprocess.check_output([str(launcher), "--version"], cwd=fixture, env=env, text=True).strip()
-            assert actual == ("0.16.0" if version == "0.16.0" else "0.17.0+bazel.bbd60390"), actual
+            assert actual == zls_version, actual
             print("Executed ZLS", actual, "with Zig", version, flush=True)
             session = Session(launcher, fixture, env)
             sessions.append(session)
