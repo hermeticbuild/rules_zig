@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import sys
@@ -92,10 +93,13 @@ zls_completion(name="completion", deps=[":application", ":second", "//zls_fixtur
         shim = shim_dir / "bazel"
         log = temp / "bazel-commands.jsonl"
         bazel_runfiles = {key: os.environ[key] for key in ["RUNFILES_DIR", "RUNFILES_MANIFEST_FILE", "JAVA_RUNFILES"] if key in os.environ}
-        shim.write_text("#!" + sys.executable + "\nimport os,sys,json\n"
+        shim_program = shim_dir / "bazel.py"
+        shim_program.write_text("import os,sys,json\n"
                        + f"with open({str(log)!r},'a') as f: f.write(json.dumps(sys.argv[1:])+'\\n')\n"
                        + f"env=dict(os.environ); env.update({bazel_runfiles!r})\n"
                        + f"os.execve({str(binary)!r},[{str(binary)!r},'--output_user_root={temp / 'bazel'}',*sys.argv[1:]],env)\n")
+        shim.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + " "
+                        + shlex.quote(str(shim_program)) + ' "$@"\n')
         shim.chmod(0o755)
         env = dict(os.environ, PATH=str(shim_dir) + os.pathsep + os.environ.get("PATH", ""),
                    BUILD_WORKSPACE_DIRECTORY=str(workspace), TMPDIR=str(temp))
