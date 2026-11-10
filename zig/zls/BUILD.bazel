@@ -12,6 +12,8 @@ exports_files(
         "workspace_printer_test.zig",
         "zls_build_runner.zig",
         "zls_runner.zig",
+        "zls_runner_017.zig",
+        "zls_runner_common.zig",
         "owned_process.zig",
         "zls_bsp.zig",
     ],
@@ -41,6 +43,13 @@ selects.config_setting_group(
         "native_0171",
     ],
     visibility = ["//visibility:public"],
+)
+
+zig_library(
+    name = "zls_runner_common",
+    main = "zls_runner_common.zig",
+    visibility = ["//visibility:public"],
+    deps = ["//zig/runfiles"],
 )
 
 zig_library(
@@ -136,6 +145,8 @@ filegroup(
         ":zls_build_runner.zig",
         ":zls_completion.bzl",
         ":zls_runner.zig",
+        ":zls_runner_017.zig",
+        ":zls_runner_common.zig",
         ":zls_write_build_config.bzl",
         ":zls_write_runner_zig_src.bzl",
         "//zig/zls/private:all_files",

@@ -91,7 +91,14 @@ def zls_completion(name, deps, testonly = False, **kwargs):
     zls_write_runner_zig_src(
         name = name + ".runner",
         out = name + ".runner.zig",
-        build_runner = ":" + name + ".build_runner.zig",
+        runner_tpl = select({
+            Label("//zig/zls:native_protocol"): Label("//zig/zls:zls_runner_017.zig"),
+            "//conditions:default": Label("//zig/zls:zls_runner.zig"),
+        }),
+        build_runner = select({
+            Label("//zig/zls:native_protocol"): None,
+            "//conditions:default": name + ".build_runner.zig",
+        }),
         # These tools run in the editor, even when build actions run remotely.
         exec_compatible_with = [Label(constraint) for constraint in HOST_CONSTRAINTS],
         printer_target = str(utils.to_label(build_config_printer)),
@@ -104,10 +111,12 @@ def zls_completion(name, deps, testonly = False, **kwargs):
         main = name + ".runner",
         data = [
             name + ".runner",
-            name + ".build_runner",
-        ],
+        ] + select({
+            Label("//zig/zls:native_protocol"): [],
+            "//conditions:default": [name + ".build_runner"],
+        }),
         deps = [
-            Label("//zig/runfiles"),
+            Label("//zig/zls:zls_runner_common"),
         ] + select({
             Label("//zig/zls:native_protocol"): [
                 Label("//zig/zls:owned_process"),
