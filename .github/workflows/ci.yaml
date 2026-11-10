@@ -342,6 +342,7 @@ jobs:
       - test-zig-versions
       #- test-zig-docs
       - integration-tests
+      - zls-parity
     if: ${{ always() }}
     steps:
       - uses: cgrindel/gha_join_jobs@v1.5.0
