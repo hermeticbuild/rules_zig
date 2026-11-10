@@ -5,6 +5,9 @@ const Io = std.Io;
 const Dir = Io.Dir;
 const Allocator = std.mem.Allocator;
 
+// Route SIGTERM through a self-pipe so cleanup runs outside the signal handler.
+// Normal control flow cancels and joins the serving task before stopping Zig
+// and removing the worker's private tree.
 const Shutdown = struct {
     var requested: std.atomic.Value(bool) = .init(false);
     var notify_fd: std.posix.fd_t = undefined;
