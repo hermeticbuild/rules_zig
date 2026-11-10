@@ -284,6 +284,10 @@ def _compile(ctx, *, zigtoolchaininfo, arguments, worker = None, worker_args = N
         startup = ctx.actions.args()
         startup.add(executable, format = "--zig=%s")
         startup.add(zig_toolchain_lib_dir(zigtoolchaininfo), format = "--lib=%s")
+
+        # Bazel retains a separate worker pool for each compilation action.
+        # One output anchors the whole invocation, including auxiliary outputs.
+        startup.add(kwargs["outputs"][0], format = "--compilation-output=%s")
         kwargs["tools"] = [executable, zig_toolchain_lib_dir(zigtoolchaininfo)]
         executable = worker
         arguments = [startup, worker_args]

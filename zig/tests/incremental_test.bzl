@@ -52,6 +52,8 @@ def _binary_test_impl(ctx):
     asserts.equals(env, [executable], target[DefaultInfo].files.to_list())
     asserts.equals(env, [executable], compile.outputs.to_list())
 
+    asserts.equals(env, ["--compilation-output=" + executable.path], [arg for arg in compile.argv if arg.startswith("--compilation-output=")])
+
     return analysistest.end(env)
 
 _binary_test = analysistest.make(_binary_test_impl, config_settings = _SETTINGS)
@@ -179,6 +181,7 @@ def _auxiliary_outputs_test_impl(ctx):
     asserts.equals(env, 1, len(llvm_ir))
     asserts.equals(env, 1, len(llvm_bc))
     auxiliary = asm + llvm_ir + llvm_bc
+    asserts.equals(env, ["--compilation-output=" + compile.outputs.to_list()[0].path], [arg for arg in compile.argv if arg.startswith("--compilation-output=")])
     for file in auxiliary:
         asserts.true(env, file in compile.outputs.to_list(), "Auxiliary outputs belong to compilation, not linking.")
         asserts.false(env, file in link.outputs.to_list())
@@ -210,6 +213,7 @@ def _auxiliary_only_test_impl(ctx):
     asserts.equals(env, 1, len(llvm_ir))
     asserts.equals(env, 1, len(llvm_bc))
     asserts.equals(env, 3, len(compile.outputs.to_list()))
+    asserts.equals(env, ["--compilation-output=" + compile.outputs.to_list()[0].path], [arg for arg in compile.argv if arg.startswith("--compilation-output=")])
     for file in asm + llvm_ir + llvm_bc:
         asserts.true(env, file in compile.outputs.to_list(), "The worker must produce the requested auxiliary outputs without an archive.")
 
