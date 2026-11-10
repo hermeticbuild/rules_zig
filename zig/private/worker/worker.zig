@@ -323,8 +323,6 @@ const Worker = struct {
     lib_input: []const u8,
     root: []const u8,
     session: ?*Session = null,
-    idle_sessions: std.array_list.Managed(*Session),
-    max_sessions: usize = 1,
     generation: usize = 0,
     message_buffer: std.ArrayList(u8) = .empty,
 
@@ -335,33 +333,7 @@ const Worker = struct {
 
     fn deinit(self: *Worker) void {
         self.reset();
-        for (self.idle_sessions.items) |s| s.destroy(self.gpa, self.io);
-        self.idle_sessions.deinit();
         self.message_buffer.deinit(self.gpa);
-    }
-
-    fn selectSession(self: *Worker, key: []const u8) !void {
-        if (self.session) |s| {
-            if (std.mem.eql(u8, s.key, key)) {
-                return;
-            }
-
-            try self.idle_sessions.append(s);
-            self.session = null;
-        }
-
-        // Idle sessions are ordered least recently used first. The active
-        // compiler also counts toward the per-worker bound.
-        for (self.idle_sessions.items, 0..) |s, i| {
-            if (std.mem.eql(u8, s.key, key)) {
-                self.session = self.idle_sessions.orderedRemove(i);
-                return;
-            }
-        }
-
-        if (self.idle_sessions.items.len >= self.max_sessions) {
-            self.idle_sessions.orderedRemove(0).destroy(self.gpa, self.io);
-        }
     }
 
     fn start(self: *Worker, compilation: Compilation, key: []const u8, arguments: []const []const u8, inputs: []const Input, request_allocator: Allocator) !*Session {
@@ -520,8 +492,6 @@ const Worker = struct {
             compilation.outputs,
             arguments,
         }, .{});
-
-        try self.selectSession(key);
 
         var reused = self.session != null and std.mem.eql(u8, self.session.?.key, key);
 
@@ -797,7 +767,6 @@ pub fn main(init: std.process.Init) !u8 {
     var zig_path: ?[]const u8 = null;
     var lib_path: ?[]const u8 = null;
     var persistent = false;
-    var max_sessions: usize = 1;
     var flags: std.array_list.Managed([]const u8) = .init(a);
     for (args[1..]) |arg| {
         if (std.mem.startsWith(u8, arg, "--zig=")) {
@@ -806,9 +775,9 @@ pub fn main(init: std.process.Init) !u8 {
             lib_path = arg[6..];
         } else if (std.mem.eql(u8, arg, "--persistent_worker")) {
             persistent = true;
-        } else if (std.mem.cutPrefix(u8, arg, "--max-sessions=")) |value| {
-            max_sessions = try std.fmt.parseInt(usize, value, 10);
-            if (max_sessions == 0) return error.InvalidSessionLimit;
+        } else if (std.mem.cutPrefix(u8, arg, "--compilation-output=")) |path| {
+            // Routing identity for Bazel's worker pool, not a compiler option.
+            try safePath(path, false);
         } else if (std.mem.startsWith(u8, arg, "@")) {
             try readLines(a, io, arg[1..], &flags);
         } else return error.InvalidStartupArgument;
@@ -834,8 +803,6 @@ pub fn main(init: std.process.Init) !u8 {
         .zig_input = zig_path.?,
         .lib_input = lib_path.?,
         .root = root,
-        .idle_sessions = .init(init.gpa),
-        .max_sessions = max_sessions,
     };
     defer {
         worker.deinit();
