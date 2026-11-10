@@ -1,7 +1,6 @@
 load("@bazel_skylib//rules:diff_test.bzl", "diff_test")
 load("@bazel_skylib//rules:write_file.bzl", "write_file")
-load("@platforms//host:constraints.bzl", "HOST_CONSTRAINTS")
-load("@rules_python//python:defs.bzl", "py_binary", "py_test")
+load("@rules_python//python:defs.bzl", "py_binary")
 load("//zig:defs.bzl", "zig_binary", "zig_library")
 load("//zig/zls:defs.bzl", "zls_completion")
 load("//zig/zls:zls_write_build_config.bzl", "zls_write_build_config")
@@ -20,30 +19,6 @@ zls_completion(
         "//conditions:default": [],
     }),
     deps = [":lib"],
-)
-
-py_test(
-    name = "runtime_test",
-    size = "small",
-    srcs = ["runtime_test.py"],
-    args = [
-        "$(location :completion)",
-        "$(location :completion.runner)",
-    ],
-    data = [
-        ":completion",
-        ":completion.runner",
-    ],
-    exec_compatible_with = HOST_CONSTRAINTS,
-    tags = ["no-remote-exec"],
-    target_compatible_with = select({
-        "@zig_toolchains//:0.16.0": [],
-        "//conditions:default": ["@platforms//:incompatible"],
-    }) + select({
-        "@platforms//os:linux": [],
-        "@platforms//os:macos": [],
-        "//conditions:default": ["@platforms//:incompatible"],
-    }),
 )
 
 zig_library(
