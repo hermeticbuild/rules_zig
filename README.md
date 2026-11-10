@@ -171,6 +171,10 @@ zls_completion(
 Then point your editor's ZLS binary setting at a wrapper script that runs that
 target.
 
+The launcher selects runtime Zig and ZLS tools for the editor's local host, even
+when build actions execute remotely. The entry point's target platform must match
+the editor host; the remote execution platform may differ.
+
 ```bash
 #!/usr/bin/env bash
 cd "$(dirname "${BASH_SOURCE[0]}")/.."

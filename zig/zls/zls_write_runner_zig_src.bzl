@@ -33,7 +33,14 @@ def _zls_write_runner_zig_src_impl(ctx):
     )
 
     return [
-        DefaultInfo(files = depset([zls_runner])),
+        DefaultInfo(
+            files = depset([zls_runner]),
+            # Ship the same configured tools whose paths were embedded above.
+            runfiles = ctx.runfiles().merge_all([
+                ctx.toolchains["@rules_zig//zig:toolchain_type"].default.default_runfiles,
+                ctx.toolchains["@rules_zig//zig/zls:toolchain_type"].default.default_runfiles,
+            ]),
+        ),
     ]
 
 zls_write_runner_zig_src = rule(
