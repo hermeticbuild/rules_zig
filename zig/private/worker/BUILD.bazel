@@ -5,7 +5,12 @@ zig_binary(
     main = "worker.zig",
     tags = ["manual"],
     visibility = ["//zig:__subpackages__"],
-    zigopts = ["-mcpu=baseline"],
+    zigopts = [
+        "-mcpu=baseline",
+        # The adapter must wait for SIGTERM concurrently with serving requests,
+        # independently of the threading mode selected for consumer programs.
+        "-fno-single-threaded",
+    ],
 )
 
 zig_test(

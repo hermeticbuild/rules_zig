@@ -1,8 +1,58 @@
 //! Singleplex Bazel adapter for Zig 0.17's incremental compiler protocol.
 const std = @import("std");
+const builtin = @import("builtin");
 const Io = std.Io;
 const Dir = Io.Dir;
 const Allocator = std.mem.Allocator;
+
+const Shutdown = struct {
+    var requested: std.atomic.Value(bool) = .init(false);
+    var notify_fd: std.posix.fd_t = undefined;
+
+    fn init(io: Io) !Io.File {
+        const posix = std.posix;
+        var fds: [2]posix.fd_t = undefined;
+        if (posix.errno(posix.system.pipe(&fds)) != .SUCCESS) return error.SignalPipeFailed;
+        errdefer Io.File.closeMany(io, &.{
+            .{ .handle = fds[0], .flags = .{ .nonblocking = false } },
+            .{ .handle = fds[1], .flags = .{ .nonblocking = false } },
+        });
+        for (fds) |fd| {
+            if (posix.errno(posix.system.fcntl(fd, posix.F.SETFD, @as(usize, posix.FD_CLOEXEC))) != .SUCCESS) {
+                return error.SignalPipeFailed;
+            }
+        }
+
+        notify_fd = fds[1];
+        const action: posix.Sigaction = .{
+            .handler = .{ .handler = handle },
+            .mask = posix.sigemptyset(),
+            .flags = posix.SA.RESTART,
+        };
+        posix.sigaction(.TERM, &action, null);
+
+        // Keep both descriptors until process exit: an in-flight handler must
+        // never write to a closed or recycled descriptor. CLOEXEC keeps them
+        // out of compiler children.
+        return .{ .handle = fds[0], .flags = .{ .nonblocking = false } };
+    }
+
+    fn handle(_: std.posix.SIG) callconv(.c) void {
+        // Only the first signal writes, so the pipe cannot fill or block.
+        if (requested.swap(true, .monotonic)) return;
+        const saved_errno = if (builtin.link_libc) std.c._errno().* else 0;
+        defer if (builtin.link_libc) {
+            std.c._errno().* = saved_errno;
+        };
+        const byte = [_]u8{0};
+        while (std.posix.errno(std.posix.system.write(notify_fd, &byte, byte.len)) == .INTR) {}
+    }
+
+    fn wait(file: Io.File, io: Io) !void {
+        var byte: [1]u8 = undefined;
+        _ = try file.readStreaming(io, &.{&byte});
+    }
+};
 
 const Input = struct {
     path: []const u8,
@@ -338,6 +388,7 @@ const Worker = struct {
 
     fn start(self: *Worker, compilation: Compilation, key: []const u8, arguments: []const []const u8, inputs: []const Input, request_allocator: Allocator) !*Session {
         self.reset();
+        if (Shutdown.requested.load(.monotonic)) return error.Canceled;
         self.generation += 1;
 
         const s = try self.gpa.create(Session);
@@ -467,6 +518,9 @@ const Worker = struct {
     fn execute(self: *Worker, request: Request, a: Allocator, diagnostics: *Io.Writer) !u8 {
         return self.compile(request, a, diagnostics) catch |err| switch (err) {
             error.EndOfStream, error.ReadFailed, error.WriteFailed => {
+                // Readers erase Canceled to ReadFailed. Termination must not
+                // be mistaken for a dead compiler and start a replacement.
+                if (Shutdown.requested.load(.monotonic)) return error.Canceled;
                 std.log.warn("zig-worker compiler transport failed ({t}); restarting", .{err});
                 self.reset();
                 return self.compile(request, a, diagnostics);
@@ -786,12 +840,17 @@ pub fn main(init: std.process.Init) !u8 {
     const zig = try Dir.cwd().realPathFileAlloc(io, zig_path orelse return error.MissingZigPath, a);
     const lib = try Dir.cwd().realPathFileAlloc(io, lib_path orelse return error.MissingLibPath, a);
 
+    // Install before creating state so SIGTERM cannot bypass its cleanup.
+    const signal_file: ?Io.File = if (builtin.os.tag == .windows) null else try Shutdown.init(io);
+
     var nonce: [16]u8 = undefined;
     io.random(&nonce);
 
     // Linux's hardened worker sandbox supplies a worker-private persistent
     // /tmp. Do not derive paths from Bazel's internal worker directory layout,
     // or use an inherited TMPDIR that might point outside the writable sandbox.
+    // SIGTERM follows normal cleanup. Without the hardened sandbox, SIGKILL
+    // or a process crash can still leave this private directory behind.
     const root = try std.fmt.allocPrint(a, "/tmp/rules-zig-worker-{x}", .{&nonce});
     try Dir.cwd().createDir(io, root, .fromMode(0o700));
 
@@ -809,12 +868,37 @@ pub fn main(init: std.process.Init) !u8 {
         Dir.cwd().deleteTree(io, root) catch {};
     }
 
+    if (signal_file) |file| {
+        const Result = union(enum) { stopped: anyerror!void, completed: anyerror!u8 };
+        var buffer: [2]Result = undefined;
+        var tasks: Io.Select(Result) = .init(io, &buffer);
+        // Join the serving task before touching its compiler or filesystem.
+        defer tasks.cancelDiscard();
+        try tasks.concurrent(.stopped, Shutdown.wait, .{ file, io });
+        try tasks.concurrent(.completed, serve, .{ &worker, init, persistent, flags.items });
+        return switch (try tasks.await()) {
+            .stopped => |result| blk: {
+                try result;
+                break :blk 143;
+            },
+            .completed => |result| result,
+        };
+    }
+    return serve(&worker, init, persistent, flags.items);
+}
+
+fn serve(worker: *Worker, init: std.process.Init, persistent: bool, flags: []const []const u8) !u8 {
+    const a = init.arena.allocator();
+    const io = init.io;
+
     if (!persistent) {
         var diagnostics: Io.Writer.Allocating = .init(a);
-        const code = worker.execute(.{ .arguments = flags.items }, a, &diagnostics.writer) catch |err| blk: {
+        const code = worker.execute(.{ .arguments = flags }, a, &diagnostics.writer) catch |err| blk: {
+            if (Shutdown.requested.load(.monotonic)) return 143;
             try diagnostics.writer.print("zig incremental compilation: {t}\n", .{err});
             break :blk 1;
         };
+        if (Shutdown.requested.load(.monotonic)) return 143;
         try Io.File.stderr().writeStreamingAll(io, diagnostics.written());
         // Return through the cleanup defers, including on a failed request.
         return code;
@@ -827,7 +911,8 @@ pub fn main(init: std.process.Init) !u8 {
 
     var request_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer request_arena.deinit();
-    while (try stdin.interface.takeDelimiter('\n')) |line| {
+    while (!Shutdown.requested.load(.monotonic)) {
+        const line = try stdin.interface.takeDelimiter('\n') orelse break;
         // Reuse ordinary requests' storage without retaining an outlier forever.
         defer _ = request_arena.reset(.{ .retain_with_limit = 8 * 1024 * 1024 });
 
@@ -837,11 +922,13 @@ pub fn main(init: std.process.Init) !u8 {
 
         var diagnostics: Io.Writer.Allocating = .init(ra);
         const code = worker.execute(request, ra, &diagnostics.writer) catch |err| blk: {
+            if (Shutdown.requested.load(.monotonic)) return 143;
             worker.reset();
             try diagnostics.writer.print("zig incremental worker: {t}\n", .{err});
             break :blk 1;
         };
 
+        if (Shutdown.requested.load(.monotonic)) return 143;
         try std.json.Stringify.value(Response{
             .requestId = request.requestId,
             .exitCode = code,
