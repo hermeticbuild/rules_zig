@@ -40,6 +40,7 @@ def zls_completion(name, deps, testonly = False, **kwargs):
         ],
         args = [
             "$(rlocationpath :{})".format(build_config_file),
+            "$(execpath :{})".format(build_config_file),
         ],
         deps = [
             Label("//zig/runfiles"),
@@ -93,6 +94,7 @@ def zls_completion(name, deps, testonly = False, **kwargs):
         build_runner = ":" + name + ".build_runner.zig",
         # These tools run in the editor, even when build actions run remotely.
         exec_compatible_with = [Label(constraint) for constraint in HOST_CONSTRAINTS],
+        printer_target = str(utils.to_label(build_config_printer)),
         testonly = testonly,
         target_compatible_with = kwargs.get("target_compatible_with"),
     )
@@ -106,7 +108,17 @@ def zls_completion(name, deps, testonly = False, **kwargs):
         ],
         deps = [
             Label("//zig/runfiles"),
-        ],
+        ] + select({
+            Label("//zig/zls:native_protocol"): [
+                Label("//zig/zls:owned_process"),
+                Label("//zig/zls:zls_bsp"),
+            ],
+            "//conditions:default": [],
+        }),
+        zigopts = kwargs.pop("zigopts", []) + select({
+            Label("//zig/zls:native_protocol"): ["-lc"],
+            "//conditions:default": [],
+        }),
         testonly = testonly,
         **kwargs
     )

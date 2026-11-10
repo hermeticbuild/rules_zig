@@ -67,6 +67,19 @@ zls_dev.toolchain(
     zls_version = "0.16.0",
 )
 
+# Released ZLS 0.17.0 predates the absolute-path fix. Build the pinned backport.
+zls_source_repository = use_repo_rule("//zig/zls/private:source.bzl", "zls_source_repository")
+
+zls_source_repository(
+    name = "zls_017_fixed",
+    dev_dependency = True,
+)
+
+register_toolchains(
+    "@zls_017_fixed//:all",
+    dev_dependency = True,
+)
+
 bazel_dep(name = "toolchains_buildbuddy", version = "0.0.4", dev_dependency = True)
 
 buildbuddy = use_extension(

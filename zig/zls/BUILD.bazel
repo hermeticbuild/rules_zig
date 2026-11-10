@@ -1,4 +1,6 @@
 load("@bazel_skylib//:bzl_library.bzl", "bzl_library")
+load("@bazel_skylib//lib:selects.bzl", "selects")
+load("//zig:defs.bzl", "zig_library")
 load("//zig/zls/private:resolved_toolchain.bzl", "resolved_toolchain")
 
 exports_files(
@@ -10,6 +12,8 @@ exports_files(
         "workspace_printer_test.zig",
         "zls_build_runner.zig",
         "zls_runner.zig",
+        "owned_process.zig",
+        "zls_bsp.zig",
     ],
     visibility = ["//visibility:public"],
 )
@@ -17,6 +21,39 @@ exports_files(
 toolchain_type(
     name = "toolchain_type",
     visibility = ["//visibility:public"],
+)
+
+# Optional SDK-version selectors do not exist in single-version consumers.
+config_setting(
+    name = "native_0170",
+    flag_values = {"@zig_toolchains//:version": "0.17.0"},
+)
+
+config_setting(
+    name = "native_0171",
+    flag_values = {"@zig_toolchains//:version": "0.17.1"},
+)
+
+selects.config_setting_group(
+    name = "native_protocol",
+    match_any = [
+        "native_0170",
+        "native_0171",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+zig_library(
+    name = "owned_process",
+    main = "owned_process.zig",
+    visibility = ["//visibility:public"],
+)
+
+zig_library(
+    name = "zls_bsp",
+    main = "zls_bsp.zig",
+    visibility = ["//visibility:public"],
+    deps = ["owned_process"],
 )
 
 resolved_toolchain(
@@ -58,6 +95,7 @@ bzl_library(
     visibility = ["//visibility:public"],
     deps = [
         "//zig/private:cc_helper",
+        "//zig/private/common:escape_label",
         "//zig/private/common:exec_groups",
         "//zig/private/common:translate_c",
         "//zig/private/common:zig_cache",
@@ -90,9 +128,11 @@ filegroup(
         ":BUILD.bazel",
         ":defs.bzl",
         ":extensions.bzl",
+        ":owned_process.zig",
         ":toolchain.bzl",
         ":workspace_printer.zig",
         ":workspace_printer_test.zig",
+        ":zls_bsp.zig",
         ":zls_build_runner.zig",
         ":zls_completion.bzl",
         ":zls_runner.zig",

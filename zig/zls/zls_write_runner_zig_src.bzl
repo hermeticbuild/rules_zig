@@ -29,6 +29,8 @@ def _zls_write_runner_zig_src_impl(ctx):
             "__ZLS_BIN_RPATH__": to_rlocation_path(ctx, zlstoolchaininfo.bin),
             "__ZLS_BUILD_RUNNER_RPATH__": to_rlocation_path(ctx, ctx.file.build_runner),
             "__GLOBAL_CACHE_PATH__": zigtoolchaininfo.zig_cache,
+            "__COMPLETION_PRINTER_TARGET__": ctx.attr.printer_target,
+            "__SIGNAL_NUMBER__": "@backingInt(signal)" if zigtoolchaininfo.zig_version in ["0.17.0", "0.17.1"] else "@intFromEnum(signal)",
         },
     )
 
@@ -56,6 +58,7 @@ zls_write_runner_zig_src = rule(
             default = Label("//zig/zls:zls_runner.zig"),
             allow_single_file = True,
         ),
+        "printer_target": attr.string(mandatory = True),
     },
     toolchains = [
         "//zig:toolchain_type",

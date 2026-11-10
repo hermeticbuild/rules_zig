@@ -152,8 +152,30 @@ register_toolchains("@zls_toolchains//:all")
 ```
 
 Use `zig_version` as the selector and `zls_version` as the artifact version.
-They do not need to match, which allows a dev ZLS build to be tied to a stable
-Zig SDK.
+Patch versions may differ within a supported stable minor; arbitrary development
+builds are not necessarily compatible.
+
+Zig 0.17.0 and 0.17.1 require the ZLS absolute-path correction from
+[upstream commit bbd60390](https://github.com/zigtools/zls/commit/bbd60390ffc1c12cd1aa91688fd2940b22966ee9),
+which is absent from released ZLS 0.17.0. Until a compatible corrected release is
+available, build the pinned backport using the upstream build graph:
+
+```starlark
+zls_source_repository = use_repo_rule(
+    "@rules_zig//zig/zls/private:source.bzl",
+    "zls_source_repository",
+)
+zls_source_repository(name = "zls_017_fixed")
+register_toolchains("@zls_017_fixed//:all")
+```
+
+This registers x86_64/aarch64 Linux/macOS toolchains for both Zig patch versions.
+Registering a single Zig SDK is sufficient. The
+binary identifies itself as `0.17.0+bazel.bbd60390`. Sources and dependencies are
+checksum pinned; compilation uses an isolated cache with fetching disabled.
+Explicit target triples use the SDK's baseline CPU and OS-version defaults.
+Keep the 0.16 registration above when supporting both minors. A separately built
+compatible executable can also be supplied through `zls_toolchain(bin = ...)`.
 
 Use the [`zls_completion`](./zig/zls/zls_completion.bzl) macro to define a ZLS
 entry point for the Zig targets you want to expose to the language server.
@@ -180,6 +202,19 @@ the editor host; the remote execution platform may differ.
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 exec bazel run -- //tools:zls "${@}"
 ```
+
+The integration exposes one selected Bazel configuration. An existing
+`build.zig` in the source ancestry serves as ZLS's discovery marker; the native
+adapter does not execute it. Configuration reload (for example, saving that
+marker) queries Bazel again, including changed build/module metadata and source
+producers. Bazel files are not watched automatically. Application compilation
+and Zig build-on-save are unsupported; use Bazel to build. Higher-priority
+editor settings enabling build-on-save produce an explicit failure.
+
+Native protocol support currently targets Linux/macOS; Windows retains the
+legacy 0.16 route. Existing source-based module merging and external documents'
+transitive named-import association limits remain. This migration does not add
+conflicting configurations or full target/builtin semantics.
 
 ## Reference Documentation
 
