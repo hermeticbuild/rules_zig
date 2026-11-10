@@ -1,7 +1,7 @@
 load("@bazel_skylib//lib:selects.bzl", "selects")
 load("@bazel_skylib//rules:diff_test.bzl", "diff_test")
 load("@bazel_skylib//rules:write_file.bzl", "write_file")
-load("@rules_python//python:defs.bzl", "py_binary")
+load("@rules_python//python:defs.bzl", "py_binary", "py_test")
 load("//zig:defs.bzl", "zig_binary", "zig_library")
 load("//zig/zls:defs.bzl", "zls_completion")
 load("//zig/zls:zls_write_build_config.bzl", "zls_write_build_config")
