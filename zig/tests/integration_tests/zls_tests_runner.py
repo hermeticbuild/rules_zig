@@ -23,7 +23,7 @@ def main():
         workspace = repo / "zig/tests/integration_tests/workspace"
         module = workspace / "MODULE.bazel"
         # A consumer must not need to register unrelated SDK versions merely
-        # because the source-backed ZLS recipe supports both 0.17 patches.
+        # because ZLS supports both 0.17 patches.
         contents = module.read_text()
         begin = contents.index('zig.toolchain(zig_version = "0.17.0-dev.')
         end = contents.index('use_repo(zig, "zig_toolchains")', begin)
@@ -32,17 +32,13 @@ def main():
         module.write_text(module.read_text() + '''
 bazel_dep(name = "bazel_skylib", version = "1.9.0")
 zls = use_extension("@rules_zig//zig/zls:extensions.bzl", "zls")
-zls.toolchain(zig_version = "0.16.0", zls_version = "0.16.0")
 use_repo(zls, "zls_toolchains")
 register_toolchains("@zls_toolchains//:all")
-zls_source_repository = use_repo_rule("@rules_zig//zig/zls/private:source.bzl", "zls_source_repository")
-zls_source_repository(name = "zls_017_fixed")
-register_toolchains("@zls_017_fixed//:all")
 bazel_dep(name = "zls_external", version = "0.0.0")
 local_path_override(module_name = "zls_external", path = "zls_external_a")
 ''')
-        if version != "0.16.0":
-            module.write_text(module.read_text().replace('zls.toolchain(zig_version = "0.16.0", zls_version = "0.16.0")\n', ""))
+        zls_version = "0.16.0" if version == "0.16.0" else "0.17.0+bazel.bbd60390"
+        module.write_text(module.read_text() + f'zls.toolchain(zig_version = "{version}", zls_version = "{zls_version}")\n')
         original_module = module.read_text()
         for name in ["a", "b"]:
             external = workspace / ("zls_external_" + name)

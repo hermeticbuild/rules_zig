@@ -3,16 +3,8 @@ load("@bazel_skylib//:bzl_library.bzl", "bzl_library")
 exports_files(
     [
         "versions.json",
-        "zls-0.17.0-bbd60390.patch",
     ],
     visibility = ["//visibility:public"],
-)
-
-bzl_library(
-    name = "source",
-    srcs = ["source.bzl"],
-    visibility = ["//visibility:public"],
-    deps = ["//zig/private/providers:zig_toolchain_info"],
 )
 
 bzl_library(
@@ -27,9 +19,7 @@ filegroup(
     srcs = [
         ":BUILD.bazel",
         ":resolved_toolchain.bzl",
-        ":source.bzl",
         ":versions.json",
-        ":zls-0.17.0-bbd60390.patch",
         "//zig/zls/private/bzlmod:all_files",
         "//zig/zls/private/repo:all_files",
     ],

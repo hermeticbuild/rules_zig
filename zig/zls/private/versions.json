@@ -1,4 +1,22 @@
 {
+  "0.17.0+bazel.bbd60390": {
+    "aarch64-linux": {
+      "tarball": "https://github.com/hermeticbuild/zls-prebuilt/releases/download/0.17.0%2Bbazel.bbd60390/zls-aarch64-linux-0.17.0%2Bbazel.bbd60390.tar.xz",
+      "shasum": "64baa197b318f82d2bdf75484f3c6fc12eaa39f347cb6bd5fa11bc277c80611e"
+    },
+    "aarch64-macos": {
+      "tarball": "https://github.com/hermeticbuild/zls-prebuilt/releases/download/0.17.0%2Bbazel.bbd60390/zls-aarch64-macos-0.17.0%2Bbazel.bbd60390.tar.xz",
+      "shasum": "c9f2c8fd060ed5469e9958a81b4f02f6e756656ec77914ee37b49432a63c9c7c"
+    },
+    "x86_64-linux": {
+      "tarball": "https://github.com/hermeticbuild/zls-prebuilt/releases/download/0.17.0%2Bbazel.bbd60390/zls-x86_64-linux-0.17.0%2Bbazel.bbd60390.tar.xz",
+      "shasum": "559753c34ed4e7d1f86c93b8de829c29c28b05f9defd16456263fbe177f9a377"
+    },
+    "x86_64-macos": {
+      "tarball": "https://github.com/hermeticbuild/zls-prebuilt/releases/download/0.17.0%2Bbazel.bbd60390/zls-x86_64-macos-0.17.0%2Bbazel.bbd60390.tar.xz",
+      "shasum": "5b94139902f4d9f58b24c0074b1f541962f6da68270b31f01403b1a745d86050"
+    }
+  },
   "0.16.0": {
     "aarch64-linux": {
       "tarball": "https://builds.zigtools.org/zls-aarch64-linux-0.16.0.tar.xz",

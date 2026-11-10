@@ -157,25 +157,26 @@ builds are not necessarily compatible.
 
 Zig 0.17.0 and 0.17.1 require the ZLS absolute-path correction from
 [upstream commit bbd60390](https://github.com/zigtools/zls/commit/bbd60390ffc1c12cd1aa91688fd2940b22966ee9),
-which is absent from released ZLS 0.17.0. Until a compatible corrected release is
-available, build the pinned backport using the upstream build graph:
+which is absent from released ZLS 0.17.0. The catalog includes
+[HermeticBuild's prebuilt backport](https://github.com/hermeticbuild/zls-prebuilt/releases/tag/0.17.0%2Bbazel.bbd60390),
+identified as `0.17.0+bazel.bbd60390`:
 
 ```starlark
-zls_source_repository = use_repo_rule(
-    "@rules_zig//zig/zls/private:source.bzl",
-    "zls_source_repository",
+zls.toolchain(
+    zig_version = "0.17.0",  # Use "0.17.1" for that SDK instead.
+    zls_version = "0.17.0+bazel.bbd60390",
 )
-zls_source_repository(name = "zls_017_fixed")
-register_toolchains("@zls_017_fixed//:all")
 ```
 
-This registers x86_64/aarch64 Linux/macOS toolchains for both Zig patch versions.
-Registering a single Zig SDK is sufficient. The
-binary identifies itself as `0.17.0+bazel.bbd60390`. Sources and dependencies are
-checksum pinned; compilation uses an isolated cache with fetching disabled.
-Explicit target triples use the SDK's baseline CPU and OS-version defaults.
-Keep the 0.16 registration above when supporting both minors. A separately built
-compatible executable can also be supplied through `zls_toolchain(bin = ...)`.
+This uses the same extension and registration shown above and downloads a
+checksum-pinned binary for x86_64/aarch64 Linux/macOS. Register one mapping per
+Zig SDK in use; keep the 0.16 mapping when supporting both minors.
+
+Custom prebuilts already work through `zls.index(file = "//:zls-versions.json")`:
+provide a version-to-platform JSON mapping using `tarball` and `shasum` fields,
+then select that version with `zls.toolchain`. Archives must contain `zls` at
+their root (`zls.exe` on Windows). A consumer can alternatively declare its own
+`zls_toolchain(bin = ...)` and native Bazel `toolchain` registration.
 
 Use the [`zls_completion`](./zig/zls/zls_completion.bzl) macro to define a ZLS
 entry point for the Zig targets you want to expose to the language server.
