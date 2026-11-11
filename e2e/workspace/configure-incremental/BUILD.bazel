@@ -1,0 +1,167 @@
+load("@bazel_skylib//rules:build_test.bzl", "build_test")
+load("@bazel_skylib//rules:diff_test.bzl", "diff_test")
+load("@bazel_skylib//rules:write_file.bzl", "write_file")
+load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_library", "zig_shared_library", "zig_static_library", "zig_test")
+
+# Run explicitly with --@rules_zig//zig/settings:incremental on x86_64 Linux.
+# The ordinary SDK matrix must not build these fixtures with Zig 0.16.
+config_setting(
+    name = "enabled",
+    flag_values = {"@rules_zig//zig/settings:incremental": "true"},
+)
+
+INCREMENTAL_ONLY = select({
+    ":enabled": [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
+    "//conditions:default": ["@platforms//:incompatible"],
+})
+
+write_file(
+    name = "generated_source",
+    out = "value.zig",
+    content = ['pub const message = "incremental\\n";'],
+)
+
+zig_library(
+    name = "value",
+    main = ":generated_source",
+)
+
+zig_binary(
+    name = "binary",
+    main = "main.zig",
+    target_compatible_with = INCREMENTAL_ONLY,
+    deps = [":value"],
+)
+
+genrule(
+    name = "binary_output",
+    # Keep the binary in the target configuration. Putting it in tools would
+    # disable incremental compilation through the execution transition.
+    srcs = [":binary"],
+    outs = ["binary_output.txt"],
+    cmd = "$(execpath :binary) > $(OUTS)",
+)
+
+diff_test(
+    name = "incremental_binary_test",
+    size = "small",
+    file1 = "expected.txt",
+    file2 = ":binary_output",
+)
+
+zig_test(
+    name = "incremental_zig_test",
+    size = "small",
+    srcs = ["library.zig"],
+    main = "test.zig",
+    target_compatible_with = INCREMENTAL_ONLY,
+)
+
+# Check library artifacts using the same symbol checks as simple-library and
+# simple-shared-library. Do not externally link native incremental ELF output:
+# Zig's .eh_frame padding currently requires a repair before that handoff.
+# cc_common.link remains covered by zig/tests/incremental_test.bzl.
+zig_static_library(
+    name = "static_library",
+    main = "library.zig",
+    target_compatible_with = INCREMENTAL_ONLY,
+)
+
+genrule(
+    name = "static_symbol",
+    srcs = [":static_library"],
+    outs = ["static_symbol.txt"],
+    cmd = "$(NM) --defined-only $(SRCS) | grep answer > $(OUTS)",
+    toolchains = ["@bazel_tools//tools/cpp:current_cc_toolchain"],
+)
+
+build_test(
+    name = "incremental_static_library_test",
+    targets = [":static_symbol"],
+)
+
+zig_shared_library(
+    name = "shared_library",
+    main = "library.zig",
+    target_compatible_with = INCREMENTAL_ONLY,
+    # This is the supported incremental shared-library backend.
+    zigopts = [
+        "-fllvm",
+        "-flld",
+    ],
+)
+
+genrule(
+    name = "shared_symbol",
+    srcs = [":shared_library"],
+    outs = ["shared_symbol.txt"],
+    cmd = "$(NM) --dynamic --defined-only $(SRCS) | grep answer > $(OUTS)",
+    toolchains = ["@bazel_tools//tools/cpp:current_cc_toolchain"],
+)
+
+build_test(
+    name = "incremental_shared_library_test",
+    targets = [":shared_symbol"],
+)
+
+zig_static_library(
+    name = "auxiliary_outputs",
+    emit_asm = True,
+    emit_llvm_bc = True,
+    emit_llvm_ir = True,
+    main = "library.zig",
+    target_compatible_with = INCREMENTAL_ONLY,
+)
+
+zig_static_library(
+    name = "auxiliary_only",
+    emit_asm = True,
+    emit_bin = False,
+    emit_llvm_bc = True,
+    emit_llvm_ir = True,
+    main = "library.zig",
+    target_compatible_with = INCREMENTAL_ONLY,
+)
+
+[
+    filegroup(
+        name = target + "_" + group,
+        srcs = [":" + target],
+        output_group = group,
+    )
+    for target in [
+        "auxiliary_outputs",
+        "auxiliary_only",
+    ]
+    for group in [
+        "asm",
+        "llvm_ir",
+        "llvm_bc",
+    ]
+]
+
+genrule(
+    name = "check_auxiliary_outputs",
+    srcs = [":auxiliary_outputs"] + [
+        ":" + target + "_" + group
+        for target in [
+            "auxiliary_outputs",
+            "auxiliary_only",
+        ]
+        for group in [
+            "asm",
+            "llvm_ir",
+            "llvm_bc",
+        ]
+    ],
+    outs = ["auxiliary_outputs.ok"],
+    cmd = "for file in $(SRCS); do test -s $$file || exit 1; done; touch $(OUTS)",
+)
+
+build_test(
+    name = "incremental_auxiliary_outputs_test",
+    targets = [":check_auxiliary_outputs"],
+)
