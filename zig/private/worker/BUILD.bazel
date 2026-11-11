@@ -1,0 +1,32 @@
+load("//zig:defs.bzl", "zig_binary", "zig_test")
+
+zig_binary(
+    name = "worker",
+    main = "worker.zig",
+    tags = ["manual"],
+    visibility = ["//zig:__subpackages__"],
+    zigopts = [
+        "-mcpu=baseline",
+        # The adapter must wait for SIGTERM concurrently with serving requests,
+        # independently of the threading mode selected for consumer programs.
+        "-fno-single-threaded",
+    ],
+)
+
+zig_test(
+    name = "worker_test",
+    size = "small",
+    main = "worker.zig",
+    tags = ["manual"],
+    zigopts = ["-mcpu=baseline"],
+)
+
+# Execute `bazel run //util:update_filegroups` to update this target.
+filegroup(
+    name = "all_files",
+    srcs = [
+        ":BUILD.bazel",
+        ":worker.zig",
+    ],
+    visibility = ["//zig/private:__pkg__"],
+)
