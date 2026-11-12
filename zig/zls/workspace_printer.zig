@@ -135,12 +135,18 @@ fn readBuildConfig(
     return error.BuildConfigNotFound;
 }
 
+// Strip the config's execpath from its resolved path to recover the execution
+// root of the Bazel invocation that generated it.
 fn executionRoot(allocator: std.mem.Allocator, physical_path: []const u8, exec_path: []const u8) ![]const u8 {
     const physical = if (builtin.os.tag == .windows) try std.mem.replaceOwned(u8, allocator, physical_path, "\\", "/") else physical_path;
     const relative = if (builtin.os.tag == .windows) try std.mem.replaceOwned(u8, allocator, exec_path, "\\", "/") else exec_path;
-    if (std.fs.path.isAbsolute(relative)) return error.ExpectedRelativeConfigExecPath;
+    if (std.fs.path.isAbsolute(relative)) {
+        return error.ExpectedRelativeConfigExecPath;
+    }
     const suffix = try std.mem.concat(allocator, u8, &.{ "/", relative });
-    if (!std.mem.endsWith(u8, physical, suffix)) return error.InvalidConfigProvenance;
+    if (!std.mem.endsWith(u8, physical, suffix)) {
+        return error.InvalidConfigProvenance;
+    }
     return physical[0 .. physical.len - suffix.len];
 }
 

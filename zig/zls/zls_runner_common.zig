@@ -32,8 +32,12 @@ pub const TempDir = struct {
     io: std.Io,
 
     pub fn create(init: std.process.Init) !TempDir {
-        const base = init.environ_map.get("TMPDIR") orelse init.environ_map.get("TEMP") orelse init.environ_map.get("TMP") orelse
-            if (builtin.os.tag == .windows) return error.TemporaryDirectoryNotConfigured else "/tmp";
+        const base = init.environ_map.get("TMPDIR") orelse init.environ_map.get("TEMP") orelse init.environ_map.get("TMP") orelse fallback: {
+            if (builtin.os.tag == .windows) {
+                return error.TemporaryDirectoryNotConfigured;
+            }
+            break :fallback "/tmp";
+        };
         var random: u128 = undefined;
         init.io.random(std.mem.asBytes(&random));
         const path = try std.fmt.allocPrint(init.arena.allocator(), "{s}/rules-zig-zls-{s}", .{ base, std.fmt.hex(random) });

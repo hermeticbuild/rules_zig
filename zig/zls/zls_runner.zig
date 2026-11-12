@@ -37,8 +37,9 @@ fn exitCode(term: std.process.Child.Term) u8 {
 fn run(init: std.process.Init) !u8 {
     const io = init.io;
 
-    if (builtin.zig_version.major != 0 or builtin.zig_version.minor != 16)
+    if (builtin.zig_version.major != 0 or builtin.zig_version.minor != 16) {
         return error.UnsupportedZigVersionForZls;
+    }
 
     const runtime = try common.Runtime.create(init, bazel_builtin.current_repository);
     const zls_bin_path = try runtime.resolve("__ZLS_BIN_RPATH__");

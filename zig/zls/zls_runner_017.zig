@@ -10,6 +10,7 @@ const builtin = @import("builtin");
 const bazel_builtin = @import("bazel_builtin");
 const common = @import("zls_runner_common");
 const owned = @import("owned_process");
+const bsp = @import("zls_bsp");
 
 const Config = struct {
     /// Override the Zig library path. Will be automatically resolved using the 'zig_exe_path'.
@@ -59,6 +60,8 @@ fn proxy(init: std.process.Init, args: []const []const u8) !u8 {
             .source = try allocator.dupeSentinel(u8, result.stdout, 0),
             .ignore_unknown_fields = true,
         });
+        // ZLS uses zig_exe from zig env for subsequent commands. Keep them
+        // routed through the proxy.
         env.zig_exe = try std.process.executablePathAlloc(init.io, allocator);
         var buffer: [4096]u8 = undefined;
         var stdout = std.Io.File.stdout().writer(init.io, &buffer);
@@ -74,7 +77,7 @@ fn proxy(init: std.process.Init, args: []const []const u8) !u8 {
         const version = "--@zig_toolchains//:version=" ++ builtin.zig_version_string;
         const command: []const []const u8 = &.{ "bazel", "run", version, "--", "__COMPLETION_PRINTER_TARGET__" };
         const supported = args.len == 3 and std.mem.eql(u8, args[2], "--listen=-");
-        try @import("zls_bsp").serve(init, config, command, supported);
+        try bsp.serve(init, config, command, supported);
         return 0;
     }
     const command = try allocator.alloc([]const u8, args.len);
@@ -89,12 +92,16 @@ fn run(init: std.process.Init) !u8 {
     const arena = init.arena;
     const io = init.io;
 
-    if (!owned.supported) return error.NativeZlsRequiresLinuxOrMacOS;
+    if (!owned.supported) {
+        return error.NativeZlsRequiresLinuxOrMacOS;
+    }
     owned.install();
     defer owned.restore();
 
     const args = try init.minimal.args.toSlice(arena.allocator());
-    if (init.environ_map.get("RULES_ZIG_ZLS_SDK") != null) return proxy(init, args);
+    if (init.environ_map.get("RULES_ZIG_ZLS_SDK") != null) {
+        return proxy(init, args);
+    }
 
     const runtime = try common.Runtime.create(init, bazel_builtin.current_repository);
     const zls_bin_path = try runtime.resolve("__ZLS_BIN_RPATH__");

@@ -20,6 +20,7 @@ fn serialize(init: std.process.Init, bytes: []const u8, output: []const u8) !voi
         .generated_files = .empty,
         .wip_configuration = .init(allocator),
     };
+    // Reserve string-table offset zero for Configuration.String.empty.
     _ = try graph.wip_configuration.addString("");
     const b = try std.Build.create(&graph, .{
         .root_dir = .{ .handle = .cwd(), .path = try std.process.currentPathAlloc(init.io, allocator) },
@@ -27,7 +28,9 @@ fn serialize(init: std.process.Init, bytes: []const u8, output: []const u8) !voi
     }, &.{});
     var modules: std.StringHashMap(*std.Build.Module) = .init(allocator);
     for (input.modules.map.keys()) |path| {
-        if (!std.Io.Dir.path.isAbsolute(path)) return error.ExpectedAbsoluteModulePath;
+        if (!std.Io.Dir.path.isAbsolute(path)) {
+            return error.ExpectedAbsoluteModulePath;
+        }
         const source = std.Io.Dir.openFileAbsolute(init.io, path, .{}) catch |err| {
             std.log.err("Bazel metadata source '{s}': {s}", .{ path, @errorName(err) });
             return err;
@@ -44,6 +47,8 @@ fn serialize(init: std.process.Init, bytes: []const u8, output: []const u8) !voi
             modules.get(path).?.addImport(name, modules.get(dependency) orelse return error.MissingImportedModule);
         }
     }
+    // The SDK serializer starts from top-level steps. Attach a synthetic
+    // object step for each selected root to include its module graph.
     const metadata = b.step("metadata", "Bazel editor metadata; build applications with Bazel");
     for (input.compilations, 0..) |root, index| {
         const object = b.addObject(.{
@@ -95,7 +100,9 @@ pub fn serve(init: std.process.Init, output: []const u8, command: []const []cons
     }
     const workspace = init.environ_map.get("BUILD_WORKSPACE_DIRECTORY") orelse return error.MissingBuildWorkspace;
     const result = owned.capture(init, .{ .argv = command, .stdin = .ignore, .cwd = .{ .path = workspace } }, &input) catch |err| {
-        if (err == error.Canceled) return;
+        if (err == error.Canceled) {
+            return;
+        }
         try server.serveErrorBundle(.bsp_configuration_failed, try errors(allocator, @errorName(err)));
         return;
     };
@@ -105,7 +112,8 @@ pub fn serve(init: std.process.Init, output: []const u8, command: []const []cons
         return;
     }
     serialize(init, result.stdout, output) catch |err| {
-        try server.serveErrorBundle(.bsp_configuration_failed, try errors(allocator, try std.fmt.allocPrint(allocator, "Invalid Bazel metadata: {s}", .{@errorName(err)})));
+        const message = try std.fmt.allocPrint(allocator, "Invalid Bazel metadata: {s}", .{@errorName(err)});
+        try server.serveErrorBundle(.bsp_configuration_failed, try errors(allocator, message));
         return;
     };
     try owned.check();
@@ -118,17 +126,23 @@ pub fn serve(init: std.process.Init, output: []const u8, command: []const []cons
         const body = try input.reader(0).take(header.bytes_len);
         switch (header.tag) {
             .exit => {
-                if (body.len != 0) return error.InvalidExitMessage;
+                if (body.len != 0) {
+                    return error.InvalidExitMessage;
+                }
                 return;
             },
             .bsp_build_steps => {
                 var reader: std.Io.Reader = .fixed(body);
                 const request = try reader.takeStruct(std.zig.Client.Message.BuildSteps, .little);
-                if (body.len != @sizeOf(@TypeOf(request)) + @as(usize, request.step_count) * 4) return error.InvalidBuildRequest;
+                const request_size = @sizeOf(@TypeOf(request)) + @as(usize, request.step_count) * @sizeOf(u32);
+                if (body.len != request_size) {
+                    return error.InvalidBuildRequest;
+                }
                 if (request.flags.watch) {
                     try server.serveErrorBundle(.bsp_configuration_failed, try errors(allocator, "Bazel metadata service does not support build-on-save; build applications with Bazel"));
                     return;
                 }
+                // ZLS expects start and completion messages even for an empty build round.
                 try server.serveBodylessMessage(.bsp_build_started);
                 for (0..request.step_count) |_| {
                     const index = try reader.takeInt(u32, .little);
@@ -142,7 +156,7 @@ pub fn serve(init: std.process.Init, output: []const u8, command: []const []cons
                     };
                     try server.serveMessageHeader(.{
                         .tag = .bsp_step_completed,
-                        .bytes_len = @intCast(@sizeOf(@TypeOf(completion)) + 4 * bundle.extra.len + bundle.string_bytes.len),
+                        .bytes_len = @intCast(@sizeOf(@TypeOf(completion)) + @sizeOf(u32) * bundle.extra.len + bundle.string_bytes.len),
                     });
                     try stdout.interface.writeStruct(completion, .little);
                     try stdout.interface.writeSliceEndian(u32, bundle.extra, .little);

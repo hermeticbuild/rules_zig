@@ -27,13 +27,18 @@ pub fn restore() void {
 }
 
 pub fn check() error{Canceled}!void {
-    if (interrupted.load(.acquire)) return error.Canceled;
+    if (interrupted.load(.acquire)) {
+        return error.Canceled;
+    }
 }
 
 pub const tick: std.Io.Timeout = .{ .duration = .{ .raw = .fromMilliseconds(50), .clock = .awake } };
 
-// Zig exposes siginfo_t but not the libc waitid declaration. Constants follow
-// Linux waitid(2) and Darwin sys/wait.h; P_PID is 1 on both systems.
+// Zig exposes siginfo_t but not waitid or all of its Darwin flags.
+const P_PID = 1;
+const darwin_wexited = 0x4;
+const darwin_wnowait = 0x20;
+
 extern "c" fn waitid(c_uint, c_uint, *std.c.siginfo_t, c_int) c_int;
 
 pub const Owned = struct {
@@ -49,8 +54,11 @@ pub const Owned = struct {
 
     fn exited(self: *Owned) !bool {
         var info: std.c.siginfo_t = std.mem.zeroes(std.c.siginfo_t);
-        const flags = if (builtin.os.tag == .macos) 4 | 1 | 0x20 else std.os.linux.W.EXITED | std.os.linux.W.NOHANG | std.os.linux.W.NOWAIT;
-        switch (std.posix.errno(waitid(1, @intCast(self.child.id.?), &info, flags))) {
+        const flags = if (builtin.os.tag == .macos)
+            darwin_wexited | std.c.W.NOHANG | darwin_wnowait
+        else
+            std.os.linux.W.EXITED | std.os.linux.W.NOHANG | std.os.linux.W.NOWAIT;
+        switch (std.posix.errno(waitid(P_PID, @intCast(self.child.id.?), &info, flags))) {
             .SUCCESS => return if (builtin.os.tag == .macos) info.pid != 0 else info.fields.common.first.piduid.pid != 0,
             .INTR => {
                 try check();
@@ -68,7 +76,9 @@ pub const Owned = struct {
     }
 
     pub fn deinit(self: *Owned) void {
-        if (self.child.id == null) return;
+        if (self.child.id == null) {
+            return;
+        }
         self.stopGroup();
         _ = self.child.wait(self.io) catch {};
     }
@@ -96,7 +106,9 @@ pub fn checkParent(input: *std.Io.File.MultiReader) !void {
     const reader = input.reader(0);
     if (reader.bufferedLen() >= @sizeOf(std.zig.Client.Message.Header)) {
         const header = try reader.takeStruct(std.zig.Client.Message.Header, .little);
-        if (header.tag == .exit and header.bytes_len == 0) return error.Canceled;
+        if (header.tag == .exit and header.bytes_len == 0) {
+            return error.Canceled;
+        }
         return error.UnexpectedEarlyProtocolMessage;
     }
 }
@@ -115,6 +127,8 @@ pub fn capture(init: std.process.Init, options: std.process.SpawnOptions, parent
     while (true) {
         try check();
         if (parent) |p| try checkParent(p);
+        // Descendants can keep the pipes open after the leader exits.
+        // Stop the group before waiting for EOF.
         if (!stopped and try owned.exited()) {
             owned.stopGroup();
             stopped = true;
@@ -124,8 +138,9 @@ pub fn capture(init: std.process.Init, options: std.process.SpawnOptions, parent
             error.EndOfStream => break,
             else => return err,
         };
-        if (multi.reader(0).bufferedLen() > 64 * 1024 * 1024 or multi.reader(1).bufferedLen() > 64 * 1024 * 1024)
+        if (multi.reader(0).bufferedLen() > 64 * 1024 * 1024 or multi.reader(1).bufferedLen() > 64 * 1024 * 1024) {
             return error.OutputTooLarge;
+        }
     }
     try multi.checkAnyError();
     const term = try owned.join(parent);
@@ -134,7 +149,7 @@ pub fn capture(init: std.process.Init, options: std.process.SpawnOptions, parent
 
 pub fn receive(multi: *std.Io.File.MultiReader) !std.zig.Client.Message.Header {
     const reader = multi.reader(0);
-    while (reader.bufferedLen() < 8) {
+    while (reader.bufferedLen() < @sizeOf(std.zig.Client.Message.Header)) {
         try check();
         multi.fill(64, tick) catch |err| switch (err) {
             error.Timeout => continue,
@@ -142,7 +157,9 @@ pub fn receive(multi: *std.Io.File.MultiReader) !std.zig.Client.Message.Header {
         };
     }
     const header = try reader.takeStruct(std.zig.Client.Message.Header, .little);
-    if (header.bytes_len > 1024 * 1024) return error.ProtocolFrameTooLarge;
+    if (header.bytes_len > 1024 * 1024) {
+        return error.ProtocolFrameTooLarge;
+    }
     while (reader.bufferedLen() < header.bytes_len) {
         try check();
         multi.fill(64, tick) catch |err| switch (err) {
