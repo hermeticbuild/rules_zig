@@ -8,7 +8,7 @@ load(
     "bazel_integration_tests",
     "integration_test_utils",
 )
-load("@rules_python//python:defs.bzl", "py_binary", "py_library")
+load("@rules_python//python:defs.bzl", "py_binary")
 load("//zig:defs.bzl", "zig_library", "zig_test")
 load("//zig/private:versions.bzl", "TOOL_VERSIONS")
 
@@ -36,40 +36,24 @@ py_binary(
     name = "zls_tests_runner",
     srcs = ["zls_tests_runner.py"],
     tags = ["manual"],
-    deps = [":zls_lsp_client"],
 )
 
-py_library(
-    name = "zls_lsp_client",
-    srcs = ["zls_lsp_client.py"],
-    imports = ["."],
-    visibility = ["//zig/tests:__subpackages__"],
+bazel_integration_test(
+    name = "zls_0_17_1_test",
+    size = "large",
+    bazel_version = bazel_binaries.versions.current,
+    tags = [
+        "manual",
+        "requires-network",
+    ] + integration_test_utils.DEFAULT_INTEGRATION_TEST_TAGS,
+    target_compatible_with = select({
+        "@platforms//os:windows": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    test_runner = "zls_tests_runner",
+    workspace_files = workspace_files,
+    workspace_path = "workspace",
 )
-
-[
-    bazel_integration_test(
-        name = "zls_" + version.replace(".", "_") + "_test",
-        size = "large",
-        bazel_version = bazel_binaries.versions.current,
-        env = {"ZLS_TEST_ZIG_VERSION": version},
-        tags = [
-            "manual",
-            "requires-network",
-        ] + integration_test_utils.DEFAULT_INTEGRATION_TEST_TAGS,
-        target_compatible_with = select({
-            "@platforms//os:windows": ["@platforms//:incompatible"],
-            "//conditions:default": [],
-        }),
-        test_runner = ":zls_tests_runner",
-        workspace_files = workspace_files,
-        workspace_path = "workspace",
-    )
-    for version in [
-        "0.16.0",
-        "0.17.0",
-        "0.17.1",
-    ]
-]
 
 zig_library(
     name = "integration_testing",

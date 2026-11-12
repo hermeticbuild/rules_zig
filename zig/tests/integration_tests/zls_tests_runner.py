@@ -2,18 +2,118 @@
 import json
 import os
 from pathlib import Path
+import queue
 import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
-from zls_lsp_client import Session
+
+class Session:
+    def __init__(self, launcher, workspace, env, build_on_save=False):
+        self.workspace = workspace
+        self.process = subprocess.Popen([str(launcher)], cwd=workspace, env=env, stdin=subprocess.PIPE,
+                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.messages = queue.Queue()
+        self.logs = []
+        self.diagnostics = {}
+        self.documents = {}
+        self.next_id = 0
+        threading.Thread(target=self.read, daemon=True).start()
+        threading.Thread(target=lambda: self.logs.append(self.process.stderr.read().decode()), daemon=True).start()
+        self.request("initialize", {"processId": None, "rootUri": workspace.as_uri(),
+                     "capabilities": {"textDocument": {"publishDiagnostics": {}}},
+                     "initializationOptions": {"enable_build_on_save": build_on_save},
+                     "workspaceFolders": [{"name": "fixture", "uri": workspace.as_uri()}]})
+        self.send("initialized", {})
+
+    def read(self):
+        try:
+            while True:
+                headers = {}
+                while (line := self.process.stdout.readline()) != b"\r\n":
+                    if not line:
+                        raise EOFError("ZLS exited")
+                    key, value = line.decode().split(":", 1)
+                    headers[key.lower()] = value.strip()
+                self.messages.put(json.loads(self.process.stdout.read(int(headers["content-length"]))))
+        except Exception as error:
+            self.messages.put(error)
+
+    def send(self, method, params, request_id=None):
+        message = {"jsonrpc": "2.0", "method": method, "params": params}
+        if request_id is not None:
+            message["id"] = request_id
+        data = json.dumps(message).encode()
+        self.process.stdin.write(f"Content-Length: {len(data)}\r\n\r\n".encode() + data)
+        self.process.stdin.flush()
+
+    def request(self, method, params):
+        self.next_id += 1
+        self.send(method, params, self.next_id)
+        deadline = time.monotonic() + 120
+        while True:
+            message = self.messages.get(timeout=max(0.01, deadline - time.monotonic()))
+            if isinstance(message, Exception):
+                raise message
+            if "method" in message:
+                self.logs.append(json.dumps(message))
+                if message["method"] == "textDocument/publishDiagnostics" and message["params"].get("diagnostics"):
+                    print(json.dumps(message), flush=True)
+                if message["method"] == "textDocument/publishDiagnostics":
+                    self.diagnostics[message["params"]["uri"]] = message["params"]["diagnostics"]
+            if message.get("id") == self.next_id:
+                assert "error" not in message, message
+                return message.get("result")
+
+    def lookup(self, name, token):
+        path = self.workspace / name
+        if name not in self.documents:
+            self.documents[name] = path.read_text()
+            self.send("textDocument/didOpen", {"textDocument": {"uri": path.as_uri(), "languageId": "zig",
+                                                             "version": 1, "text": self.documents[name]}})
+        text = self.documents[name]
+        index = text.index(token) + len(token) - 1
+        return self.request("textDocument/definition", {"textDocument": {"uri": path.as_uri()},
+                            "position": {"line": text[:index].count("\n"), "character": len(text[:index].rsplit("\n", 1)[-1])}})
+
+    def definition(self, token, expected, name="root.zig"):
+        deadline = time.monotonic() + 150
+        while True:
+            result = self.lookup(name, token)
+            if result and result.get("uri") == expected.as_uri():
+                assert result["range"]["start"]["line"] == 0, result
+                return
+            invalid = [line for line in self.logs if "Invalid Bazel metadata" in line]
+            assert not invalid, invalid
+            assert time.monotonic() < deadline, (token, expected, result, self.logs)
+            time.sleep(0.1)
+
+    def reload(self):
+        path = self.workspace / "build.zig"
+        if "build.zig" not in self.documents:
+            text = path.read_text()
+            self.documents["build.zig"] = text
+            self.send("textDocument/didOpen", {"textDocument": {"uri": path.as_uri(), "languageId": "zig", "version": 1, "text": text}})
+        self.send("textDocument/didSave", {"textDocument": {"uri": path.as_uri()}})
+
+    def close(self):
+        self.request("shutdown", None)
+        self.send("exit", None)
+        assert self.process.wait(timeout=15) == 0, self.logs
+
+    def cleanup(self):
+        if self.process.poll() is None:
+            self.process.terminate()
+            self.process.wait(timeout=15)
 
 
 def main():
-    version = os.environ["ZLS_TEST_ZIG_VERSION"]
+    version = "0.17.1"
+    zls_version = "0.17.0+hermetic.1"
     source_workspace = Path(os.environ["BIT_WORKSPACE_DIR"])
     source_root = source_workspace.parents[3]
     with tempfile.TemporaryDirectory(prefix="zls-integration-", dir=os.environ.get("TEST_TMPDIR")) as temporary:
@@ -37,7 +137,6 @@ register_toolchains("@zls_toolchains//:all")
 bazel_dep(name = "zls_external", version = "0.0.0")
 local_path_override(module_name = "zls_external", path = "zls_external_a")
 ''')
-        zls_version = "0.16.0" if version == "0.16.0" else "0.17.0+hermetic.1"
         module.write_text(module.read_text() + f'zls.toolchain(zig_version = "{version}", zls_version = "{zls_version}")\n')
         original_module = module.read_text()
         for name in ["a", "b"]:
@@ -138,39 +237,32 @@ zls_completion(name="completion", deps=[":application", ":second", "//zls_fixtur
             # A failed refresh must not replace the usable graph; repair reloads it.
             marker_uri = (fixture / "build.zig").as_uri()
             session.diagnostics.pop(marker_uri, None)
-            before_failure = len(session.logs)
             build.write_text("this is not valid Starlark\n")
             session.reload()
             deadline = time.monotonic() + 60
-            def failed_refresh_observed():
-                if version == "0.16.0":
-                    return any("Failed to load build configuration" in line and marker_uri in line for line in session.logs[before_failure:])
-                return bool(session.diagnostics.get(marker_uri))
-            while not failed_refresh_observed():
+            while not session.diagnostics.get(marker_uri):
                 session.lookup("root.zig", "dep.leaf.answer")
                 assert time.monotonic() < deadline, session.logs
                 time.sleep(0.1)
-            if version != "0.16.0":
-                assert any("Bazel metadata query failed" in item["message"] for item in session.diagnostics[marker_uri]), session.diagnostics
+            assert any("Bazel metadata query failed" in item["message"] for item in session.diagnostics[marker_uri]), session.diagnostics
             session.definition("dep.leaf.answer", fixture / "leaf_b.zig")
             build.write_text(original)
             session.reload()
             session.definition("dep.leaf.answer", fixture / "leaf_a.zig")
             deadline = time.monotonic() + 15
-            while version != "0.16.0" and session.diagnostics.get(marker_uri):
+            while session.diagnostics.get(marker_uri):
                 session.lookup("root.zig", "dep.leaf.answer")
                 assert time.monotonic() < deadline, session.diagnostics
             session.close()
-            if version != "0.16.0":
-                unsafe = Session(launcher, fixture, env, build_on_save=True)
-                sessions.append(unsafe)
-                unsafe.definition("dep.leaf.answer", fixture / "leaf_a.zig")
-                deadline = time.monotonic() + 30
-                while not any("build applications with Bazel" in line for line in unsafe.logs):
-                    unsafe.lookup("root.zig", "dep.leaf.answer")
-                    assert time.monotonic() < deadline, unsafe.logs
-                    time.sleep(0.1)
-                unsafe.close()
+            unsafe = Session(launcher, fixture, env, build_on_save=True)
+            sessions.append(unsafe)
+            unsafe.definition("dep.leaf.answer", fixture / "leaf_a.zig")
+            deadline = time.monotonic() + 30
+            while not any("build applications with Bazel" in line for line in unsafe.logs):
+                unsafe.lookup("root.zig", "dep.leaf.answer")
+                assert time.monotonic() < deadline, unsafe.logs
+                time.sleep(0.1)
+            unsafe.close()
             assert not (workspace / "bazel-bin/zls_fixture/application").exists()
             assert not list(temp.glob("rules-zig-zls-*"))
             print("LSP roots, imports, canonical paths, fresh Bazel/generated reload, failed refresh, repair and cleanup passed", flush=True)

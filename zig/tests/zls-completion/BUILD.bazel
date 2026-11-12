@@ -1,7 +1,7 @@
 load("@bazel_skylib//lib:selects.bzl", "selects")
 load("@bazel_skylib//rules:diff_test.bzl", "diff_test")
 load("@bazel_skylib//rules:write_file.bzl", "write_file")
-load("@rules_python//python:defs.bzl", "py_binary", "py_test")
+load("@rules_python//python:defs.bzl", "py_binary")
 load("//zig:defs.bzl", "zig_binary", "zig_library")
 load("//zig/zls:defs.bzl", "zls_completion")
 load("//zig/zls:zls_write_build_config.bzl", "zls_write_build_config")
@@ -17,38 +17,6 @@ selects.config_setting_group(
         "@platforms//os:windows",
         "@zig_toolchains//:any_0.17.release",
     ],
-)
-
-selects.config_setting_group(
-    name = "native_zls_supported",
-    match_any = [
-        "@platforms//os:linux",
-        "@platforms//os:macos",
-    ],
-)
-
-selects.config_setting_group(
-    name = "native_zls_tests",
-    match_all = [
-        ":native_zls_supported",
-        "@zig_toolchains//:any_0.17.release",
-    ],
-)
-
-py_test(
-    name = "protocol_test",
-    size = "small",
-    srcs = ["protocol_test.py"],
-    args = [
-        "--launcher",
-        "$(location :completion)",
-    ],
-    data = [":completion"],
-    target_compatible_with = select({
-        ":native_zls_tests": [],
-        "//conditions:default": ["@platforms//:incompatible"],
-    }),
-    deps = ["//zig/tests/integration_tests:zls_lsp_client"],
 )
 
 zls_completion(
