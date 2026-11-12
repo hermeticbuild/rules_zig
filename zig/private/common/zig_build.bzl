@@ -277,6 +277,7 @@ def _compile(ctx, *, zigtoolchaininfo, command, output_kind, global_args, compil
         startup = ctx.actions.args()
         startup.add(executable, format = "--zig=%s")
         startup.add(zig_toolchain_lib_dir(zigtoolchaininfo), format = "--lib=%s")
+        zig_cache_output(zigtoolchaininfo = zigtoolchaininfo, args = startup)
 
         # Bazel retains a separate worker pool for each compilation action.
         # One output anchors the whole invocation, including auxiliary outputs.
@@ -285,6 +286,7 @@ def _compile(ctx, *, zigtoolchaininfo, command, output_kind, global_args, compil
         executable = worker
         arguments = [startup, compiler_args]
         kwargs["mnemonic"] = "ZigIncrementalCompile"
+        kwargs.pop("env")
 
         # The adapter also supports one-shot execution. Let the selected
         # execution platform determine whether the action may run remotely.

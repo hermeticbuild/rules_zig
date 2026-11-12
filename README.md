@@ -94,9 +94,11 @@ information.
 #### Zig Cache
 
 The Zig compiler caches intermediate outputs on disk. This cache is shared and
-persisted between Bazel builds and build actions. You can configure the cache
-directory using the following set of environment variables, you can configure
-them through Bazel by using the `--repo_env` flag.
+persisted between Bazel builds and build actions, including incremental worker
+actions. Each incremental compiler session uses its own output entry in the
+shared cache. Use an absolute cache directory for persistent workers. To set the
+cache directory through Bazel, pass one of these environment variables with
+`--repo_env`.
 
 - `RULES_ZIG_CACHE_PREFIX_LINUX`: Cache directory on Linux, default `/tmp/zig-cache`.
 - `RULES_ZIG_CACHE_PREFIX_MACOS`: Cache directory on MacOS, default `/var/tmp/zig-cache`.
