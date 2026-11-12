@@ -1,0 +1,9 @@
+import %workspace%/../../../../.bazelrc.common
+import %workspace%/../../../../.bazelrc.remote
+try-import %workspace%/../.bazelrc.meta
+try-import %workspace%/../../../../.bazelrc.ic.user
+
+build:reload --define=zls_fixture=reload
+build:reload --override_module=zls_external=external_b
+build:broken --override_module=zls_external=missing
+try-import %workspace%/.bazelrc.user

@@ -51,8 +51,12 @@ bazel_integration_test(
         "//conditions:default": [],
     }),
     test_runner = "zls_tests_runner",
-    workspace_files = workspace_files,
-    workspace_path = "workspace",
+    workspace_files = integration_test_utils.glob_workspace_files("zls") + [
+        "//:all_files",
+        "//:bazelrc",
+        ".bazelrc.meta",
+    ],
+    workspace_path = "zls",
 )
 
 zig_library(
@@ -212,5 +216,6 @@ test_suite(
     ) + [
         ":packages_test",
         ":zig_version_tests",
+        ":zls_0_17_1_test",
     ],
 )

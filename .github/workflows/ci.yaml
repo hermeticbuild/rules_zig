@@ -126,26 +126,6 @@ jobs:
           bazelFlags: "--@rules_zig//zig/settings:incremental --strategy=ZigIncrementalCompile=worker"
           buildbuddyApiKey: ${{ secrets.BUILDBUDDY_API_KEY || '' }}
 
-  zls-parity:
-    needs: matrix-prep-bazelversion
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    steps:
-      - uses: actions/checkout@v6
-      - uses: ./.github/actions/test
-        with:
-          os: ${{ matrix.os }}
-          folder: "."
-          bazelVersion: ${{ fromJSON(needs.matrix-prep-bazelversion.outputs.bazelversions)[0] }}
-          docsEnabled: false
-          zigVersion: "0.17.1"
-          targetPattern: //zig/tests/integration_tests:zls_0_17_1_test
-          tagFilters: ""
-          buildbuddyApiKey: ${{ secrets.BUILDBUDDY_API_KEY || '' }}
-
   test-zig-versions:
     # The type of runner that the job will run on
     runs-on: ${{ matrix.os }}
@@ -339,7 +319,6 @@ jobs:
       - test-zig-versions
       #- test-zig-docs
       - integration-tests
-      - zls-parity
     if: ${{ always() }}
     steps:
       - uses: cgrindel/gha_join_jobs@v1.5.0

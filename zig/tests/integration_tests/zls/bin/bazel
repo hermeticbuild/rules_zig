@@ -1,0 +1,5 @@
+#!/bin/sh
+# The launcher calls bazel by name. Use the integration harness's pinned binary.
+RUNFILES_DIR="$ZLS_TEST_RUNFILES_DIR" \
+RUNFILES_MANIFEST_FILE="$ZLS_TEST_RUNFILES_MANIFEST_FILE" \
+    exec "$BIT_BAZEL_BINARY" "--output_user_root=$TMPDIR/bazel" "$@"
