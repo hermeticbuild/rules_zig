@@ -1,8 +1,12 @@
-//! Linux/macOS process ownership. Keep the group leader waitable until cleanup.
+//! Child process supervision for the Zig 0.17 ZLS launcher on Linux and macOS.
+//! The launcher and BSP service use it to capture output, observe cancellation,
+//! stop owned process groups, and reap their leaders.
+
 const std = @import("std");
 const builtin = @import("builtin");
 
 pub const supported = builtin.os.tag == .linux or builtin.os.tag == .macos;
+
 pub var interrupted: std.atomic.Value(bool) = .init(false);
 var old_term: std.posix.Sigaction = undefined;
 var old_int: std.posix.Sigaction = undefined;
@@ -17,6 +21,7 @@ pub fn install() void {
         .mask = std.posix.sigemptyset(),
         .flags = 0,
     };
+
     std.posix.sigaction(.TERM, &action, &old_term);
     std.posix.sigaction(.INT, &action, &old_int);
 }
@@ -58,6 +63,7 @@ pub const Owned = struct {
             darwin_wexited | std.c.W.NOHANG | darwin_wnowait
         else
             std.os.linux.W.EXITED | std.os.linux.W.NOHANG | std.os.linux.W.NOWAIT;
+
         switch (std.posix.errno(waitid(P_PID, @intCast(self.child.id.?), &info, flags))) {
             .SUCCESS => return if (builtin.os.tag == .macos) info.pid != 0 else info.fields.common.first.piduid.pid != 0,
             .INTR => {
@@ -70,6 +76,7 @@ pub const Owned = struct {
 
     fn stopGroup(self: *Owned) void {
         const pid = self.child.id orelse return;
+
         std.posix.kill(-pid, .TERM) catch {};
         std.Io.sleep(self.io, .fromMilliseconds(@intCast(self.grace_ms)), .awake) catch {};
         std.posix.kill(-pid, .KILL) catch {};
@@ -79,6 +86,7 @@ pub const Owned = struct {
         if (self.child.id == null) {
             return;
         }
+
         self.stopGroup();
         _ = self.child.wait(self.io) catch {};
     }
@@ -90,6 +98,7 @@ pub const Owned = struct {
             if (try self.exited()) break;
             try std.Io.sleep(self.io, .fromMilliseconds(50), .awake);
         }
+
         // Even a successful client may leave descendants. Retaining its zombie
         // prevents PGID reuse until this last group operation and the sole reap.
         self.stopGroup();
@@ -103,6 +112,7 @@ pub fn checkParent(input: *std.Io.File.MultiReader) !void {
         error.EndOfStream => return error.Canceled,
         else => return err,
     };
+
     const reader = input.reader(0);
     if (reader.bufferedLen() >= @sizeOf(std.zig.Client.Message.Header)) {
         const header = try reader.takeStruct(std.zig.Client.Message.Header, .little);
@@ -117,31 +127,38 @@ pub fn capture(init: std.process.Init, options: std.process.SpawnOptions, parent
     var opts = options;
     opts.stdout = .pipe;
     opts.stderr = .pipe;
+
     var owned = try Owned.spawn(init.io, opts);
     defer owned.deinit();
+
     var buffers: std.Io.File.MultiReader.Buffer(2) = undefined;
     var multi: std.Io.File.MultiReader = undefined;
     multi.init(init.arena.allocator(), init.io, buffers.toStreams(), &.{ owned.child.stdout.?, owned.child.stderr.? });
     defer multi.deinit();
+
     var stopped = false;
     while (true) {
         try check();
         if (parent) |p| try checkParent(p);
+
         // Descendants can keep the pipes open after the leader exits.
         // Stop the group before waiting for EOF.
         if (!stopped and try owned.exited()) {
             owned.stopGroup();
             stopped = true;
         }
+
         multi.fill(64, tick) catch |err| switch (err) {
             error.Timeout => continue,
             error.EndOfStream => break,
             else => return err,
         };
+
         if (multi.reader(0).bufferedLen() > 64 * 1024 * 1024 or multi.reader(1).bufferedLen() > 64 * 1024 * 1024) {
             return error.OutputTooLarge;
         }
     }
+
     try multi.checkAnyError();
     const term = try owned.join(parent);
     return .{ .term = term, .stdout = try multi.toOwnedSlice(0), .stderr = try multi.toOwnedSlice(1) };
@@ -156,10 +173,12 @@ pub fn receive(multi: *std.Io.File.MultiReader) !std.zig.Client.Message.Header {
             else => return err,
         };
     }
+
     const header = try reader.takeStruct(std.zig.Client.Message.Header, .little);
     if (header.bytes_len > 1024 * 1024) {
         return error.ProtocolFrameTooLarge;
     }
+
     while (reader.bufferedLen() < header.bytes_len) {
         try check();
         multi.fill(64, tick) catch |err| switch (err) {
@@ -167,5 +186,6 @@ pub fn receive(multi: *std.Io.File.MultiReader) !std.zig.Client.Message.Header {
             else => return err,
         };
     }
+
     return header;
 }

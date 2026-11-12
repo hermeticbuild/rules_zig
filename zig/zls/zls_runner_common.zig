@@ -1,7 +1,7 @@
-/// Shared ZLS launcher setup.
-///
-/// Resolves runfiles and prepares configuration, arguments and environment.
-/// Each launcher owns its child process.
+//! Launch preparation shared by the Zig 0.16 and 0.17 ZLS launchers.
+//! Resolves Bazel runfiles and prepares the temporary configuration, arguments,
+//! and environment each launcher uses to start ZLS.
+
 const std = @import("std");
 const builtin = @import("builtin");
 
@@ -38,9 +38,11 @@ pub const TempDir = struct {
             }
             break :fallback "/tmp";
         };
+
         var random: u128 = undefined;
         init.io.random(std.mem.asBytes(&random));
         const path = try std.fmt.allocPrint(init.arena.allocator(), "{s}/rules-zig-zls-{s}", .{ base, std.fmt.hex(random) });
+
         try std.Io.Dir.createDirAbsolute(init.io, path, if (builtin.os.tag == .windows) .default_dir else .fromMode(0o700));
         return .{ .path = path, .io = init.io };
     }
@@ -77,22 +79,22 @@ pub const Launch = struct {
         }
 
         const args = init.minimal.args.toSlice(arena.allocator()) catch return error.ArgsAllocFailed;
-
         const exec_args_len = args.len - 1 + 3; // Skip args[0] and add "zls" + --config-path + tmp_file_path
         var exec_args = try arena.allocator().alloc([]const u8, exec_args_len);
 
         exec_args[0] = zls_bin_path; // "zls"
-
         @memcpy(exec_args[1 .. exec_args.len - 2], args[1..]);
         @memcpy(exec_args[exec_args.len - 2 ..], &[_][]const u8{
             "--config-path",
             tmp_file_path,
         });
+
         var child_env_map: std.process.Environ.Map = .init(arena.allocator());
         errdefer child_env_map.deinit();
         for (init.environ_map.keys(), init.environ_map.values()) |key, value| {
             try child_env_map.put(key, value);
         }
+
         try child_env_map.put("ZIG_LIB_DIR", zig_lib_computed_path);
         try child_env_map.put("ZIG_GLOBAL_CACHE_DIR", global_cache_path);
         try child_env_map.put("ZIG_LOCAL_CACHE_DIR", global_cache_path);
