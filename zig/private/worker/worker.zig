@@ -833,10 +833,23 @@ pub fn main(init: std.process.Init) !u8 {
     const args = try init.minimal.args.toSlice(a);
     var zig_path: ?[]const u8 = null;
     var lib_path: ?[]const u8 = null;
+    var local_cache: ?[]const u8 = null;
+    var global_cache: ?[]const u8 = null;
     var persistent = false;
     var flags: std.array_list.Managed([]const u8) = .init(a);
-    for (args[1..]) |arg| {
-        if (std.mem.startsWith(u8, arg, "--zig=")) {
+    var i: usize = 1;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        const is_local_cache = std.mem.eql(u8, arg, "--cache-dir");
+        if (is_local_cache or std.mem.eql(u8, arg, "--global-cache-dir")) {
+            i += 1;
+            if (i == args.len) return error.MissingCacheDirectory;
+            if (is_local_cache) {
+                local_cache = args[i];
+            } else {
+                global_cache = args[i];
+            }
+        } else if (std.mem.startsWith(u8, arg, "--zig=")) {
             zig_path = arg[6..];
         } else if (std.mem.startsWith(u8, arg, "--lib=")) {
             lib_path = arg[6..];
@@ -852,9 +865,12 @@ pub fn main(init: std.process.Init) !u8 {
 
     const zig = try Dir.cwd().realPathFileAlloc(io, zig_path orelse return error.MissingZigPath, a);
     const lib = try Dir.cwd().realPathFileAlloc(io, lib_path orelse return error.MissingLibPath, a);
-    // Bazel sets both cache variables to the same toolchain path for ordinary
-    // and incremental actions. Resolve relative overrides before changing cwd.
-    const configured_cache = init.environ_map.get("ZIG_LOCAL_CACHE_DIR") orelse return error.MissingCacheDirectory;
+    // zig_cache_output supplies the same toolchain path for both flags.
+    // Resolve relative overrides before changing cwd.
+    const configured_cache = local_cache orelse return error.MissingCacheDirectory;
+    if (!std.mem.eql(u8, configured_cache, global_cache orelse return error.MissingCacheDirectory)) {
+        return error.MismatchedCacheDirectories;
+    }
     if (persistent and !std.fs.path.isAbsolute(configured_cache)) {
         std.log.err("the Zig cache directory must be absolute for a persistent worker: {s}", .{configured_cache});
         return 1;
