@@ -1,9 +1,15 @@
-# Zig incremental compilation worker
+# Zig compilation worker
 
-[`worker.zig`](worker.zig) keeps a Zig compiler running across Bazel requests.
-It starts Zig with `-fincremental` and `--listen=-`. Zig keeps fine-grained
-compilation state in memory and uses it to decide what to recompile on each
-`update`. Replacing the child loses that state.
+[`worker.zig`](worker.zig) handles both ordinary and incremental compilation.
+It speaks Zig's `--listen=-` protocol in both modes. Ordinary compilation uses
+`-fno-incremental` and starts a fresh Zig compiler per request, while keeping
+staged inputs and private caches for subsequent requests. Zig 0.17.1 can fail
+or produce a broken executable if the same compiler handles a second
+non-incremental update.
+
+Incremental compilation uses `-fincremental` and keeps the compiler running.
+Zig retains fine-grained compilation state in memory and uses it to decide what
+to recompile on each `update`. Replacing the child loses that state.
 
 ## Routing and reuse
 
@@ -23,14 +29,14 @@ The action supplies the input paths, output metadata, and ordered Zig
 arguments. Each session has a private execroot for staged inputs and an
 in-memory map of their Bazel digests, keyed by path.
 
-1. **Check for reuse.** Start a new session if the compiler arguments or
-   output metadata changed. A change to the set of staged paths also starts a
-   new session so Zig sees a clean input tree.
+1. **Check for reuse.** Start a new session if the compiler arguments, output
+   metadata, or set of staged paths changed, so Zig sees a clean input tree.
 2. **Stage the inputs.** Keep a staged copy if its nonempty Bazel digest
    matches. If the digest changed or is missing, replace the file atomically.
    Zig sees a new inode even if the size and modification time match.
-3. **Compile and publish.** Send `update` to Zig. Copy the resulting artifacts
-   out of Zig's cache so later updates cannot mutate published outputs.
+3. **Compile and publish.** Start Zig if necessary and send `update`. Copy the
+   resulting artifacts out of Zig's cache so later updates cannot mutate
+   published outputs.
 
 ## Sandboxing and cleanup
 

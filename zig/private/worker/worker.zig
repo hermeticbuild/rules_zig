@@ -1,4 +1,4 @@
-//! Singleplex Bazel adapter for Zig 0.17's incremental compiler protocol.
+//! Singleplex Bazel adapter for Zig 0.17's compiler protocol.
 const std = @import("std");
 const builtin = @import("builtin");
 const Io = std.Io;
@@ -183,13 +183,13 @@ const Compilation = struct {
         return result;
     }
 
-    fn checkConfiguration(self: Compilation, diagnostics: *Io.Writer) !void {
+    fn checkConfiguration(self: Compilation, incremental: bool, diagnostics: *Io.Writer) !void {
         if (self.output_kind == .shared_library) {
             const emits_llvm = for (self.outputs) |output| {
                 if (output.kind == .llvm_ir or output.kind == .llvm_bc) break true;
             } else false;
 
-            try checkSharedLibraryArgs(self.arguments, emits_llvm, diagnostics);
+            try checkSharedLibraryArgs(self.arguments, emits_llvm, incremental, diagnostics);
         }
     }
 
@@ -242,7 +242,7 @@ const Compilation = struct {
     }
 };
 
-fn checkSharedLibraryArgs(arguments: []const []const u8, emits_llvm: bool, diagnostics: *Io.Writer) !void {
+fn checkSharedLibraryArgs(arguments: []const []const u8, emits_llvm: bool, incremental: bool, diagnostics: *Io.Writer) !void {
     var llvm = emits_llvm;
     var lld = false;
     // This is a capability check, not a Zig argument parser. Flag-shaped
@@ -250,7 +250,7 @@ fn checkSharedLibraryArgs(arguments: []const []const u8, emits_llvm: bool, diagn
     // accepted to avoid maintaining Zig's option-arity table.
     for (arguments) |arg| {
         if (std.mem.eql(u8, arg, "--version")) {
-            try diagnostics.writeAll("zig incremental compilation: versioned shared-library artifacts (--version) are unsupported\n");
+            try diagnostics.writeAll("zig worker compilation: versioned shared-library artifacts (--version) are unsupported\n");
             return error.UnsupportedSharedLibraryVersion;
         }
         // These global switches use their last occurrence, as in Zig itself.
@@ -260,7 +260,7 @@ fn checkSharedLibraryArgs(arguments: []const []const u8, emits_llvm: bool, diagn
         if (std.mem.eql(u8, arg, "-fno-lld")) lld = false;
     }
 
-    if (!llvm or !lld) {
+    if (incremental and (!llvm or !lld)) {
         try diagnostics.writeAll("zig incremental compilation: shared libraries require LLVM (-fllvm or LLVM output) and explicit -flld; the Zig 0.17 self-hosted shared-library configuration is unsupported\n");
         return error.UnsupportedSharedLibraryBackend;
     }
@@ -342,19 +342,24 @@ const Session = struct {
     stderr: Io.File,
     stderr_offset: u64 = 0,
     inputs: std.StringHashMapUnmanaged([]const u8) = .empty,
-    child: std.process.Child,
+    child: ?std.process.Child = null,
     reader: Io.File.Reader,
     writer: Io.File.Writer,
     read_buffer: [8192]u8 = undefined,
     write_buffer: [256]u8 = undefined,
 
     fn destroy(self: *Session, gpa: Allocator, io: Io) void {
-        self.child.kill(io);
+        self.stopCompiler(io);
         self.stderr.close(io);
         Dir.cwd().deleteTree(io, self.root) catch {};
         self.clearInputs(gpa);
         self.arena.deinit();
         gpa.destroy(self);
+    }
+
+    fn stopCompiler(self: *Session, io: Io) void {
+        if (self.child) |*child| child.kill(io);
+        self.child = null;
     }
 
     fn clearInputs(self: *Session, gpa: Allocator) void {
@@ -375,6 +380,7 @@ const Worker = struct {
     zig_input: []const u8,
     lib_input: []const u8,
     root: []const u8,
+    incremental: bool,
     session: ?*Session = null,
     generation: usize = 0,
     message_buffer: std.ArrayList(u8) = .empty,
@@ -389,7 +395,7 @@ const Worker = struct {
         self.message_buffer.deinit(self.gpa);
     }
 
-    fn start(self: *Worker, compilation: Compilation, key: []const u8, arguments: []const []const u8, inputs: []const Input, request_allocator: Allocator) !*Session {
+    fn start(self: *Worker, key: []const u8, inputs: []const Input, request_allocator: Allocator) !*Session {
         self.reset();
         if (Shutdown.requested.load(.monotonic)) return error.Canceled;
         self.generation += 1;
@@ -403,9 +409,12 @@ const Worker = struct {
         const a = arena.allocator();
 
         const root = try std.fmt.allocPrint(a, "{s}/session-{d}", .{ self.root, self.generation });
-        const cwd = try std.fs.path.join(a, &.{ root, "execroot", "main" });
-        try Dir.cwd().createDirPath(self.io, cwd);
+        const cwd_path = try std.fs.path.join(a, &.{ root, "execroot", "main" });
+        try Dir.cwd().createDirPath(self.io, cwd_path);
         errdefer Dir.cwd().deleteTree(self.io, root) catch {};
+        // Zig can report absolute input paths through the real working
+        // directory. On macOS, /tmp resolves to /private/tmp.
+        const cwd = try Dir.cwd().realPathFileAlloc(self.io, cwd_path, a);
 
         // Expose the declared SDK at its logical input paths without copying it.
         // Only these paths are tool-owned; source symlinks into the SDK are still
@@ -422,6 +431,29 @@ const Worker = struct {
         }
 
         const cache = try std.fs.path.join(a, &.{ root, "cache" });
+        const stderr = try Dir.cwd().createFile(self.io, try std.fs.path.join(a, &.{ root, "stderr" }), .{ .read = true });
+        errdefer stderr.close(self.io);
+
+        s.* = .{
+            .arena = arena,
+            .key = try a.dupe(u8, key),
+            .root = root,
+            .cwd = cwd,
+            .cache = cache,
+            .generation = self.generation,
+            .stderr = stderr,
+            .reader = undefined,
+            .writer = undefined,
+        };
+        errdefer s.clearInputs(self.gpa);
+
+        // The compiler resolves module roots during startup, before `update`.
+        _ = try self.materialize(s, inputs, request_allocator, true);
+        self.session = s;
+        return s;
+    }
+
+    fn startCompiler(self: *Worker, s: *Session, compilation: Compilation, arguments: []const []const u8, a: Allocator) !void {
         const global_cache = try std.fs.path.join(a, &.{ self.root, "global-cache" });
 
         var argv: std.array_list.Managed([]const u8) = .init(a);
@@ -429,11 +461,11 @@ const Worker = struct {
             self.zig,
             compilation.command,
             "--listen=-",
-            "-fincremental",
+            if (self.incremental) "-fincremental" else "-fno-incremental",
             "--name",
             compilation.name,
             "--cache-dir",
-            cache,
+            s.cache,
             "--global-cache-dir",
             global_cache,
             "--zig-lib-dir",
@@ -479,43 +511,19 @@ const Worker = struct {
         if (direct)
             try argv.appendSlice(arguments)
         else
-            try appendResponseFile(&argv, self.io, root, arguments);
-
-        const stderr = try Dir.cwd().createFile(self.io, try std.fs.path.join(a, &.{ root, "stderr" }), .{ .read = true });
-        errdefer stderr.close(self.io);
-
-        const owned_key = try a.dupe(u8, key);
-        s.* = .{
-            .arena = arena,
-            .key = owned_key,
-            .root = root,
-            .cwd = cwd,
-            .cache = cache,
-            .generation = self.generation,
-            .stderr = stderr,
-            .child = undefined,
-            .reader = undefined,
-            .writer = undefined,
-        };
-        errdefer s.clearInputs(self.gpa);
-
-        // The compiler resolves module roots during startup, before `update`.
-        _ = try self.materialize(s, inputs, request_allocator, true);
+            try appendResponseFile(&argv, self.io, s.root, arguments);
 
         const child = try std.process.spawn(self.io, .{
             .argv = argv.items,
-            .cwd = .{ .path = cwd },
+            .cwd = .{ .path = s.cwd },
             .stdin = .pipe,
             .stdout = .pipe,
             // A file avoids pipe backpressure while the compiler protocol is read.
-            .stderr = .{ .file = stderr },
+            .stderr = .{ .file = s.stderr },
         });
         s.child = child;
         s.reader = child.stdout.?.readerStreaming(self.io, &s.read_buffer);
         s.writer = child.stdin.?.writerStreaming(self.io, &s.write_buffer);
-        self.session = s;
-
-        return s;
     }
 
     fn execute(self: *Worker, request: Request, a: Allocator, diagnostics: *Io.Writer) !u8 {
@@ -538,7 +546,7 @@ const Worker = struct {
         }
 
         const compilation = try Compilation.parse(a, request.arguments);
-        try compilation.checkConfiguration(diagnostics);
+        try compilation.checkConfiguration(self.incremental, diagnostics);
         const arguments = compilation.arguments;
         const inputs = try compilation.inputs(a, request.inputs);
         const key = try std.json.Stringify.valueAlloc(a, .{
@@ -556,7 +564,7 @@ const Worker = struct {
         var s = if (reused)
             self.session.?
         else
-            try self.start(compilation, key, arguments, inputs, a);
+            try self.start(key, inputs, a);
 
         const copied = if (reused)
             self.materialize(s, inputs, a, false) catch |err| switch (err) {
@@ -564,7 +572,7 @@ const Worker = struct {
                     // Zig may report historical inputs after they become unreachable.
                     // A changed declared set gets a clean compiler and filesystem view.
                     reused = false;
-                    s = try self.start(compilation, key, arguments, inputs, a);
+                    s = try self.start(key, inputs, a);
                     break :blk s.inputs.count();
                 },
                 else => return err,
@@ -575,6 +583,10 @@ const Worker = struct {
         defer self.appendStderr(s, diagnostics) catch {};
 
         const inputs_ready_at = Io.Clock.awake.now(self.io);
+        if (s.child == null) try self.startCompiler(s, compilation, arguments, a);
+        // Zig 0.17.1 can crash or miscompile on a second non-incremental
+        // update. Keep the staged inputs and caches, and use a fresh compiler.
+        defer if (!self.incremental) s.stopCompiler(self.io);
 
         // Artifact names are under our control, independent of Bazel's output path.
         const client: std.zig.Client = .{ .in = &s.reader.interface, .out = &s.writer.interface };
@@ -650,13 +662,13 @@ const Worker = struct {
                             // before checking membership and containment.
                             const relative = try std.fs.path.relativeAllocPosix(a, s.cwd, s.cwd, path[1..]);
                             safePath(relative, true) catch {
-                                try diagnostics.print("zig incremental compilation: unsafe compiler input {s}\n", .{path[1..]});
+                                try diagnostics.print("zig worker compilation: unsafe compiler input {s}\n", .{path[1..]});
                                 undeclared_input = true;
                                 continue;
                             };
 
                             if (!s.inputs.contains(relative) and !self.isToolInput(relative)) {
-                                try diagnostics.print("zig incremental compilation: undeclared compiler input {s}\n", .{path[1..]});
+                                try diagnostics.print("zig worker compilation: undeclared compiler input {s}\n", .{path[1..]});
                                 undeclared_input = true;
                             }
                         } else if (path[0] < 2 or path[0] > 5) {
@@ -680,7 +692,7 @@ const Worker = struct {
             });
 
             Dir.cwd().access(self.io, artifact.*, .{}) catch |err| {
-                try diagnostics.print("zig incremental compilation: requested {t} output was not produced: {s} ({t})\n", .{ output.kind, output.path, err });
+                try diagnostics.print("zig worker compilation: requested {t} output was not produced: {s} ({t})\n", .{ output.kind, output.path, err });
                 return error.MissingCompilerOutput;
             };
         }
@@ -824,6 +836,7 @@ pub fn main(init: std.process.Init) !u8 {
     var zig_path: ?[]const u8 = null;
     var lib_path: ?[]const u8 = null;
     var persistent = false;
+    var incremental = false;
     var flags: std.array_list.Managed([]const u8) = .init(a);
     for (args[1..]) |arg| {
         if (std.mem.startsWith(u8, arg, "--zig=")) {
@@ -832,6 +845,8 @@ pub fn main(init: std.process.Init) !u8 {
             lib_path = arg[6..];
         } else if (std.mem.eql(u8, arg, "--persistent_worker")) {
             persistent = true;
+        } else if (std.mem.eql(u8, arg, "--incremental")) {
+            incremental = true;
         } else if (std.mem.cutPrefix(u8, arg, "--compilation-output=")) |path| {
             // Routing identity for Bazel's worker pool, not a compiler option.
             try safePath(path, false);
@@ -865,6 +880,7 @@ pub fn main(init: std.process.Init) !u8 {
         .zig_input = zig_path.?,
         .lib_input = lib_path.?,
         .root = root,
+        .incremental = incremental,
     };
     defer {
         worker.deinit();
@@ -898,7 +914,7 @@ fn serve(worker: *Worker, init: std.process.Init, persistent: bool, flags: []con
         var diagnostics: Io.Writer.Allocating = .init(a);
         const code = worker.execute(.{ .arguments = flags }, a, &diagnostics.writer) catch |err| blk: {
             if (Shutdown.requested.load(.monotonic)) return 143;
-            try diagnostics.writer.print("zig incremental compilation: {t}\n", .{err});
+            try diagnostics.writer.print("zig worker compilation: {t}\n", .{err});
             break :blk 1;
         };
         if (Shutdown.requested.load(.monotonic)) return 143;
@@ -927,7 +943,7 @@ fn serve(worker: *Worker, init: std.process.Init, persistent: bool, flags: []con
         const code = worker.execute(request, ra, &diagnostics.writer) catch |err| blk: {
             if (Shutdown.requested.load(.monotonic)) return 143;
             worker.reset();
-            try diagnostics.writer.print("zig incremental worker: {t}\n", .{err});
+            try diagnostics.writer.print("zig worker: {t}\n", .{err});
             break :blk 1;
         };
 

@@ -7,12 +7,18 @@ config_setting(
     flag_values = {"//zig/settings:incremental": "true"},
 )
 
+config_setting(
+    name = "worker_enabled",
+    flag_values = {"//zig/settings:use_worker": "true"},
+)
+
 # The disabled configuration has no dependency on the worker binary. This cuts
 # the cycle during analysis, before any compilation actions are registered.
 alias(
     name = "tool",
     actual = select({
         "incremental_enabled": "configured_worker",
+        "worker_enabled": "configured_worker",
         "//conditions:default": "disabled",
     }),
     visibility = ["//zig:__subpackages__"],

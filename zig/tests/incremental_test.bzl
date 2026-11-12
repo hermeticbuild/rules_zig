@@ -1,10 +1,11 @@
-"""Analysis tests for incremental compilation."""
+"""Analysis tests for Zig worker compilation."""
 
 load("@bazel_skylib//lib:partial.bzl", "partial")
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
 load(":util.bzl", "assert_find_action", "canonical_label")
 
 _INCREMENTAL = canonical_label("@//zig/settings:incremental")
+_USE_WORKER = canonical_label("@//zig/settings:use_worker")
 _VERSION = canonical_label("@zig_toolchains//:version")
 _PLATFORMS = "//command_line_option:platforms"
 _EXEC_PLATFORMS = "//command_line_option:extra_execution_platforms"
@@ -31,7 +32,8 @@ def _disabled_test_impl(ctx):
     env = analysistest.begin(ctx)
 
     assert_find_action(env, "ZigBuildExe")
-    asserts.equals(env, [], [action for action in analysistest.target_actions(env) if action.mnemonic == "ZigIncrementalCompile"])
+    worker_actions = ["ZigIncrementalCompile", "ZigWorkerCompile"]
+    asserts.equals(env, [], [action for action in analysistest.target_actions(env) if action.mnemonic in worker_actions])
 
     return analysistest.end(env)
 
@@ -44,6 +46,7 @@ def _binary_test_impl(ctx):
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
     compile = assert_find_action(env, "ZigIncrementalCompile")
+    asserts.true(env, "--incremental" in compile.argv)
 
     metadata = json.decode([arg for arg in compile.argv if arg.startswith("{")][0])
     asserts.equals(env, compile.argv[compile.argv.index("-target") + 1], metadata.get("target"))
@@ -57,6 +60,26 @@ def _binary_test_impl(ctx):
     return analysistest.end(env)
 
 _binary_test = analysistest.make(_binary_test_impl, config_settings = _SETTINGS)
+
+_both_flags_test = analysistest.make(
+    _binary_test_impl,
+    config_settings = _SETTINGS | {_USE_WORKER: True},
+)
+
+def _ordinary_worker_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    compile = assert_find_action(env, "ZigWorkerCompile")
+    asserts.false(env, "--incremental" in compile.argv)
+    return analysistest.end(env)
+
+_ordinary_worker_test = analysistest.make(
+    _ordinary_worker_test_impl,
+    config_settings = _SETTINGS | {
+        _INCREMENTAL: False,
+        _USE_WORKER: True,
+        _PLATFORMS: canonical_label("@//zig/tests/platforms:aarch64-linux"),
+    },
+)
 
 def _test_binary_test_impl(ctx):
     env = analysistest.begin(ctx)
@@ -281,7 +304,9 @@ def incremental_test_suite(name):
         name,
         # Test action selection and primary output ownership.
         partial.make(_disabled_test, target_under_test = "//zig/tests/incremental:binary", size = "small"),
+        partial.make(_ordinary_worker_test, target_under_test = "//zig/tests/incremental:c_sources", size = "small"),
         partial.make(_binary_test, target_under_test = "//zig/tests/incremental:binary", size = "small"),
+        partial.make(_both_flags_test, target_under_test = "//zig/tests/incremental:binary", size = "small"),
         partial.make(_test_binary_test, target_under_test = "//zig/tests/incremental:test_binary", size = "small"),
         partial.make(_static_library_test, target_under_test = "//zig/tests/incremental:static_library", size = "small"),
         partial.make(_shared_library_test, target_under_test = "//zig/tests/incremental:shared_library", size = "small"),

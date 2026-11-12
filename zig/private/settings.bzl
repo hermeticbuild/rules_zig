@@ -43,6 +43,10 @@ ATTRS = {
         doc = "Whether to use experimental incremental compilation for target compilations.",
         mandatory = True,
     ),
+    "use_worker": attr.label(
+        doc = "Whether to use the Zig worker for ordinary target compilations.",
+        mandatory = True,
+    ),
     "mode": attr.label(
         doc = "The build mode setting.",
         mandatory = True,
@@ -148,6 +152,7 @@ def _settings_impl(ctx):
 
     settings_info = ZigSettingsInfo(
         incremental = not is_exec_configuration and ctx.attr.incremental[BuildSettingInfo].value,
+        use_worker = not is_exec_configuration and ctx.attr.use_worker[BuildSettingInfo].value,
         mode = mode,
         threaded = threaded,
         use_cc_common_link = use_cc_common_link,

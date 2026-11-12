@@ -117,6 +117,25 @@ them through Bazel by using the `--repo_env` flag.
 > build:windows --sandbox_add_mount_pair=C:\Temp
 > ```
 
+#### Persistent Workers
+
+Enable `--@rules_zig//zig/settings:use_worker` to use a persistent Bazel worker
+for ordinary Zig target compilations. This requires a hermetic Zig 0.17.x SDK
+on a POSIX execution platform. The worker keeps staged inputs and private
+Zig caches across builds and starts a fresh compiler for each request.
+Bazel 8.4.1 has a known worker crash when hashing the Zig SDK directory.
+The worker supports unversioned shared libraries.
+
+```text
+build --@rules_zig//zig/settings:use_worker
+build --strategy=ZigWorkerCompile=worker
+```
+
+The separate `--@rules_zig//zig/settings:incremental` flag selects the
+incremental worker and takes precedence if both flags are set. Worker
+compilation uses private caches. Direct actions, including worker bootstrap,
+still use the cache configuration above.
+
 #### Execution Groups
 
 Zig compiler actions use the `zig` execution group. When `use_cc_common_link`

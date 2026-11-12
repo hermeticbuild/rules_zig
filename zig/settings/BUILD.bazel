@@ -17,12 +17,19 @@ settings(
     mode = ":mode",
     threaded = ":threaded",
     use_cc_common_link = ":use_cc_common_link",
+    use_worker = ":use_worker",
     visibility = ["//visibility:public"],
     zigopt = ":zigopt",
 )
 
 bool_flag(
     name = "incremental",
+    build_setting_default = False,
+    visibility = ["//visibility:public"],
+)
+
+bool_flag(
+    name = "use_worker",
     build_setting_default = False,
     visibility = ["//visibility:public"],
 )
