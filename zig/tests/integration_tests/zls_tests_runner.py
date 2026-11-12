@@ -116,7 +116,7 @@ def test_workspace(workspace, env):
     settings = workspace / ".bazelrc.user"
     sessions = []
     try:
-        bazel("build", "--config=remote-cache", "//:completion")
+        bazel("build", "//:completion")
         output = (workspace / "bazel-bin").resolve()
         launcher = output / "completion"
         version = subprocess.check_output([launcher, "--version"], cwd=workspace, env=env, text=True).strip()
