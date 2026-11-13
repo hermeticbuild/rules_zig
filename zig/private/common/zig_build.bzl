@@ -57,7 +57,7 @@ load(
 )
 
 ATTRS = {
-    "_incremental_worker": attr.label(
+    "_worker": attr.label(
         default = "//zig/private/worker:tool",
         cfg = config.exec("zig"),
     ),
@@ -267,7 +267,7 @@ def _references_auto_c(root_module):
                 return True
     return False
 
-def _compile(ctx, *, zigtoolchaininfo, arguments, worker = None, worker_args = None, **kwargs):
+def _compile(ctx, *, zigtoolchaininfo, arguments, worker = None, worker_args = None, incremental = False, **kwargs):
     """Register a compilation through the selected execution adapter."""
     executable = zig_toolchain_executable(zigtoolchaininfo)
 
@@ -284,6 +284,8 @@ def _compile(ctx, *, zigtoolchaininfo, arguments, worker = None, worker_args = N
         startup = ctx.actions.args()
         startup.add(executable, format = "--zig=%s")
         startup.add(zig_toolchain_lib_dir(zigtoolchaininfo), format = "--lib=%s")
+        if incremental:
+            startup.add("--incremental")
 
         # Bazel retains a separate worker pool for each compilation action.
         # One output anchors the whole invocation, including auxiliary outputs.
@@ -291,7 +293,7 @@ def _compile(ctx, *, zigtoolchaininfo, arguments, worker = None, worker_args = N
         kwargs["tools"] = [executable, zig_toolchain_lib_dir(zigtoolchaininfo)]
         executable = worker
         arguments = [startup, worker_args]
-        kwargs["mnemonic"] = "ZigIncrementalCompile"
+        kwargs["mnemonic"] = "ZigIncrementalCompile" if incremental else "ZigWorkerCompile"
 
         # The adapter also supports one-shot execution. Let the selected
         # execution platform determine whether the action may run remotely.
@@ -299,6 +301,11 @@ def _compile(ctx, *, zigtoolchaininfo, arguments, worker = None, worker_args = N
             "supports-workers": "1",
             "requires-worker-protocol": "json",
             "no-remote-cache": "1",
+        }
+    else:
+        kwargs["env"] = {
+            "ZIG_GLOBAL_CACHE_DIR": zigtoolchaininfo.zig_cache,
+            "ZIG_LOCAL_CACHE_DIR": zigtoolchaininfo.zig_cache,
         }
     ctx.actions.run(
         executable = executable,
@@ -335,16 +342,18 @@ def zig_build_impl(ctx, *, kind):
 
     settings = ctx.attr._settings[ZigSettingsInfo]
     use_cc_common_link = settings.use_cc_common_link
-    incremental_worker = None
-    if settings.incremental:
+    worker = None
+    if settings.use_worker or settings.incremental:
+        mode = "Incremental compilation" if settings.incremental else "Zig worker compilation"
         if zigtoolchaininfo.mode != "file" or zigtoolchaininfo.zig_exe.file.basename.endswith(".exe"):
-            fail("Incremental compilation requires a hermetic Zig toolchain with a POSIX worker adapter.")
+            fail("{} requires a hermetic Zig toolchain with a POSIX worker adapter.".format(mode))
         version = zigtoolchaininfo.zig_version
         if not version.startswith("0.17.") or not semver.gte(version, "0.17.0"):
-            fail("Incremental compilation requires Zig 0.17.x (at least 0.17.0).")
-        incremental_worker = ctx.attr._incremental_worker[DefaultInfo].files_to_run
-        if not incremental_worker.executable:
-            fail("Incremental compilation requires the worker tool dependency.")
+            fail("{} requires Zig 0.17.x (at least 0.17.0).".format(mode))
+        worker = ctx.attr._worker[DefaultInfo].files_to_run
+        if not worker.executable:
+            fail("{} requires the worker tool dependency.".format(mode))
+    if settings.incremental:
         if zigtargetinfo.triple.arch != "x86_64" or zigtargetinfo.triple.os != "linux":
             fail("Incremental compilation currently supports x86_64-linux targets only.")
         if ctx.attr.csrcs or ctx.attr.copts or ctx.file.linker_script:
@@ -547,7 +556,7 @@ def zig_build_impl(ctx, *, kind):
 
     args = ctx.actions.args()
     args.use_param_file("@%s")
-    if incremental_worker:
+    if worker:
         if cc_static_lib or kind == "zig_static_library":
             command, output_kind = "build-lib", "static_library"
         elif kind == "zig_test":
@@ -640,7 +649,7 @@ def zig_build_impl(ctx, *, kind):
                 data = direct_data,
             )
 
-            if incremental_worker and cdeps_inputs:
+            if settings.incremental and cdeps_inputs:
                 # Intentional user-facing warning for the accepted compiler limitation.
                 # buildifier: disable=print
                 print(
@@ -677,10 +686,6 @@ def zig_build_impl(ctx, *, kind):
 
     zig_build_kwargs = dict(
         execution_requirements = {tag: "" for tag in ctx.attr.tags},
-        env = {
-            "ZIG_GLOBAL_CACHE_DIR": zigtoolchaininfo.zig_cache,
-            "ZIG_LOCAL_CACHE_DIR": zigtoolchaininfo.zig_cache,
-        },
     ) | zig_exec_group_action_kwargs()
 
     linkopts = location_expansion(
@@ -696,7 +701,7 @@ def zig_build_impl(ctx, *, kind):
 
     # Preserve the separate ordinary test-object argument group.
     test_args = ctx.actions.args()
-    if not incremental_worker:
+    if not worker:
         for emission in auxiliary_emissions:
             args.add(emission.file, format = emission.flag)
         primary_args = test_args if test_obj else args
@@ -706,8 +711,9 @@ def zig_build_impl(ctx, *, kind):
             primary_args.add("-fno-emit-bin")
 
     compile_kwargs = {
-        "worker": incremental_worker,
+        "worker": worker,
         "worker_args": args,
+        "incremental": settings.incremental,
     } | zig_build_kwargs
 
     if kind == "zig_binary":

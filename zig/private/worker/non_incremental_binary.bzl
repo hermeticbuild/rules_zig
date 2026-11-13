@@ -1,12 +1,15 @@
 """Build the worker through ordinary Zig rules without a worker dependency."""
 
-def _disable_incremental_impl(_, __):
-    return {"//zig/settings:incremental": False}
+def _disable_worker_impl(_, __):
+    return {
+        "//zig/settings:incremental": False,
+        "//zig/settings:use_worker": False,
+    }
 
-_disable_incremental = transition(
-    implementation = _disable_incremental_impl,
+_disable_worker = transition(
+    implementation = _disable_worker_impl,
     inputs = [],
-    outputs = ["//zig/settings:incremental"],
+    outputs = ["//zig/settings:incremental", "//zig/settings:use_worker"],
 )
 
 def _non_incremental_binary_impl(ctx):
@@ -28,7 +31,7 @@ def _non_incremental_binary_impl(ctx):
 non_incremental_binary = rule(
     implementation = _non_incremental_binary_impl,
     executable = True,
-    cfg = _disable_incremental,
+    cfg = _disable_worker,
     attrs = {
         "actual": attr.label(mandatory = True, executable = True, cfg = "target"),
         "_allowlist_function_transition": attr.label(
