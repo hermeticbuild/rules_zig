@@ -1,112 +1,115 @@
 # How the ZLS integration works
 
-ZLS 0.17 discovers a project's modules by asking a Zig executable for build
-information through Zig's binary build protocol. Our launcher also acts as that
-Zig executable: it answers build-information requests using the selected Bazel
-targets, and forwards ordinary compiler requests to the real Zig SDK.
+ZLS needs the module roots and imports selected by `zls_completion(deps = [...])`.
+Bazel produces that information. For ZLS 0.17, the completion launcher also acts
+as ZLS's Zig executable and translates the Bazel module graph into Zig's binary
+build protocol.
 
-There are two conversations: the editor speaks LSP with ZLS, while ZLS speaks
-Zig's build protocol with our adapter. The JSON produced by the workspace
-printer is an intermediate format; it is not sent directly to ZLS.
+## From the editor to Bazel
 
-## A session from launch to navigation
+```text
+Editor -> launcher -> ZLS
+  The launcher starts ZLS with zig_exe_path pointing back to itself.
 
-```mermaid
-sequenceDiagram
-    participant Editor
-    participant Runner as ZLS runner
-    participant ZLS
-    participant Proxy as Runner in compiler-proxy mode
-    participant Printer as Bazel / workspace printer
-    participant SDK as Real Zig SDK
+ZLS -> launcher build --listen=-
+  This invocation enters compiler-proxy mode and calls zls_bsp.serve().
 
-    Editor->>Runner: Launch completion target
-    Runner->>ZLS: Start with proxy as the Zig executable
-    Editor->>ZLS: LSP initialize / open document
-    ZLS->>Proxy: zig env
-    Proxy->>SDK: Read SDK environment
-    SDK-->>Proxy: Compiler and library information
-    Proxy-->>ZLS: SDK environment retaining proxy identity
-    ZLS->>Proxy: zig build --listen=-
-    Proxy->>Printer: Run this completion target's metadata printer
-    Printer-->>Proxy: JSON graph with local source paths
-    Proxy-->>ZLS: Binary configuration and build-protocol exchange
-    ZLS-->>Editor: Import resolution, diagnostics and navigation
+BSP -> bazel run --@zig_toolchains//:version=<SDK> -- //app:zls.print_build_config
+  Bazel writes the graph JSON, prepares generated sources, and runs the printer.
+
+Printer -> BSP
+  The printer reads the JSON, resolves its paths, and writes JSON to stdout.
+
+BSP -> ZLS
+  BSP reads that stdout, serializes the graph to a temporary binary file,
+  and sends the file path over Zig's build protocol.
+
+ZLS -> Editor
+  ZLS reads the file and uses the graph to answer go-to-definition over LSP.
 ```
 
-The outer runner supervises ZLS. ZLS starts a fresh instance of the same
-executable for each Zig command; the proxy lifeline groups those invocations.
-The existing `build.zig` in a document's ancestry is ZLS's discovery marker.
-Its build logic is bypassed by the proxy.
+ZLS starts a new instance of the launcher for each Zig command. The original
+launcher supervises ZLS for the editor session. The Zig 0.16 and 0.17 launchers
+share runfiles lookup and preparation of ZLS's temporary configuration,
+arguments, and environment. [Shared launcher setup](zls_runner_common.zig)
 
-## Preparing the graph: completion target and exporter
+## Which targets are included?
 
-[`zls_completion.bzl`](zls_completion.bzl) connects a chosen set of targets to
-a launcher and a metadata-printer target. The launcher is therefore bound to
-that selection, rather than discovering arbitrary Bazel targets at runtime.
+`zls_completion(name = "zls", deps = [":app"])` creates the `:zls` launcher,
+the `:zls.build_config` exporter, and the `:zls.print_build_config` executable.
+The exporter records the roots listed in `deps` and their transitive imports.
+The raw JSON uses placeholders for workspace and output paths. The printer
+resolves them to local paths.
+[Completion macro](zls_completion.bzl) · [Graph exporter](zls_write_build_config.bzl)
 
-[`zls_write_build_config.bzl`](zls_write_build_config.bzl) exports the selected
-roots, their transitive modules and named import edges as JSON. It also includes
-the source inputs needed to read that graph, so generated sources are produced
-and available locally when the printer runs. The exported paths still contain
-workspace and execution-root placeholders at this stage.
+This abbreviated example shows the printer's stdout. Here, `main.zig` is a
+selected root and `@import("dep")` resolves to `dep.zig`.
 
-## Starting ZLS and intercepting Zig requests: the runner
+```json
+{
+  "compilations": [{ "root_module": "/work/project/main.zig" }],
+  "modules": {
+    "/work/project/main.zig": {
+      "import_table": { "dep": "/work/project/dep.zig" }
+    },
+    "/work/project/dep.zig": { "import_table": {} }
+  }
+}
+```
 
-[`zls_runner_017.zig`](zls_runner_017.zig) starts ZLS with a temporary
-configuration that points its Zig executable back at the runner itself. It
-retains the real SDK path for forwarding compiler requests.
+Both versions use the same printer and JSON format. The 0.16 custom build
+runner passes the printer's stdout to ZLS. The 0.17 adapter converts that
+JSON to Zig's binary configuration. [Zig 0.16 build runner](zls_build_runner.zig)
 
-The proxy handles three cases:
+## When does ZLS query Bazel?
 
-- **`zig env`:** obtain the real SDK's environment, but report the proxy as
-  `zig_exe`. ZLS uses that field for later requests; returning the real compiler
-  here would cause its build-information requests to bypass the integration.
-- **`zig build --listen=-`:** enter the metadata service described below.
-- **Other non-build compiler requests:** invoke the real SDK and preserve its
-  output and exit status. This includes the compiler queries ZLS uses alongside
-  build metadata. Unsupported `zig build` invocations are rejected.
+When ZLS first finds a `build.zig` while resolving a document's imports, ZLS
+starts the proxy with `build --listen=-`. Saving that `build.zig` in the editor
+also makes ZLS reload the graph. To pick up changes to `BUILD.bazel` or
+`MODULE.bazel`, save `build.zig` or restart ZLS. Each load runs the Bazel printer
+again. ZLS uses `build.zig` to find the project, and the proxy loads the build
+graph from Bazel.
 
-[`zls_runner_common.zig`](zls_runner_common.zig) provides the shared launch
-preparation: runtime-file lookup, temporary configuration, arguments and
-environment. The version-specific runners control the session and protocol.
+## Which Zig commands does the proxy handle?
 
-## Resolving the graph's paths: the workspace printer
+- `zig env` queries the real SDK and returns the proxy's path in `zig_exe` so
+  ZLS sends later commands through the proxy.
+- `zig build --listen=-` queries Bazel and serves the module configuration.
+- Other non-build commands, such as compiler queries, run the real SDK and
+  preserve its output and exit status.
 
-Each metadata load runs `bazel run` on the completion target's
-`.print_build_config` target, whose executable is
-[`workspace_printer.zig`](workspace_printer.zig).
+The proxy accepts exactly `zig build --listen=-` for metadata requests. ZLS
+can append `build_on_save_args` when build-on-save is enabled. The proxy rejects
+those extra arguments because the graph comes from the selected Bazel targets.
+Ignoring them could return a graph different from the one requested. Forwarding
+the command to Zig would run the workspace's `build.zig`.
+[Zig 0.17 launcher](zls_runner_017.zig)
 
-That invocation regenerates the JSON graph as needed and materializes its
-source inputs. The printer then replaces workspace/output placeholders and
-canonicalizes module paths and import destinations. Its output is JSON whose
-paths refer to the actual local files ZLS will open, including external and
-generated files.
+## How does the printer locate generated and external files?
 
-The execution-root identity comes from the configuration artifact being read.
-This keeps the graph tied to the Bazel invocation that produced it, including
-when a different output base is used. Canonical paths also let ZLS associate a
-file opened by the editor with the same file referenced by an import.
+Bazel gives the printer the config's path relative to the execution root, such
+as `bazel-out/.../zls.build_config.json`. The printer resolves the config's
+runfiles path and removes that suffix. For a config under
+`/cache/output-base/execroot/_main/bazel-out/...`, this gives
+`/cache/output-base/execroot/_main`. Generated and external sources are resolved
+against the output tree that contains the config. A separate
+`bazel info execution_root` could select a different output base if its startup
+options differ. The printer also canonicalizes paths so imports and documents
+opened by the editor can refer to the same file.
+[Workspace printer](workspace_printer.zig)
 
-## Speaking ZLS's build protocol: the BSP service
+## What does the binary protocol service do?
 
-[`zls_bsp.zig`](zls_bsp.zig) consumes the printer's JSON and turns it into the
-configuration ZLS expects. Here BSP refers to **Zig's binary build protocol**,
-not JSON-RPC.
+The BSP library builds a `std.Build` graph from the printer's JSON and uses the
+selected SDK to write a temporary binary configuration. Synthetic object steps
+make the selected roots visible to the serializer. The service sends the
+protocol handshake and the configuration path, then acknowledges ZLS's empty
+build round. The file stays available until ZLS sends an exit request or closes
+the connection.
 
-It constructs a `std.Build` module graph with the exported imports and
-compilation roots, then uses the selected SDK's serializer to write a binary
-configuration file. Synthetic compilation roots make library-only selections
-visible to ZLS; they are metadata and are never executed.
-
-The service performs the handshake, sends ZLS the configuration file's path, and
-answers ZLS's empty build round with completion. It then remains available for
-protocol messages until ZLS ends the protocol session or closes the connection.
-The configuration file stays alive for that exchange.
-
-This is a finite metadata service. Requests to execute build steps or watch
-for build-on-save fail explicitly. A failed Bazel query or invalid graph is
-reported to ZLS as a configuration failure.
+The service rejects requests to execute build steps or watch files. Run
+application builds through Bazel. A failed Bazel command or invalid module
+graph is reported to ZLS as a configuration failure. [BSP library](zls_bsp.zig)
 
 ## Cancellation and cleanup: the process owner
 
@@ -122,19 +125,9 @@ The surrounding runner/service then removes its temporary configuration files.
 The outer runner gives inner helpers time to perform this cleanup when the
 whole ZLS session ends. Shared Bazel daemons are outside this ownership.
 
-## Reloads and version boundary
+## Platform and configuration support
 
-Every new metadata load repeats the printer query and configuration exchange.
-A ZLS configuration reload, such as saving its discovery marker, can therefore
-pick up changed BUILD/MODULE metadata and generated sources. Those Bazel files
-are not watched automatically. Ordinary document edits continue through LSP.
-
-The 0.16 path remains separate: [`zls_runner.zig`](zls_runner.zig) configures
-ZLS's custom build runner, which obtains JSON from the same workspace printer.
-The 0.17 path adds the compiler proxy and binary-protocol conversion described
-above.
-
-The current 0.17 route supports Linux/macOS and one selected configuration.
-Existing ZLS limitations around external-document association and conflicting
-module contexts still apply. See the [setup instructions](../../README.md#zls)
-for editor configuration.
+The 0.17 integration supports Linux and macOS and one selected Bazel
+configuration. Existing ZLS limitations around external-document association
+and conflicting module contexts still apply. See the
+[setup instructions](../../README.md#zls) for editor configuration.

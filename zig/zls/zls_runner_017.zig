@@ -99,6 +99,14 @@ fn run(init: std.process.Init) !u8 {
     defer owned.restore();
 
     const args = try init.minimal.args.toSlice(arena.allocator());
+
+    // The editor starts this executable as the ZLS launcher. We point ZLS's
+    // zig_exe_path back here and pass the real SDK in RULES_ZIG_ZLS_SDK.
+    // When ZLS starts this executable as Zig, it inherits that variable and
+    // enters proxy mode. The proxy answers env, serves Bazel metadata for
+    // build --listen=-, and forwards other non-build commands to the SDK.
+    // Each proxy invocation returns to ZLS. The original launcher keeps
+    // supervising the editor session.
     if (init.environ_map.get("RULES_ZIG_ZLS_SDK") != null) {
         return proxy(init, args);
     }

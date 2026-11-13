@@ -1,6 +1,7 @@
-//! Child process supervision for the Zig 0.17 ZLS launcher on Linux and macOS.
-//! The launcher and BSP service use it to capture output, observe cancellation,
-//! stop owned process groups, and reap their leaders.
+//! Process supervision for the Zig 0.17 ZLS launcher and BSP library.
+//! Cancellation must stop in-flight Bazel and Zig commands. Helpers can
+//! outlive the group leader and keep its output pipes open, so cleanup
+//! stops the owned process group before reaping the leader.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -38,6 +39,9 @@ pub fn check() error{Canceled}!void {
 }
 
 pub const tick: std.Io.Timeout = .{ .duration = .{ .raw = .fromMilliseconds(50), .clock = .awake } };
+
+// Minimum writable buffer space to reserve when MultiReader rearms a stream.
+const read_spare_capacity = 64;
 
 // Zig exposes siginfo_t but not waitid or all of its Darwin flags.
 const P_PID = 1;
@@ -107,7 +111,7 @@ pub const Owned = struct {
 };
 
 pub fn checkParent(input: *std.Io.File.MultiReader) !void {
-    input.fill(64, .{ .duration = .{ .raw = .zero, .clock = .awake } }) catch |err| switch (err) {
+    input.fill(read_spare_capacity, .{ .duration = .{ .raw = .zero, .clock = .awake } }) catch |err| switch (err) {
         error.Timeout => {},
         error.EndOfStream => return error.Canceled,
         else => return err,
@@ -123,6 +127,9 @@ pub fn checkParent(input: *std.Io.File.MultiReader) !void {
     }
 }
 
+/// Drain stdout and stderr together so either pipe can make progress.
+/// Check signals and, when supplied, the ZLS connection for cancellation.
+/// Return the child's exit status and captured output after cleanup.
 pub fn capture(init: std.process.Init, options: std.process.SpawnOptions, parent: ?*std.Io.File.MultiReader) !std.process.RunResult {
     var opts = options;
     opts.stdout = .pipe;
@@ -148,7 +155,7 @@ pub fn capture(init: std.process.Init, options: std.process.SpawnOptions, parent
             stopped = true;
         }
 
-        multi.fill(64, tick) catch |err| switch (err) {
+        multi.fill(read_spare_capacity, tick) catch |err| switch (err) {
             error.Timeout => continue,
             error.EndOfStream => break,
             else => return err,
@@ -164,11 +171,14 @@ pub fn capture(init: std.process.Init, options: std.process.SpawnOptions, parent
     return .{ .term = term, .stdout = try multi.toOwnedSlice(0), .stderr = try multi.toOwnedSlice(1) };
 }
 
+/// Read a client header and buffer the full payload while checking for
+/// cancellation. Leave the payload unread for the caller. Reject payloads
+/// larger than 1 MiB.
 pub fn receive(multi: *std.Io.File.MultiReader) !std.zig.Client.Message.Header {
     const reader = multi.reader(0);
     while (reader.bufferedLen() < @sizeOf(std.zig.Client.Message.Header)) {
         try check();
-        multi.fill(64, tick) catch |err| switch (err) {
+        multi.fill(read_spare_capacity, tick) catch |err| switch (err) {
             error.Timeout => continue,
             else => return err,
         };
@@ -181,7 +191,7 @@ pub fn receive(multi: *std.Io.File.MultiReader) !std.zig.Client.Message.Header {
 
     while (reader.bufferedLen() < header.bytes_len) {
         try check();
-        multi.fill(64, tick) catch |err| switch (err) {
+        multi.fill(read_spare_capacity, tick) catch |err| switch (err) {
             error.Timeout => continue,
             else => return err,
         };

@@ -1,6 +1,7 @@
-//! Serves Zig's build protocol when ZLS calls the proxy with `zig build --listen=-`.
-//! It queries the Bazel workspace printer, uses the selected SDK to serialize
-//! the module graph, and sends ZLS the path to the resulting configuration.
+//! Build-protocol library imported by zls_runner_017.zig.
+//! The runner calls serve() for ZLS build requests. For a metadata load,
+//! it runs the Bazel printer, serializes the printer's JSON with the Zig
+//! SDK, and sends the configuration file's path back to ZLS.
 
 const std = @import("std");
 const builtin = @import("builtin");

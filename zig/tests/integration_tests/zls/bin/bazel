@@ -1,5 +1,7 @@
 #!/bin/sh
-# The launcher calls bazel by name. Use the integration harness's pinned binary.
+# The launcher invokes bazel by name. Route it to the harness's pinned Bazel.
+# Restore the harness runfiles for Bazelisk and keep the nested Bazel server
+# and outputs under the test's temporary directory.
 RUNFILES_DIR="$ZLS_TEST_RUNFILES_DIR" \
 RUNFILES_MANIFEST_FILE="$ZLS_TEST_RUNFILES_MANIFEST_FILE" \
     exec "$BIT_BAZEL_BINARY" "--output_user_root=$TMPDIR/bazel" "$@"

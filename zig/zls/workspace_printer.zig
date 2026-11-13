@@ -135,8 +135,9 @@ fn readBuildConfig(
     return error.BuildConfigNotFound;
 }
 
-// Strip the config's execpath from its resolved path to recover the execution
-// root of the Bazel invocation that generated it.
+// Resolve generated and external sources against the output tree that
+// contains this config. A separate `bazel info execution_root` could
+// select a different output base if the startup options differ.
 fn executionRoot(allocator: std.mem.Allocator, physical_path: []const u8, exec_path: []const u8) ![]const u8 {
     const physical = if (builtin.os.tag == .windows) try std.mem.replaceOwned(u8, allocator, physical_path, "\\", "/") else physical_path;
     const relative = if (builtin.os.tag == .windows) try std.mem.replaceOwned(u8, allocator, exec_path, "\\", "/") else exec_path;
