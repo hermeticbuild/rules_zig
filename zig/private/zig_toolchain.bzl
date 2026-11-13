@@ -1,10 +1,31 @@
 """Implementation of the zig_toolchain rule."""
 
+load("//zig/private/common:escape_label.bzl", "escape_label")
 load(
     "//zig/private/providers:zig_toolchain_info.bzl",
     "zig_file_toolchain_info",
     "zig_path_toolchain_info",
 )
+
+_ExecPlatformInfo = provider(
+    doc = "The platform of the execution configuration.",
+    fields = {"label": "Label of the platform."},
+)
+
+def _zig_validation_exec_platform_impl(ctx):
+    return [_ExecPlatformInfo(label = ctx.fragments.platform.platform)]
+
+zig_validation_exec_platform = rule(
+    implementation = _zig_validation_exec_platform_impl,
+    fragments = ["platform"],
+)
+
+_VALIDATION_ATTRS = {
+    "_validation_exec_platform": attr.label(
+        default = Label("//zig/private:zig_validation_exec_platform"),
+        cfg = "exec",
+    ),
+}
 
 def _zig_bootstrap_transition_impl(_, __):
     return {
@@ -78,7 +99,7 @@ ATTRS = {
         doc = "The Zig cache directory prefix. Used for both the global and local cache.",
         mandatory = True,
     ),
-}
+} | _VALIDATION_ATTRS
 
 PATH_ATTRS = {
     "zig_exe_path": attr.string(
@@ -97,7 +118,7 @@ PATH_ATTRS = {
         doc = "The Zig cache directory prefix. Used for both the global and local cache.",
         mandatory = True,
     ),
-}
+} | _VALIDATION_ATTRS
 
 def _is_absolute_path(path):
     # bazel_skylib paths.is_absolute only supports Unix-style paths.
@@ -112,7 +133,13 @@ def _validate_absolute_path(*, attr_name, path):
         fail("{} must be an absolute path, got '{}'.".format(attr_name, path))
 
 def _validate_zig_version(ctx, *, zig_exe, tools, zig_version):
-    output = ctx.actions.declare_file(ctx.label.name + ".version_validation")
+    # Toolchain instances share the target configuration's output directory,
+    # even when Bazel resolves them for different execution platforms.
+    exec_platform = ctx.attr._validation_exec_platform[_ExecPlatformInfo].label
+    output = ctx.actions.declare_file("{}/{}.version_validation".format(
+        ctx.label.name,
+        escape_label(label = exec_platform),
+    ))
     args = ctx.actions.args()
     args.add_all([zig_exe, zig_version, output])
     ctx.actions.run_shell(
