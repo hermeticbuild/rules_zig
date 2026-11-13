@@ -1,4 +1,7 @@
 load("@bazel_skylib//:bzl_library.bzl", "bzl_library")
+load(":zig_toolchain.bzl", "zig_validation_exec_platform")
+
+zig_validation_exec_platform(name = "zig_validation_exec_platform")
 
 exports_files(
     [
@@ -102,6 +105,7 @@ bzl_library(
     srcs = ["zig_toolchain.bzl"],
     visibility = ["//zig:__subpackages__"],
     deps = [
+        "//zig/private/common:escape_label",
         "//zig/private/providers:zig_toolchain_info",
     ],
 )
