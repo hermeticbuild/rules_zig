@@ -140,6 +140,9 @@ Examples can be found among the end-to-end tests under
 ZLS toolchains are provided by a separate extension and selected by the active
 Zig SDK version.
 
+See [how the ZLS integration works](./zig/zls/README.md) for the 0.17 flow and
+the responsibilities of each component.
+
 ```starlark
 zls = use_extension("@rules_zig//zig/zls:extensions.bzl", "zls")
 zls.index(file = "@rules_zig//zig/zls/private:versions.json")
@@ -152,8 +155,31 @@ register_toolchains("@zls_toolchains//:all")
 ```
 
 Use `zig_version` as the selector and `zls_version` as the artifact version.
-They do not need to match, which allows a dev ZLS build to be tied to a stable
-Zig SDK.
+Patch versions may differ within a supported stable minor; arbitrary development
+builds are not necessarily compatible.
+
+Zig 0.17.0 and 0.17.1 require the ZLS absolute-path correction from
+[upstream commit bbd60390](https://github.com/zigtools/zls/commit/bbd60390ffc1c12cd1aa91688fd2940b22966ee9),
+which is absent from released ZLS 0.17.0. The catalog includes
+[HermeticBuild's CI-built prebuilt backport](https://github.com/hermeticbuild/zls-prebuilt/releases/tag/0.17.0%2Bhermetic.1),
+identified as `0.17.0+hermetic.1`:
+
+```starlark
+zls.toolchain(
+    zig_version = "0.17.0",  # Use "0.17.1" for that SDK instead.
+    zls_version = "0.17.0+hermetic.1",
+)
+```
+
+This uses the same extension and registration shown above and downloads a
+checksum-pinned binary for x86_64/aarch64 Linux/macOS. Register one mapping per
+Zig SDK in use; keep the 0.16 mapping when supporting both minors.
+
+Custom prebuilts already work through `zls.index(file = "//:zls-versions.json")`:
+provide a version-to-platform JSON mapping using `tarball` and `shasum` fields,
+then select that version with `zls.toolchain`. Archives must contain `zls` at
+their root (`zls.exe` on Windows). A consumer can alternatively declare its own
+`zls_toolchain(bin = ...)` and native Bazel `toolchain` registration.
 
 Use the [`zls_completion`](./zig/zls/zls_completion.bzl) macro to define a ZLS
 entry point for the Zig targets you want to expose to the language server.
@@ -180,6 +206,19 @@ the editor host; the remote execution platform may differ.
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 exec bazel run -- //tools:zls "${@}"
 ```
+
+The integration exposes one selected Bazel configuration. An existing
+`build.zig` in the source ancestry serves as ZLS's discovery marker; the native
+adapter does not execute it. Configuration reload (for example, saving that
+marker) queries Bazel again, including changed build/module metadata and source
+producers. Bazel files are not watched automatically. Application compilation
+and Zig build-on-save are unsupported; use Bazel to build. Higher-priority
+editor settings enabling build-on-save produce an explicit failure.
+
+Native protocol support currently targets Linux/macOS; Windows retains the
+legacy 0.16 route. Existing source-based module merging and external documents'
+transitive named-import association limits remain. This migration does not add
+conflicting configurations or full target/builtin semantics.
 
 ## Reference Documentation
 

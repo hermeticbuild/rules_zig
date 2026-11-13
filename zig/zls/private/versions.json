@@ -1,4 +1,22 @@
 {
+  "0.17.0+hermetic.1": {
+    "aarch64-linux": {
+      "tarball": "https://github.com/hermeticbuild/zls-prebuilt/releases/download/0.17.0%2Bhermetic.1/zls-aarch64-linux-0.17.0%2Bhermetic.1.tar.xz",
+      "shasum": "76ed3c47b0cff3a5ff69a33bbb4b310d0005134d9506ae074628ab34033905c4"
+    },
+    "aarch64-macos": {
+      "tarball": "https://github.com/hermeticbuild/zls-prebuilt/releases/download/0.17.0%2Bhermetic.1/zls-aarch64-macos-0.17.0%2Bhermetic.1.tar.xz",
+      "shasum": "d4a11884562c9a0a12ee7794eb93adf99ef27454a509090e9265a5ce69c0f2f5"
+    },
+    "x86_64-linux": {
+      "tarball": "https://github.com/hermeticbuild/zls-prebuilt/releases/download/0.17.0%2Bhermetic.1/zls-x86_64-linux-0.17.0%2Bhermetic.1.tar.xz",
+      "shasum": "957c2b9355ffbdab6990d67497e4c9efb9bfc01899fa8071ce020a63c3a6fe70"
+    },
+    "x86_64-macos": {
+      "tarball": "https://github.com/hermeticbuild/zls-prebuilt/releases/download/0.17.0%2Bhermetic.1/zls-x86_64-macos-0.17.0%2Bhermetic.1.tar.xz",
+      "shasum": "9653e9cea0125322d7675558e9e3137d73699aea5c1aa2a2674c8a356265212f"
+    }
+  },
   "0.16.0": {
     "aarch64-linux": {
       "tarball": "https://builds.zigtools.org/zls-aarch64-linux-0.16.0.tar.xz",

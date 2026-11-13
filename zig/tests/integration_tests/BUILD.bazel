@@ -8,6 +8,7 @@ load(
     "bazel_integration_tests",
     "integration_test_utils",
 )
+load("@rules_python//python:defs.bzl", "py_binary")
 load("//zig:defs.bzl", "zig_library", "zig_test")
 load("//zig/private:versions.bzl", "TOOL_VERSIONS")
 
@@ -30,6 +31,33 @@ workspace_files = integration_test_utils.glob_workspace_files("workspace") + [
     "//:bazelrc",
     ".bazelrc.meta",
 ]
+
+py_binary(
+    name = "zls_tests_runner",
+    srcs = ["zls_tests_runner.py"],
+    tags = ["manual"],
+)
+
+bazel_integration_test(
+    name = "zls_0_17_1_test",
+    size = "large",
+    bazel_version = bazel_binaries.versions.current,
+    tags = [
+        "manual",
+        "requires-network",
+    ] + integration_test_utils.DEFAULT_INTEGRATION_TEST_TAGS,
+    target_compatible_with = select({
+        "@platforms//os:windows": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    test_runner = "zls_tests_runner",
+    workspace_files = integration_test_utils.glob_workspace_files("zls") + [
+        "//:all_files",
+        "//:bazelrc",
+        ".bazelrc.meta",
+    ],
+    workspace_path = "zls",
+)
 
 zig_library(
     name = "integration_testing",
@@ -188,5 +216,6 @@ test_suite(
     ) + [
         ":packages_test",
         ":zig_version_tests",
+        ":zls_0_17_1_test",
     ],
 )
