@@ -43,7 +43,7 @@ pub const tick: std.Io.Timeout = .{ .duration = .{ .raw = .fromMilliseconds(50),
 // Minimum writable buffer space to reserve when MultiReader rearms a stream.
 const read_spare_capacity = 64;
 
-// Zig exposes siginfo_t but not waitid or all of its Darwin flags.
+// Zig does not expose Darwin's waitid or all of its flags.
 const P_PID = 1;
 const darwin_wexited = 0x4;
 const darwin_wnowait = 0x20;
@@ -62,13 +62,18 @@ pub const Owned = struct {
     }
 
     fn exited(self: *Owned) !bool {
-        var info: std.c.siginfo_t = std.mem.zeroes(std.c.siginfo_t);
+        var info: std.posix.siginfo_t = std.mem.zeroes(std.posix.siginfo_t);
         const flags = if (builtin.os.tag == .macos)
             darwin_wexited | std.c.W.NOHANG | darwin_wnowait
         else
             std.os.linux.W.EXITED | std.os.linux.W.NOHANG | std.os.linux.W.NOWAIT;
 
-        switch (std.posix.errno(waitid(P_PID, @intCast(self.child.id.?), &info, flags))) {
+        const err = if (builtin.os.tag == .linux)
+            std.os.linux.errno(std.os.linux.waitid(.PID, self.child.id.?, &info, flags, null))
+        else
+            std.posix.errno(waitid(P_PID, @intCast(self.child.id.?), &info, flags));
+
+        switch (err) {
             .SUCCESS => return if (builtin.os.tag == .macos) info.pid != 0 else info.fields.common.first.piduid.pid != 0,
             .INTR => {
                 try check();

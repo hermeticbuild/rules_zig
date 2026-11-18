@@ -125,7 +125,7 @@ def zls_completion(name, deps, testonly = False, **kwargs):
             "//conditions:default": [],
         }),
         zigopts = kwargs.pop("zigopts", []) + select({
-            Label("//zig/zls:native_protocol"): ["-lc"],
+            Label("//zig/zls:native_protocol_macos"): ["-lc"],
             "//conditions:default": [],
         }),
         testonly = testonly,

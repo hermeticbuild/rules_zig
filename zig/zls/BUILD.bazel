@@ -45,6 +45,15 @@ selects.config_setting_group(
     visibility = ["//visibility:public"],
 )
 
+selects.config_setting_group(
+    name = "native_protocol_macos",
+    match_all = [
+        ":native_protocol",
+        "@platforms//os:macos",
+    ],
+    visibility = ["//visibility:public"],
+)
+
 zig_library(
     name = "zls_runner_common",
     main = "zls_runner_common.zig",
