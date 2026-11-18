@@ -4,6 +4,7 @@ load("@rules_cc//cc:find_cc_toolchain.bzl", "use_cc_toolchain")
 load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
 load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
 load("//zig/private:cc_helper.bzl", "need_translate_c")
+load("//zig/private/common:escape_label.bzl", "escape_label")
 load(
     "//zig/private/common:exec_groups.bzl",
     "ZIG_EXEC_GROUPS",
@@ -47,7 +48,7 @@ def _zls_construct_zig_module_info_impl(target, ctx):
     if ctx.rule.attr.main:
         root_module = zig_module_info(
             name = ctx.rule.attr.name,
-            canonical_name = target.label.name,
+            canonical_name = escape_label(label = target.label),
             main = ctx.rule.file.main,
             srcs = ctx.rule.files.srcs,
             extra_srcs = ctx.rule.files.extra_srcs,
@@ -139,7 +140,10 @@ def _zls_write_build_config_impl(ctx):
             }
             for mod in modules.values()
         },
-        "compilations": [],
+        "compilations": [
+            {"root_module": format_main_file(path)}
+            for path in {dep[ZigModuleInfo].module_context.main.path: None for dep in ctx.attr.deps}
+        ],
         "top_level_steps": [],
         "available_options": {},
     }
@@ -153,8 +157,10 @@ def _zls_write_build_config_impl(ctx):
     return [
         DefaultInfo(
             files = depset(direct = [config]),
-            # Not really runfiles but we need to pull the output of translate_c...
-            runfiles = ctx.runfiles(transitive_files = depset(transitive = c_module_inputs)),
+            # Materialize source producers without requesting application outputs.
+            runfiles = ctx.runfiles(transitive_files = depset(
+                transitive = [dep[ZigModuleInfo].transitive_inputs for dep in ctx.attr.deps] + c_module_inputs,
+            )),
         ),
     ]
 

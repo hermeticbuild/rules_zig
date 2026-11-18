@@ -1,0 +1,39 @@
+module(name = "zls_integration_test")
+
+bazel_dep(name = "bazel_skylib", version = "1.9.0")
+bazel_dep(name = "rules_zig", version = "0.0.0")
+local_path_override(
+    module_name = "rules_zig",
+    path = "../../../..",
+)
+
+bazel_dep(name = "zls_external", version = "0.0.0")
+local_path_override(
+    module_name = "zls_external",
+    path = "external_a",
+)
+
+zig = use_extension("@rules_zig//zig:extensions.bzl", "zig")
+zig.toolchain(
+    default = True,
+    zig_version = "0.17.1",
+)
+use_repo(zig, "zig_toolchains")
+
+zls = use_extension("@rules_zig//zig/zls:extensions.bzl", "zls")
+zls.toolchain(
+    zig_version = "0.17.1",
+    zls_version = "0.17.0+hermetic.1",
+)
+use_repo(zls, "zls_toolchains")
+
+register_toolchains("@zls_toolchains//:all")
+
+bazel_dep(name = "toolchains_buildbuddy", version = "0.0.4", dev_dependency = True)
+
+buildbuddy = use_extension(
+    "@toolchains_buildbuddy//:extensions.bzl",
+    "buildbuddy",
+    dev_dependency = True,
+)
+use_repo(buildbuddy, "buildbuddy_toolchain")

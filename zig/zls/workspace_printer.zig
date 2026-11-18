@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 const bazel_builtin = @import("bazel_builtin");
 const runfiles = @import("runfiles");
@@ -84,14 +85,23 @@ fn jsonEscapeLeaky(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
     return std.mem.replaceOwned(u8, allocator, step1, "\"", "\\\"");
 }
 
+const ConfigInput = struct { bytes: []u8, path: []const u8 };
+
+fn readConfigFile(allocator: std.mem.Allocator, io: std.Io, path: []const u8) !ConfigInput {
+    return .{
+        .bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .unlimited),
+        .path = try std.Io.Dir.cwd().realPathFileAlloc(io, path, allocator),
+    };
+}
+
 fn readBuildConfig(
     allocator: std.mem.Allocator,
     io: std.Io,
     init: std.process.Init,
     arg_path: []const u8,
-) ![]u8 {
+) !ConfigInput {
     if (std.fs.path.isAbsolute(arg_path)) {
-        return std.Io.Dir.cwd().readFileAlloc(io, arg_path, allocator, .unlimited);
+        return readConfigFile(allocator, io, arg_path);
     }
 
     var r_ = try runfiles.Runfiles.create(.{
@@ -105,12 +115,12 @@ fn readBuildConfig(
     const r = r_.withSourceRepo(bazel_builtin.current_repository);
 
     if (try r.rlocation(arg_path, &path_buf)) |config_path| {
-        return std.Io.Dir.cwd().readFileAlloc(io, config_path, allocator, .unlimited);
+        return readConfigFile(allocator, io, config_path);
     }
 
     const stripped = if (std.mem.startsWith(u8, arg_path, "./")) arg_path[2..] else arg_path;
     if (try r.rlocation(stripped, &path_buf)) |config_path| {
-        return std.Io.Dir.cwd().readFileAlloc(io, config_path, allocator, .unlimited);
+        return readConfigFile(allocator, io, config_path);
     }
 
     // Convenience for testing.
@@ -119,10 +129,26 @@ fn readBuildConfig(
         else => return err,
     };
     if (output) |content| {
-        return content;
+        return .{ .bytes = content, .path = try std.Io.Dir.cwd().realPathFileAlloc(io, arg_path, allocator) };
     }
 
     return error.BuildConfigNotFound;
+}
+
+// Resolve generated and external sources against the output tree that
+// contains this config. A separate `bazel info execution_root` could
+// select a different output base if the startup options differ.
+fn executionRoot(allocator: std.mem.Allocator, physical_path: []const u8, exec_path: []const u8) ![]const u8 {
+    const physical = if (builtin.os.tag == .windows) try std.mem.replaceOwned(u8, allocator, physical_path, "\\", "/") else physical_path;
+    const relative = if (builtin.os.tag == .windows) try std.mem.replaceOwned(u8, allocator, exec_path, "\\", "/") else exec_path;
+    if (std.fs.path.isAbsolute(relative)) {
+        return error.ExpectedRelativeConfigExecPath;
+    }
+    const suffix = try std.mem.concat(allocator, u8, &.{ "/", relative });
+    if (!std.mem.endsWith(u8, physical, suffix)) {
+        return error.InvalidConfigProvenance;
+    }
+    return physical[0 .. physical.len - suffix.len];
 }
 
 pub fn main(init: std.process.Init) !void {
@@ -131,26 +157,14 @@ pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(arena.allocator());
 
     const build_workspace_directory = init.environ_map.get("BUILD_WORKSPACE_DIRECTORY").?;
+    const input = try readBuildConfig(arena.allocator(), io, init, args[1]);
     const execution_root = if (init.environ_map.get("BAZEL_EXECUTION_ROOT")) |value|
         value
-    else blk: {
-        const output_base_result = try std.process.run(arena.allocator(), init.io, .{
-            .argv = &.{
-                "bazel",
-                "info",
-                "execution_root",
-            },
-            .cwd = .{ .path = build_workspace_directory },
-        });
-        break :blk std.mem.trimEnd(u8, output_base_result.stdout, "\n");
-    };
-
-    var output = try readBuildConfig(
-        arena.allocator(),
-        io,
-        init,
-        args[1],
-    );
+    else if (args.len >= 3)
+        try executionRoot(arena.allocator(), input.path, args[2])
+    else
+        return error.MissingConfigExecPath;
+    var output = input.bytes;
 
     // The placeholders sit inside JSON string literals, so the substituted
     // values must be JSON-escaped (Windows paths contain backslashes).

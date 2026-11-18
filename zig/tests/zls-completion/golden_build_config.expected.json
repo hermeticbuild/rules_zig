@@ -1,6 +1,13 @@
 {
   "available_options": {},
-  "compilations": [],
+  "compilations": [
+    {
+      "root_module": "__BUILD_WORKSPACE_DIRECTORY__/zig/tests/zls-completion/app.zig"
+    },
+    {
+      "root_module": "__BUILD_WORKSPACE_DIRECTORY__/zig/tests/zls-completion/binary_with_main.zig"
+    }
+  ],
   "dependencies": {},
   "modules": {
     "__BAZEL_BIN__/zig/tests/zls-completion/bazel_builtin_zig_Stests_Szls-completion_Capp.zig": {
