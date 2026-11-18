@@ -118,6 +118,11 @@ by the outer runner, compiler proxy and metadata service. Each child starts in
 a dedicated process group. Cleanup also reaches helpers remaining in that
 group after the child exits.
 
+Other SDK commands, such as `zig ast-check`, replace the proxy process and stay
+in ZLS's process group. Their streams, exit status and signals pass directly
+between ZLS and the SDK. This avoids a process-cleanup grace period on each
+diagnostic or code-action request.
+
 While a Bazel query is running, the service still observes cancellation,
 connection closure and ZLS's exit request. The process owner stops the owned
 group, escalates termination if needed, and waits for the child to be reaped.

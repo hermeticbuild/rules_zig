@@ -5,6 +5,7 @@ from pathlib import Path
 import queue
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -109,6 +110,32 @@ class Session:
             self.process.wait(timeout=15)
 
 
+def test_compiler_passthrough(launcher, workspace, env):
+    # The SDK must take over the proxy process, without a supervisor delaying exit.
+    program = """
+import json, os, sys
+print(json.dumps({"pid": os.getpid(), "args": sys.argv[1:], "stdin": sys.stdin.read(),
+                  "cwd": os.getcwd(), "marker": os.environ["ZLS_PROXY_TEST_MARKER"]}))
+print("SDK diagnostic", file=sys.stderr)
+sys.exit(23)
+"""
+    process = subprocess.Popen(
+        [str(launcher), "-c", program, "compiler argument"], cwd=workspace,
+        env=dict(env, RULES_ZIG_ZLS_SDK=sys.executable, ZLS_PROXY_TEST_MARKER="inherited"),
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    stdout, stderr = process.communicate("compiler input", timeout=15)
+    assert process.returncode == 23, (process.returncode, stderr)
+    assert stderr == "SDK diagnostic\n", stderr
+    assert json.loads(stdout) == {
+        "pid": process.pid,
+        "args": ["compiler argument"],
+        "stdin": "compiler input",
+        "cwd": str(workspace),
+        "marker": "inherited",
+    }, stdout
+
+
 def test_workspace(workspace, env):
     def bazel(*args):
         subprocess.run(["bazel", *args], cwd=workspace, env=env, check=True, timeout=600)
@@ -121,6 +148,7 @@ def test_workspace(workspace, env):
         launcher = output / "completion"
         version = subprocess.check_output([launcher, "--version"], cwd=workspace, env=env, text=True).strip()
         assert version == "0.17.0+hermetic.1", version
+        test_compiler_passthrough(launcher, workspace, env)
 
         session = Session(launcher, workspace, env)
         sessions.append(session)

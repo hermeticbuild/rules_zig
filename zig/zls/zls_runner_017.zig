@@ -83,9 +83,9 @@ fn proxy(init: std.process.Init, args: []const []const u8) !u8 {
     const command = try allocator.alloc([]const u8, args.len);
     command[0] = sdk;
     @memcpy(command[1..], args[1..]);
-    var child = try owned.Owned.spawn(init.io, .{ .argv = command });
-    defer child.deinit();
-    return exitCode(try child.join(null));
+    // Keep the SDK in ZLS's process group and avoid a cleanup grace period
+    // for every ast-check request made by diagnostics and code actions.
+    return std.process.replace(init.io, .{ .argv = command });
 }
 
 fn run(init: std.process.Init) !u8 {
