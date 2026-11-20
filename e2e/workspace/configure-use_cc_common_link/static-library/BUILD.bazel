@@ -1,6 +1,6 @@
 load("@bazel_skylib//rules:build_test.bzl", "build_test")
 load("@bazel_skylib//rules:diff_test.bzl", "diff_test")
-load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
 load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_configure", "zig_configure_binary", "zig_configure_test", "zig_shared_library", "zig_static_library", "zig_test")
 
 cc_library(
@@ -32,15 +32,28 @@ zig_configure_binary(
 
 zig_static_library(
     name = "static-library",
-    main = "main.zig",
+    main = "static-library.zig",
     tags = ["manual"],
     deps = [":add"],
 )
 
 zig_configure(
-    name = "static_library_linked_with_cc_common_link",
+    name = "static_library_with_cc_link_setting",
     actual = ":static-library",
     use_cc_common_link = 1,
+)
+
+zig_configure(
+    name = "static_library_without_cc_link_setting",
+    actual = ":static-library",
+    use_cc_common_link = 0,
+)
+
+cc_test(
+    name = "static-library-consumer",
+    size = "small",
+    srcs = ["static-library-consumer.c"],
+    deps = [":static_library_with_cc_link_setting"],
 )
 
 zig_shared_library(
@@ -103,11 +116,24 @@ diff_test(
 
 genrule(
     name = "static-library-symbol",
-    srcs = [":static_library_linked_with_cc_common_link"],
+    srcs = [
+        ":static_library_with_cc_link_setting",
+        ":static_library_without_cc_link_setting",
+    ],
     outs = ["library-symbol.txt"],
-    # Test that `add` is not inlined into the Zig library, but remains an
-    # undefined symbol to be resolved later.
-    cmd = "$(NM) --undefined-only $(SRCS) | grep add > $(OUTS)",
+    # Both archives leave `add` undefined for the consumer to resolve.
+    cmd = """
+        set -e
+        for archive in $(SRCS); do
+            undefined=$$($(NM) --undefined-only "$$archive")
+            printf '%s\\n' "$$undefined" | grep -E '(^|[[:space:]])_?add$$'
+            defined=$$($(NM) --defined-only "$$archive")
+            if printf '%s\\n' "$$defined" | grep -E '(^|[[:space:]])_?add$$'; then
+                echo "Unexpected definition of add in $$archive" >&2
+                exit 1
+            fi
+        done > "$@"
+    """,
     toolchains = ["@bazel_tools//tools/cpp:current_cc_toolchain"],
 )
 
@@ -117,7 +143,6 @@ build_test(
     targets = [
         ":binary_linked_with_cc_common_link",
         ":shared_library_linked_with_cc_common_link",
-        ":static_library_linked_with_cc_common_link",
         ":static-library-symbol",
         ":test_linked_with_cc_common_link",
     ],
