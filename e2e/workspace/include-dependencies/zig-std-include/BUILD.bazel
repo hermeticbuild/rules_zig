@@ -29,6 +29,7 @@ zig_binary(
 zig_static_library(
     name = "library",
     main = "main.zig",
+    zigopts = ["-lc"],
     deps = [
         ":std_headers",
         "@rules_zig//zig/lib:libc",

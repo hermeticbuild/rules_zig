@@ -620,29 +620,30 @@ def zig_build_impl(ctx, *, kind):
         )
         transitive_inputs.append(c_module.transitive_inputs)
 
-    if root_module.cc_info:
+    # Static archives forward native link dependencies to their consumers.
+    if root_module.cc_info and not use_cc_common_link and kind != "zig_static_library":
         cdeps_inputs = []
-        if use_cc_common_link == False:
-            # Add all cdeps linker inputs to the sandbox and zig args.
-            zig_cdeps_linker_inputs(
-                linking_context = root_module.cc_info.linking_context,
-                solib_parents = solib_parents,
-                os = zigtargetinfo.triple.os,
-                inputs = cdeps_inputs,
-                args = args,
-                data = direct_data,
+
+        # Add all cdeps linker inputs to the sandbox and zig args.
+        zig_cdeps_linker_inputs(
+            linking_context = root_module.cc_info.linking_context,
+            solib_parents = solib_parents,
+            os = zigtargetinfo.triple.os,
+            inputs = cdeps_inputs,
+            args = args,
+            data = direct_data,
+        )
+
+        if incremental_worker and cdeps_inputs:
+            # Intentional user-facing warning for the accepted compiler limitation.
+            # buildifier: disable=print
+            print(
+                "{}: warning: Zig incremental linking may reuse stale native inputs ".format(ctx.label) +
+                "or retain previous link errors. Native input changes do not restart the compiler. " +
+                "Use use_cc_common_link or disable incremental compilation to avoid retained native-link state.",
             )
 
-            if incremental_worker and cdeps_inputs:
-                # Intentional user-facing warning for the accepted compiler limitation.
-                # buildifier: disable=print
-                print(
-                    "{}: warning: Zig incremental linking may reuse stale native inputs ".format(ctx.label) +
-                    "or retain previous link errors. Native input changes do not restart the compiler. " +
-                    "Use use_cc_common_link or disable incremental compilation to avoid retained native-link state.",
-                )
-
-            transitive_inputs.append(depset(cdeps_inputs))
+        transitive_inputs.append(depset(cdeps_inputs))
 
     if kind == "zig_test" and use_cc_common_link:
         # Zig 0.16's LLVM StackProtector pass crashes for test-obj when
