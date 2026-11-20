@@ -341,13 +341,6 @@ def zig_build_impl(ctx, *, kind):
 
     settings = ctx.attr._settings[ZigSettingsInfo]
     use_cc_common_link = settings.use_cc_common_link and kind != "zig_static_library"
-
-    # Zig 0.17 omits compiler-rt exports from test-obj. Zig 0.16 can crash
-    # when LLVM emits stack protection and compiler-rt into the same object.
-    separate_compiler_rt = use_cc_common_link and (
-        kind == "zig_test" or
-        (zigtoolchaininfo.zig_version.startswith("0.16.") and ctx.attr.compiler_runtime != "exclude")
-    )
     incremental_worker = None
     if settings.incremental:
         if zigtoolchaininfo.mode != "file" or zigtoolchaininfo.zig_exe.file.basename.endswith(".exe"):
@@ -399,12 +392,6 @@ def zig_build_impl(ctx, *, kind):
     global_args = ctx.actions.args()
     global_args.use_param_file("@%s")
 
-    cc_link_compile_flags = []
-    if use_cc_common_link and not separate_compiler_rt:
-        # Zig compiler-rt provides __zig_probe_stack, which regular compiler-rt
-        # does not provide. The compiler_runtime attribute can override this.
-        cc_link_compile_flags = ["-fcompiler-rt"]
-        global_args.add_all(cc_link_compile_flags)
     target_flags = settings.args + zigtargetinfo.args
 
     # Direct actions also include the SDK and cache options in this group.
@@ -571,9 +558,9 @@ def zig_build_impl(ctx, *, kind):
             "outputs": [emission.kind for emission in emissions],
         }))
         args.add_all(compile_outputs)
-        args.add_all(cc_link_compile_flags + target_flags)
+        args.add_all(target_flags)
 
-    if separate_compiler_rt or ctx.attr.compiler_runtime == "exclude":
+    if use_cc_common_link or ctx.attr.compiler_runtime == "exclude":
         args.add("-fno-compiler-rt")
     elif ctx.attr.compiler_runtime == "include":
         args.add("-fcompiler-rt")
@@ -737,9 +724,11 @@ def zig_build_impl(ctx, *, kind):
 
     if use_cc_common_link:
         objects = [compile_bin_output]
-        if separate_compiler_rt:
-            # Use the same SDK and target as the source compilation. The
-            # runtime object is independent of the user's sources.
+        if ctx.attr.compiler_runtime != "exclude":
+            # Zig 0.17 omits compiler-rt exports from test-obj. Zig 0.16 can
+            # crash when LLVM emits stack protection and compiler-rt into the
+            # same object. Build the runtime separately with the same SDK and
+            # target, including Zig-specific symbols such as __zig_probe_stack.
             compiler_rt = ctx.actions.declare_file(ctx.label.name + ".compiler_rt" + _object_extension(zigtargetinfo.triple.os))
             runtime_args = ctx.actions.args()
             runtime_args.add_all(

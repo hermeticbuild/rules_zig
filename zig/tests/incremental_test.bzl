@@ -101,11 +101,15 @@ def _cc_binary_handoff_test_impl(ctx):
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
     compile = assert_find_action(env, "ZigIncrementalCompile")
+    runtime = assert_find_action(env, "ZigCompilerRuntime")
     link = assert_find_action(env, "CppLink")
 
     objects = compile.outputs.to_list()
     asserts.equals(env, 1, len(objects))
     asserts.true(env, objects[0] in link.inputs.to_list(), "The separate link must consume the worker's object.")
+    asserts.true(env, "-fno-compiler-rt" in compile.argv)
+    if runtime:
+        asserts.true(env, runtime.outputs.to_list()[0] in link.inputs.to_list())
 
     executable = target[DefaultInfo].files_to_run.executable
     asserts.equals(env, [executable], target[DefaultInfo].files.to_list())
@@ -149,6 +153,19 @@ def _cc_test_handoff_test_impl(ctx):
     return analysistest.end(env)
 
 _cc_test_handoff_test = analysistest.make(_cc_test_handoff_test_impl, config_settings = _CC_SETTINGS)
+
+def _cc_test_without_runtime_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    compile = assert_find_action(env, "ZigIncrementalCompile")
+    link = assert_find_action(env, "CppLink")
+
+    asserts.true(env, "-fno-compiler-rt" in compile.argv)
+    asserts.equals(env, [], [action for action in analysistest.target_actions(env) if action.mnemonic == "ZigCompilerRuntime"])
+    asserts.true(env, compile.outputs.to_list()[0] in link.inputs.to_list())
+
+    return analysistest.end(env)
+
+_cc_test_without_runtime_test = analysistest.make(_cc_test_without_runtime_test_impl, config_settings = _CC_SETTINGS)
 
 def _cc_shared_handoff_test_impl(ctx):
     env = analysistest.begin(ctx)
@@ -299,4 +316,5 @@ def incremental_test_suite(name):
         partial.make(_unsupported_os_test, target_under_test = "//zig/tests/incremental:binary", size = "small"),
         partial.make(_unsupported_execution_toolchain_test, target_under_test = "//zig/tests/incremental:binary", size = "small"),
         partial.make(_unsupported_c_sources_test, target_under_test = "//zig/tests/incremental:c_sources", size = "small"),
+        partial.make(_cc_test_without_runtime_test, target_under_test = "//zig/tests/incremental:test_without_compiler_runtime", size = "small"),
     )
