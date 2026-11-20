@@ -653,9 +653,9 @@ def _use_cc_common_link_simple_binary_test_impl(ctx):
     build = [
         action
         for action in analysistest.target_actions(env)
-        if action.mnemonic == "ZigBuildLib"
+        if action.mnemonic == "ZigBuildObj"
     ]
-    asserts.equals(env, 1, len(build), "zig_binary should generate one ZigBuildLib action.")
+    asserts.equals(env, 1, len(build), "zig_binary should generate one ZigBuildObj action.")
 
     build = [
         action

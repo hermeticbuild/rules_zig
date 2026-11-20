@@ -52,6 +52,10 @@ load(
 )
 
 ATTRS = {
+    "_compiler_rt_src": attr.label(
+        default = Label("//zig/private:compiler_rt_root.zig"),
+        allow_single_file = True,
+    ),
     "_incremental_worker": attr.label(
         default = "//zig/private/worker:tool",
         cfg = config.exec("zig"),
@@ -337,6 +341,13 @@ def zig_build_impl(ctx, *, kind):
 
     settings = ctx.attr._settings[ZigSettingsInfo]
     use_cc_common_link = settings.use_cc_common_link and kind != "zig_static_library"
+
+    # Zig 0.17 omits compiler-rt exports from test-obj. Zig 0.16 can crash
+    # when LLVM emits stack protection and compiler-rt into the same object.
+    separate_compiler_rt = use_cc_common_link and (
+        kind == "zig_test" or
+        (zigtoolchaininfo.zig_version.startswith("0.16.") and ctx.attr.compiler_runtime != "exclude")
+    )
     incremental_worker = None
     if settings.incremental:
         if zigtoolchaininfo.mode != "file" or zigtoolchaininfo.zig_exe.file.basename.endswith(".exe"):
@@ -389,7 +400,7 @@ def zig_build_impl(ctx, *, kind):
     global_args.use_param_file("@%s")
 
     cc_link_compile_flags = []
-    if use_cc_common_link:
+    if use_cc_common_link and not separate_compiler_rt:
         # Zig compiler-rt provides __zig_probe_stack, which regular compiler-rt
         # does not provide. The compiler_runtime attribute can override this.
         cc_link_compile_flags = ["-fcompiler-rt"]
@@ -451,16 +462,9 @@ def zig_build_impl(ctx, *, kind):
     should_emit_bin = bin_output_is_executable or kind == "zig_shared_library" or ctx.attr.emit_bin
 
     compile_bin_output = bin_output
-    cc_static_lib = None
-    test_obj = None
-    if use_cc_common_link and kind in ["zig_binary", "zig_shared_library"]:
-        # Zig produces this archive; the separate C/C++ link produces bin_output.
-        cc_static_lib = ctx.actions.declare_file(ctx.label.name + _static_lib_extension(zigtargetinfo.triple.os))
-        compile_bin_output = cc_static_lib
-    elif use_cc_common_link and kind == "zig_test":
-        # Test compilation produces an object; a separate build-lib packages it.
-        test_obj = ctx.actions.declare_file(ctx.label.name + _object_extension(zigtargetinfo.triple.os))
-        compile_bin_output = test_obj
+    if use_cc_common_link:
+        # Zig produces the object; the separate C/C++ link produces bin_output.
+        compile_bin_output = ctx.actions.declare_file(ctx.label.name + _object_extension(zigtargetinfo.triple.os))
 
     primary_emission = None
     if should_emit_bin:
@@ -540,12 +544,15 @@ def zig_build_impl(ctx, *, kind):
             import_names = import_names,
         )
 
-    if cc_static_lib or kind == "zig_static_library":
+    if kind == "zig_static_library":
         command, output_kind = "build-lib", "static_library"
-        mnemonic = "ZigBuildStaticLib" if kind == "zig_static_library" else "ZigBuildLib"
+        mnemonic = "ZigBuildStaticLib"
     elif kind == "zig_test":
-        command, output_kind = ("test-obj", "object") if test_obj else ("test", "executable")
+        command, output_kind = ("test-obj", "object") if use_cc_common_link else ("test", "executable")
         mnemonic = "ZigBuildTest"
+    elif use_cc_common_link:
+        command, output_kind = "build-obj", "object"
+        mnemonic = "ZigBuildObj"
     elif kind == "zig_binary":
         command, output_kind = "build-exe", "executable"
         mnemonic = "ZigBuildExe"
@@ -566,10 +573,10 @@ def zig_build_impl(ctx, *, kind):
         args.add_all(compile_outputs)
         args.add_all(cc_link_compile_flags + target_flags)
 
-    if ctx.attr.compiler_runtime == "include":
-        args.add("-fcompiler-rt")
-    elif ctx.attr.compiler_runtime == "exclude":
+    if separate_compiler_rt or ctx.attr.compiler_runtime == "exclude":
         args.add("-fno-compiler-rt")
+    elif ctx.attr.compiler_runtime == "include":
+        args.add("-fcompiler-rt")
 
     if ctx.attr.strip_debug_symbols:
         if generate_dsym_file:
@@ -647,7 +654,11 @@ def zig_build_impl(ctx, *, kind):
 
             transitive_inputs.append(depset(cdeps_inputs))
 
-    if kind == "zig_test" and use_cc_common_link:
+    if use_cc_common_link:
+        # The C/C++ toolchain can select PIC inputs even for an executable.
+        args.add("-fPIC")
+
+    if command == "test-obj":
         # Zig 0.16's LLVM StackProtector pass crashes for test-obj when
         # compiler-rt provides __stack_chk_fail as an alias.
         # See: https://codeberg.org/ziglang/zig/issues/31702
@@ -695,10 +706,10 @@ def zig_build_impl(ctx, *, kind):
     if not incremental_worker:
         for emission in auxiliary_emissions:
             args.add(emission.file, format = emission.flag)
-        if test_obj:
+        if command == "test-obj":
             # Keep the explicit test-object path in its own argument group.
             test_output_args = ctx.actions.args()
-        primary_args = test_output_args if test_obj else args
+        primary_args = test_output_args if test_output_args else args
         if primary_emission:
             primary_args.add(primary_emission.file, format = primary_emission.flag)
         else:
@@ -724,95 +735,67 @@ def zig_build_impl(ctx, *, kind):
         **zig_build_kwargs
     )
 
-    if kind == "zig_binary":
-        if use_cc_common_link:
-            static_lib = cc_static_lib
-            library_to_link = cc_common.create_library_to_link(
-                actions = ctx.actions,
-                feature_configuration = feature_configuration,
-                cc_toolchain = cc_toolchain,
-                static_library = static_lib,
-            )
-            linking_context = cc_common.create_linking_context(
-                linker_inputs = depset([
-                    cc_common.create_linker_input(
-                        owner = ctx.label,
-                        libraries = depset([library_to_link]),
-                    ),
-                ]),
-            )
-            link_outputs = cc_common_link(
-                actions = ctx.actions,
-                feature_configuration = feature_configuration,
-                cc_toolchain = cc_toolchain,
-                name = ctx.label.name,
-                output_type = "executable",
-                main_output = bin_output,
-                linking_contexts = [linking_context, root_module.cc_info.linking_context],
-                user_link_flags = linkopts,
-                **cc_link_kwargs
-            )
-    elif kind == "zig_test":
-        if use_cc_common_link:
-            archive_emission = struct(
-                kind = "bin",
-                file = ctx.actions.declare_file(ctx.label.name + _static_lib_extension(zigtargetinfo.triple.os)),
-                flag = "-femit-bin=%s",
-            )
-            static_lib = archive_emission.file
-            lib_args = ctx.actions.args()
-            lib_args.add_all(
+    if use_cc_common_link:
+        objects = [compile_bin_output]
+        if separate_compiler_rt:
+            # Use the same SDK and target as the source compilation. The
+            # runtime object is independent of the user's sources.
+            compiler_rt = ctx.actions.declare_file(ctx.label.name + ".compiler_rt" + _object_extension(zigtargetinfo.triple.os))
+            runtime_args = ctx.actions.args()
+            runtime_args.add_all(
                 root_module.cc_info.linking_context.linker_inputs,
                 map_each = zig_cdeps_libc_flags,
                 uniquify = True,
             )
-            lib_args.add_all([
+            runtime_args.add_all([
                 "-fPIC",
                 "-fcompiler-rt",
+                "-OReleaseFast",
+                "-fno-stack-protector",
             ])
-            lib_args.add(archive_emission.file, format = archive_emission.flag)
-            lib_args.add(test_obj)
+            runtime_args.add(compiler_rt, format = "-femit-bin=%s")
+            runtime_args.add(ctx.file._compiler_rt_src)
+            runtime_inputs = [ctx.file._compiler_rt_src, zigtoolchaininfo.validation]
+            if zigtoolchaininfo.zig_lib.file:
+                runtime_inputs.append(zigtoolchaininfo.zig_lib.file)
+
             _compile(
                 ctx,
                 zigtoolchaininfo = zigtoolchaininfo,
-                command = "build-lib",
-                output_kind = "static_library",
+                command = "build-obj",
+                output_kind = "object",
                 global_args = global_args,
-                compiler_args = lib_args,
+                compiler_args = runtime_args,
                 test_output_args = None,
                 worker = None,
-                outputs = [archive_emission.file],
-                inputs = [test_obj, zigtoolchaininfo.validation] + ([zigtoolchaininfo.zig_lib.file] if zigtoolchaininfo.zig_lib.file else []),
-                mnemonic = "ZigBuildLib",
-                progress_message = "zig build-lib %{label}",
+                outputs = [compiler_rt],
+                inputs = runtime_inputs,
+                mnemonic = "ZigCompilerRuntime",
+                progress_message = "zig build-obj compiler-rt for %{label}",
                 **zig_build_kwargs
             )
+            objects.append(compiler_rt)
 
-            library_to_link = cc_common.create_library_to_link(
-                actions = ctx.actions,
-                feature_configuration = feature_configuration,
-                cc_toolchain = cc_toolchain,
-                static_library = static_lib,
-            )
-            linking_context = cc_common.create_linking_context(
-                linker_inputs = depset([
-                    cc_common.create_linker_input(
-                        owner = ctx.label,
-                        libraries = depset([library_to_link]),
-                    ),
-                ]),
-            )
-            link_outputs = cc_common_link(
-                actions = ctx.actions,
-                feature_configuration = feature_configuration,
-                cc_toolchain = cc_toolchain,
-                name = ctx.label.name,
-                output_type = "executable",
-                main_output = bin_output,
-                linking_contexts = [linking_context, root_module.cc_info.linking_context],
-                user_link_flags = linkopts,
-                **cc_link_kwargs
-            )
+        # The same PIC objects can be used for either C/C++ link mode.
+        objects = depset(objects)
+        link_outputs = cc_common_link(
+            actions = ctx.actions,
+            feature_configuration = feature_configuration,
+            cc_toolchain = cc_toolchain,
+            name = ctx.label.name,
+            output_type = "dynamic_library" if kind == "zig_shared_library" else "executable",
+            main_output = bin_output,
+            compilation_outputs = cc_common.create_compilation_outputs(
+                objects = objects,
+                pic_objects = objects,
+            ),
+            linking_contexts = [root_module.cc_info.linking_context],
+            user_link_flags = linkopts,
+            **cc_link_kwargs
+        )
+        if kind == "zig_shared_library":
+            exported_library_to_link = link_outputs.library_to_link
+
     elif kind == "zig_static_library":
         if ctx.attr.emit_bin:
             cc_toolchain, feature_configuration = find_cc_toolchain(ctx, mandatory = False)
@@ -825,47 +808,15 @@ def zig_build_impl(ctx, *, kind):
                 )
 
     elif kind == "zig_shared_library":
-        if use_cc_common_link:
-            static_lib = cc_static_lib
-            library_to_link = cc_common.create_library_to_link(
+        cc_toolchain, feature_configuration = find_cc_toolchain(ctx, mandatory = False)
+        if cc_toolchain:
+            exported_library_to_link = cc_common.create_library_to_link(
                 actions = ctx.actions,
                 feature_configuration = feature_configuration,
                 cc_toolchain = cc_toolchain,
-                static_library = static_lib,
-                alwayslink = True,
+                dynamic_library = bin_output,
             )
-            linking_context = cc_common.create_linking_context(
-                linker_inputs = depset([
-                    cc_common.create_linker_input(
-                        owner = ctx.label,
-                        libraries = depset([library_to_link]),
-                    ),
-                ]),
-            )
-            link_outputs = cc_common_link(
-                actions = ctx.actions,
-                feature_configuration = feature_configuration,
-                cc_toolchain = cc_toolchain,
-                name = ctx.label.name,
-                output_type = "dynamic_library",
-                main_output = bin_output,
-                linking_contexts = [linking_context, root_module.cc_info.linking_context],
-                user_link_flags = linkopts,
-                **cc_link_kwargs
-            )
-
-            exported_library_to_link = link_outputs.library_to_link
-
-        else:
-            cc_toolchain, feature_configuration = find_cc_toolchain(ctx, mandatory = False)
-            if cc_toolchain:
-                exported_library_to_link = cc_common.create_library_to_link(
-                    actions = ctx.actions,
-                    feature_configuration = feature_configuration,
-                    cc_toolchain = cc_toolchain,
-                    dynamic_library = bin_output,
-                )
-    else:
+    elif kind not in ("zig_binary", "zig_test"):
         fail("Unknown rule kind '{}'.".format(kind))
 
     if root_module.cc_info:

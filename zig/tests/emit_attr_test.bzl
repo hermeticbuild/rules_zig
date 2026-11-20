@@ -66,10 +66,10 @@ def _use_cc_common_link_binary_emit_asm_test_impl(ctx):
     asserts.equals(env, 1, len(asm_outputs), "zig_binary should expose exactly one asm output.")
     asm_output = asm_outputs[0]
 
-    build = assert_find_action(env, "ZigBuildLib")
+    build = assert_find_action(env, "ZigBuildObj")
 
     _assert_prefixed_arg_unique(env, "-femit-asm=", build.argv)
-    asserts.true(env, sets.contains(sets.make(build.outputs.to_list()), asm_output), "zig_binary ZigBuildLib action should declare the asm output.")
+    asserts.true(env, sets.contains(sets.make(build.outputs.to_list()), asm_output), "zig_binary ZigBuildObj action should declare the asm output.")
 
     return analysistest.end(env)
 
@@ -123,10 +123,10 @@ def _use_cc_common_link_shared_emit_asm_test_impl(ctx):
     asserts.equals(env, 1, len(asm_outputs), "zig_shared_library should expose exactly one asm output.")
     asm_output = asm_outputs[0]
 
-    build = assert_find_action(env, "ZigBuildLib")
+    build = assert_find_action(env, "ZigBuildObj")
 
     _assert_prefixed_arg_unique(env, "-femit-asm=", build.argv)
-    asserts.true(env, sets.contains(sets.make(build.outputs.to_list()), asm_output), "zig_shared_library ZigBuildLib action should declare the asm output.")
+    asserts.true(env, sets.contains(sets.make(build.outputs.to_list()), asm_output), "zig_shared_library ZigBuildObj action should declare the asm output.")
 
     return analysistest.end(env)
 
