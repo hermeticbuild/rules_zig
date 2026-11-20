@@ -629,8 +629,10 @@ def zig_build_impl(ctx, *, kind):
             uniquify = True,
         )
 
-        cdeps_inputs = []
-        if use_cc_common_link == False:
+        # Static archives forward native link dependencies to their consumers.
+        if not use_cc_common_link and kind != "zig_static_library":
+            cdeps_inputs = []
+
             # Add all cdeps linker inputs to the sandbox and zig args.
             zig_cdeps_linker_inputs(
                 linking_context = root_module.cc_info.linking_context,
