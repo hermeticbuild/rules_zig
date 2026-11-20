@@ -5,7 +5,9 @@ load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
 load("//zig/private/providers:zig_settings_info.bzl", "ZigSettingsInfo")
 load(
     ":util.bzl",
+    "assert_find_action",
     "assert_find_actions_in_exact_order",
+    "assert_flag_unset",
     "canonical_label",
 )
 
@@ -64,8 +66,25 @@ def _define_build_use_cc_common_link_test(mnemonics, use_cc_common_link):
 _build_exe_use_cc_common_link_cc_test = _define_build_use_cc_common_link_test(["ZigBuildLib", "CppLink"], use_cc_common_link = True)
 _build_exe_use_cc_common_link_zig_test = _define_build_use_cc_common_link_test(["ZigBuildExe"], use_cc_common_link = False)
 
-_build_static_lib_use_cc_common_link_cc_test = _define_build_use_cc_common_link_test(["ZigBuildStaticLib"], use_cc_common_link = True)
-_build_static_lib_use_cc_common_link_zig_test = _define_build_use_cc_common_link_test(["ZigBuildStaticLib"], use_cc_common_link = False)
+def _static_library_link_setting_test_impl(ctx):
+    env = analysistest.begin(ctx)
+
+    archive = assert_find_action(env, "ZigBuildStaticLib")
+    if archive:
+        assert_flag_unset(env, "-lc", archive.argv)
+        assert_flag_unset(env, "-fcompiler-rt", archive.argv)
+    asserts.false(env, any([action.mnemonic == "CppLink" for action in analysistest.target_actions(env)]))
+
+    return analysistest.end(env)
+
+_build_static_lib_use_cc_common_link_cc_test = analysistest.make(
+    _static_library_link_setting_test_impl,
+    config_settings = {_SETTINGS_USE_CC_COMMON_LINK: True},
+)
+_build_static_lib_use_cc_common_link_zig_test = analysistest.make(
+    _static_library_link_setting_test_impl,
+    config_settings = {_SETTINGS_USE_CC_COMMON_LINK: False},
+)
 
 _build_shared_lib_use_cc_common_link_cc_test = _define_build_use_cc_common_link_test(["ZigBuildLib", "CppLink"], use_cc_common_link = True)
 _build_shared_lib_use_cc_common_link_zig_test = _define_build_use_cc_common_link_test(["ZigBuildSharedLib"], use_cc_common_link = False)

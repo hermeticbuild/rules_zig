@@ -334,7 +334,7 @@ def zig_build_impl(ctx, *, kind):
     translatectoolchaininfo = translate_c_toolchain.translatectoolchaininfo if translate_c_toolchain else None
 
     settings = ctx.attr._settings[ZigSettingsInfo]
-    use_cc_common_link = settings.use_cc_common_link
+    use_cc_common_link = settings.use_cc_common_link and kind != "zig_static_library"
     incremental_worker = None
     if settings.incremental:
         if zigtoolchaininfo.mode != "file" or zigtoolchaininfo.zig_exe.file.basename.endswith(".exe"):
@@ -353,7 +353,7 @@ def zig_build_impl(ctx, *, kind):
     cc_toolchain = None
     feature_configuration = None
     generate_dsym_file = False
-    if use_cc_common_link and kind != "zig_static_library":
+    if use_cc_common_link:
         cc_toolchain, feature_configuration = find_cc_toolchain(
             ctx,
             mandatory = True,
