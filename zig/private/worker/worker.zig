@@ -337,7 +337,7 @@ const Session = struct {
     key: []const u8,
     root: []const u8,
     cwd: []const u8,
-    cache: []const u8,
+    artifact_dir: ?[]const u8 = null,
     generation: usize,
     stderr: Io.File,
     stderr_offset: u64 = 0,
@@ -351,6 +351,7 @@ const Session = struct {
     fn destroy(self: *Session, gpa: Allocator, io: Io) void {
         self.child.kill(io);
         self.stderr.close(io);
+        if (self.artifact_dir) |path| Dir.cwd().deleteTree(io, path) catch {};
         Dir.cwd().deleteTree(io, self.root) catch {};
         self.clearInputs(gpa);
         self.arena.deinit();
@@ -375,6 +376,7 @@ const Worker = struct {
     zig_input: []const u8,
     lib_input: []const u8,
     root: []const u8,
+    cache: []const u8,
     session: ?*Session = null,
     generation: usize = 0,
     message_buffer: std.ArrayList(u8) = .empty,
@@ -421,8 +423,11 @@ const Worker = struct {
             try Dir.cwd().symLink(self.io, tool[1], destination, .{});
         }
 
-        const cache = try std.fs.path.join(a, &.{ root, "cache" });
-        const global_cache = try std.fs.path.join(a, &.{ self.root, "global-cache" });
+        // Zig hashes the root module's include paths into the incremental
+        // output directory. An empty directory unique to this session keeps
+        // mutable outputs isolated inside the shared cache.
+        const empty_include = try std.fs.path.join(a, &.{ root, "empty-include" });
+        try Dir.cwd().createDir(self.io, empty_include, .default_dir);
 
         var argv: std.array_list.Managed([]const u8) = .init(a);
         try argv.appendSlice(&.{
@@ -433,11 +438,13 @@ const Worker = struct {
             "--name",
             compilation.name,
             "--cache-dir",
-            cache,
+            self.cache,
             "--global-cache-dir",
-            global_cache,
+            self.cache,
             "--zig-lib-dir",
             self.lib,
+            "-I",
+            empty_include,
         });
 
         switch (compilation.output_kind) {
@@ -490,7 +497,6 @@ const Worker = struct {
             .key = owned_key,
             .root = root,
             .cwd = cwd,
-            .cache = cache,
             .generation = self.generation,
             .stderr = stderr,
             .child = undefined,
@@ -580,7 +586,7 @@ const Worker = struct {
         const client: std.zig.Client = .{ .in = &s.reader.interface, .out = &s.writer.interface };
         try client.serveBodylessMessage(.update);
 
-        var digest: ?[]const u8 = null;
+        var artifact_dir: ?[]const u8 = null;
         var digest_buffer: [std.Build.Cache.hex_digest_len]u8 = undefined;
         var digest_body: [1 + std.Build.Cache.bin_digest_len]u8 = undefined;
         var undeclared_input = false;
@@ -620,7 +626,13 @@ const Worker = struct {
                     }
                 },
                 .emit_digest => {
-                    digest = try std.fmt.bufPrint(&digest_buffer, "{x}", .{body[1..]});
+                    const digest = try std.fmt.bufPrint(&digest_buffer, "{x}", .{body[1..]});
+                    if (s.artifact_dir) |path| {
+                        if (!std.mem.eql(u8, std.fs.path.basename(path), digest)) return error.InvalidEmitDigest;
+                    } else {
+                        s.artifact_dir = try std.fs.path.join(s.arena.allocator(), &.{ self.cache, "o", digest });
+                    }
+                    artifact_dir = s.artifact_dir;
                 },
                 .error_bundle => {
                     var bundle = try std.zig.Server.allocErrorBundle(a, body);
@@ -673,9 +685,7 @@ const Worker = struct {
         const artifacts = try a.alloc([]const u8, compilation.outputs.len);
         for (artifacts, compilation.outputs) |*artifact, output| {
             artifact.* = try std.fs.path.join(a, &.{
-                s.cache,
-                "o",
-                digest orelse return error.MissingEmitDigest,
+                artifact_dir orelse return error.MissingEmitDigest,
                 try compilation.artifactName(a, output.kind),
             });
 
@@ -686,7 +696,7 @@ const Worker = struct {
         }
 
         for (artifacts, compilation.outputs) |artifact, output| {
-            // Atomic copy, never a hard link: Zig mutates the private artifact in place.
+            // Atomic copy, never a hard link: Zig mutates the cached artifact in place.
             try Dir.cwd().copyFile(artifact, .cwd(), output.path, self.io, .{ .make_path = true });
         }
 
@@ -823,10 +833,23 @@ pub fn main(init: std.process.Init) !u8 {
     const args = try init.minimal.args.toSlice(a);
     var zig_path: ?[]const u8 = null;
     var lib_path: ?[]const u8 = null;
+    var local_cache: ?[]const u8 = null;
+    var global_cache: ?[]const u8 = null;
     var persistent = false;
     var flags: std.array_list.Managed([]const u8) = .init(a);
-    for (args[1..]) |arg| {
-        if (std.mem.startsWith(u8, arg, "--zig=")) {
+    var i: usize = 1;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        const is_local_cache = std.mem.eql(u8, arg, "--cache-dir");
+        if (is_local_cache or std.mem.eql(u8, arg, "--global-cache-dir")) {
+            i += 1;
+            if (i == args.len) return error.MissingCacheDirectory;
+            if (is_local_cache) {
+                local_cache = args[i];
+            } else {
+                global_cache = args[i];
+            }
+        } else if (std.mem.startsWith(u8, arg, "--zig=")) {
             zig_path = arg[6..];
         } else if (std.mem.startsWith(u8, arg, "--lib=")) {
             lib_path = arg[6..];
@@ -842,6 +865,20 @@ pub fn main(init: std.process.Init) !u8 {
 
     const zig = try Dir.cwd().realPathFileAlloc(io, zig_path orelse return error.MissingZigPath, a);
     const lib = try Dir.cwd().realPathFileAlloc(io, lib_path orelse return error.MissingLibPath, a);
+    // zig_cache_output supplies the same toolchain path for both flags.
+    // Resolve relative overrides before changing cwd.
+    const configured_cache = local_cache orelse return error.MissingCacheDirectory;
+    if (!std.mem.eql(u8, configured_cache, global_cache orelse return error.MissingCacheDirectory)) {
+        return error.MismatchedCacheDirectories;
+    }
+    if (persistent and !std.fs.path.isAbsolute(configured_cache)) {
+        std.log.err("the Zig cache directory must be absolute for a persistent worker: {s}", .{configured_cache});
+        return 1;
+    }
+    const cache = if (std.fs.path.isAbsolute(configured_cache)) configured_cache else blk: {
+        const cwd = try Dir.cwd().realPathFileAlloc(io, ".", a);
+        break :blk try std.fs.path.resolve(a, &.{ cwd, configured_cache });
+    };
 
     // Install before creating state so SIGTERM cannot bypass its cleanup.
     const signal_file: ?Io.File = if (builtin.os.tag == .windows) null else try Shutdown.init(io);
@@ -865,6 +902,7 @@ pub fn main(init: std.process.Init) !u8 {
         .zig_input = zig_path.?,
         .lib_input = lib_path.?,
         .root = root,
+        .cache = cache,
     };
     defer {
         worker.deinit();

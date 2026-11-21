@@ -129,9 +129,15 @@ def _cc_test_handoff_test_impl(ctx):
     archive = assert_find_action(env, "ZigBuildLib")
     link = assert_find_action(env, "CppLink")
 
-    for flag in ["--zig-lib-dir", "--cache-dir", "--global-cache-dir"]:
-        asserts.equals(env, 1, len([arg for arg in archive.argv if arg == flag]), "Ordinary packaging needs exactly one {}.".format(flag))
-        asserts.false(env, flag in compile.argv, "The worker owns its SDK/cache paths; {} must not leak into the request.".format(flag))
+    asserts.equals(env, 1, len([arg for arg in archive.argv if arg == "--zig-lib-dir"]))
+    asserts.false(env, "--zig-lib-dir" in compile.argv)
+    request_start = [i for i, arg in enumerate(compile.argv) if arg.startswith("{")][0]
+    for flag in ["--cache-dir", "--global-cache-dir"]:
+        archive_paths = [archive.argv[i + 1] for i, arg in enumerate(archive.argv) if arg == flag]
+        worker_paths = [compile.argv[i + 1] for i, arg in enumerate(compile.argv[:request_start]) if arg == flag]
+        asserts.equals(env, 1, len(archive_paths), "Ordinary packaging needs exactly one {}.".format(flag))
+        asserts.equals(env, archive_paths, worker_paths, "The worker starts with the same {} as ordinary packaging.".format(flag))
+        asserts.false(env, flag in compile.argv[request_start:], "{} belongs in worker startup arguments.".format(flag))
 
     objects = compile.outputs.to_list()
     asserts.equals(env, 1, len(objects))
