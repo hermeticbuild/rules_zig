@@ -7,8 +7,9 @@ of C standard library headers the compiler must be instructed to link against
 libc or libc++ as appropriate.
 
 The targets provided in this package can be used to accomplish this. Simply add
-them to the `cdeps` attribute of your Zig target to enable libc or libc++
-linking. E.g.
+them to the `deps` attribute of your Zig target to enable libc or libc++
+for Zig compilation and forward the requirement to the final link. When using
+`cc_common.link`, choose a C/C++ toolchain that supplies the requested runtime.
 
 ```
 zig_binary(

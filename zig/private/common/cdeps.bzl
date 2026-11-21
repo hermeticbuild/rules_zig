@@ -2,6 +2,24 @@
 
 load("@bazel_skylib//lib:paths.bzl", "paths")
 
+_LIBC_HELPERS = (
+    Label("//zig/lib:libc"),
+    Label("//zig/lib:libc++"),
+)
+
+def zig_cdeps_libc_flags(linker_input):
+    """Returns the compile flags from a Zig libc or libc++ dependency.
+
+    Args:
+        linker_input: cc_common.LinkerInput instance.
+
+    Returns:
+        List of Zig compiler flags or None for other linker inputs.
+    """
+    if linker_input.owner in _LIBC_HELPERS:
+        return linker_input.user_link_flags
+    return None
+
 def zig_cdeps_copts(compilation_context):
     """Renders CcInfo.compilation_context as Zig flags.
 
@@ -72,7 +90,9 @@ def zig_cdeps_linker_inputs(*, linking_context, solib_parents, os, inputs, args,
     all_libraries = []
     dynamic_libraries = []
     for link in linking_context.linker_inputs.to_list():
-        args.add_all(link.user_link_flags)
+        # These helpers' flags were added to the Zig compile arguments.
+        if link.owner not in _LIBC_HELPERS:
+            args.add_all(link.user_link_flags)
         inputs.extend(link.additional_inputs)
         for lib in link.libraries:
             file = None

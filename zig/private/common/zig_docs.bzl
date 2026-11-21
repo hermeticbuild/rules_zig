@@ -6,6 +6,7 @@ load(
     "//zig/private/common:bazel_builtin.bzl",
     "bazel_builtin_module",
 )
+load("//zig/private/common:cdeps.bzl", "zig_cdeps_libc_flags")
 load("//zig/private/common:csrcs.bzl", "zig_csrcs")
 load("//zig/private/common:escape_label.bzl", "escape_label")
 load(
@@ -164,6 +165,13 @@ def zig_docs_impl(ctx, *, kind):
             translatectoolchaininfo = translatectoolchaininfo,
         )
         transitive_inputs.append(c_module.transitive_inputs)
+
+    if root_module.cc_info:
+        args.add_all(
+            root_module.cc_info.linking_context.linker_inputs,
+            map_each = zig_cdeps_libc_flags,
+            uniquify = True,
+        )
 
     zig_module_specifications(
         root_module = root_module,

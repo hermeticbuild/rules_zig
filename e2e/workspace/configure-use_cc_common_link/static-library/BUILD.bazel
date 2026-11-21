@@ -13,7 +13,10 @@ zig_binary(
     name = "binary",
     main = "main.zig",
     tags = ["manual"],
-    deps = [":add"],
+    deps = [
+        ":add",
+        "@rules_zig//zig/lib:libc",
+    ],
 )
 
 zig_configure_binary(
@@ -44,7 +47,10 @@ zig_shared_library(
     name = "shared-library",
     main = "main.zig",
     tags = ["manual"],
-    deps = [":add"],
+    deps = [
+        ":add",
+        "@rules_zig//zig/lib:libc",
+    ],
 )
 
 zig_configure(
@@ -63,7 +69,10 @@ zig_test(
     size = "small",
     main = "main.zig",
     tags = ["manual"],
-    deps = [":add"],
+    deps = [
+        ":add",
+        "@rules_zig//zig/lib:libc",
+    ],
 )
 
 zig_configure_test(
@@ -112,4 +121,39 @@ build_test(
         ":static-library-symbol",
         ":test_linked_with_cc_common_link",
     ],
+)
+
+_FREESTANDING_COMPATIBILITY = [
+    "@platforms//cpu:x86_64",
+    "@platforms//os:linux",
+]
+
+zig_binary(
+    name = "freestanding",
+    compiler_runtime = "exclude",
+    linkopts = [
+        "-nostdlib",
+        "-static",
+        "-Wl,-e,_start",
+        "-Wl,-u,_start",
+    ],
+    main = "freestanding.zig",
+    tags = ["manual"],
+    target_compatible_with = _FREESTANDING_COMPATIBILITY,
+    zigopts = ["-fllvm"],
+)
+
+zig_configure_binary(
+    name = "freestanding_linked_with_cc_common_link",
+    actual = ":freestanding",
+    mode = "release_small",
+    target_compatible_with = _FREESTANDING_COMPATIBILITY,
+    use_cc_common_link = 1,
+)
+
+build_test(
+    name = "freestanding_build",
+    size = "small",
+    target_compatible_with = _FREESTANDING_COMPATIBILITY,
+    targets = [":freestanding_linked_with_cc_common_link"],
 )
