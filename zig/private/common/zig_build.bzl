@@ -772,11 +772,17 @@ def zig_build_impl(ctx, *, kind):
             ])
             lib_args.add(archive_emission.file, format = archive_emission.flag)
             lib_args.add(test_obj)
-            ctx.actions.run(
-                executable = zig_toolchain_executable(zigtoolchaininfo),
+            _compile(
+                ctx,
+                zigtoolchaininfo = zigtoolchaininfo,
+                command = "build-lib",
+                output_kind = "static_library",
+                global_args = global_args,
+                compiler_args = lib_args,
+                test_output_args = None,
+                worker = None,
                 outputs = [archive_emission.file],
                 inputs = [test_obj, zigtoolchaininfo.validation] + ([zigtoolchaininfo.zig_lib.file] if zigtoolchaininfo.zig_lib.file else []),
-                arguments = ["build-lib", global_args, lib_args],
                 mnemonic = "ZigBuildLib",
                 progress_message = "zig build-lib %{label}",
                 **zig_build_kwargs
