@@ -12,7 +12,7 @@ load(
     "bazel_builtin_module",
     BAZEL_BUILTIN_ATTRS = "ATTRS",
 )
-load("//zig/private/common:cdeps.bzl", "zig_cdeps_linker_inputs")
+load("//zig/private/common:cdeps.bzl", "zig_cdeps_libc_flags", "zig_cdeps_linker_inputs")
 load("//zig/private/common:csrcs.bzl", "zig_csrcs")
 load("//zig/private/common:data.bzl", "zig_collect_data", "zig_create_runfiles")
 load("//zig/private/common:escape_label.bzl", "escape_label")
@@ -390,14 +390,9 @@ def zig_build_impl(ctx, *, kind):
     # Worker requests carry them directly, before settings and explicit overrides.
     cc_link_compile_flags = []
     if use_cc_common_link:
-        cc_link_compile_flags = [
-            # For now, linking with cc_common.link implies linking with libc.
-            # But this should probably be made configurable.
-            "-lc",
-            # This is implied too unless disabled further down.
-            # This is because zig compiler-rt ships with __zig_probe_stack which doesn't exist in regular compiler-rt.
-            "-fcompiler-rt",
-        ]
+        # Zig compiler-rt provides __zig_probe_stack, which regular compiler-rt
+        # does not provide. The compiler_runtime attribute can override this.
+        cc_link_compile_flags = ["-fcompiler-rt"]
         global_args.add_all(cc_link_compile_flags)
 
     # Ordinary actions need complete defaults. Worker dispatch replaces the
@@ -628,6 +623,12 @@ def zig_build_impl(ctx, *, kind):
         transitive_inputs.append(c_module.transitive_inputs)
 
     if root_module.cc_info:
+        args.add_all(
+            root_module.cc_info.linking_context.linker_inputs,
+            map_each = zig_cdeps_libc_flags,
+            uniquify = True,
+        )
+
         cdeps_inputs = []
         if use_cc_common_link == False:
             # Add all cdeps linker inputs to the sandbox and zig args.
@@ -780,6 +781,11 @@ def zig_build_impl(ctx, *, kind):
             )
             static_lib = archive_emission.file
             lib_args = ctx.actions.args()
+            lib_args.add_all(
+                root_module.cc_info.linking_context.linker_inputs,
+                map_each = zig_cdeps_libc_flags,
+                uniquify = True,
+            )
             lib_args.add_all([
                 "-fPIC",
                 "-fcompiler-rt",

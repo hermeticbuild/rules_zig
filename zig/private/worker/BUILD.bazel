@@ -48,6 +48,8 @@ zig_binary(
         # independently of the threading mode selected for consumer programs.
         "-fno-single-threaded",
     ],
+    # The worker is a hosted tool and can use the C toolchain's startup code.
+    deps = ["//zig/lib:libc"],
 )
 
 zig_test(
