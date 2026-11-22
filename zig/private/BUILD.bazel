@@ -5,6 +5,7 @@ zig_validation_exec_platform(name = "zig_validation_exec_platform")
 
 exports_files(
     [
+        "compiler_rt_root.zig",
         "versions.json",
         "versions.bzl.tpl",
         "versions.bzl",
@@ -179,6 +180,7 @@ filegroup(
         ":BUILD.bazel",
         ":cc_helper.bzl",
         ":cc_linkopts.bzl",
+        ":compiler_rt_root.zig",
         ":platforms.bzl",
         ":resolved_target_toolchain.bzl",
         ":resolved_toolchain.bzl",

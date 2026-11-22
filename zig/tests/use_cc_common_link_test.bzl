@@ -63,7 +63,7 @@ def _define_build_use_cc_common_link_test(mnemonics, use_cc_common_link):
         config_settings = {_SETTINGS_USE_CC_COMMON_LINK: use_cc_common_link},
     )
 
-_build_exe_use_cc_common_link_cc_test = _define_build_use_cc_common_link_test(["ZigBuildLib", "CppLink"], use_cc_common_link = True)
+_build_exe_use_cc_common_link_cc_test = _define_build_use_cc_common_link_test(["ZigBuildObj", "CppLink"], use_cc_common_link = True)
 _build_exe_use_cc_common_link_zig_test = _define_build_use_cc_common_link_test(["ZigBuildExe"], use_cc_common_link = False)
 
 def _static_library_link_setting_test_impl(ctx):
@@ -86,10 +86,10 @@ _build_static_lib_use_cc_common_link_zig_test = analysistest.make(
     config_settings = {_SETTINGS_USE_CC_COMMON_LINK: False},
 )
 
-_build_shared_lib_use_cc_common_link_cc_test = _define_build_use_cc_common_link_test(["ZigBuildLib", "CppLink"], use_cc_common_link = True)
+_build_shared_lib_use_cc_common_link_cc_test = _define_build_use_cc_common_link_test(["ZigBuildObj", "CppLink"], use_cc_common_link = True)
 _build_shared_lib_use_cc_common_link_zig_test = _define_build_use_cc_common_link_test(["ZigBuildSharedLib"], use_cc_common_link = False)
 
-_build_test_use_cc_common_link_cc_test = _define_build_use_cc_common_link_test(["ZigBuildLib", "CppLink"], use_cc_common_link = True)
+_build_test_use_cc_common_link_cc_test = _define_build_use_cc_common_link_test(["ZigBuildTest", "ZigCompilerRuntime", "CppLink"], use_cc_common_link = True)
 _build_test_use_cc_common_link_zig_test = _define_build_use_cc_common_link_test(["ZigBuildTest"], use_cc_common_link = False)
 
 def use_cc_common_link_test_suite(name):
