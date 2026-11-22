@@ -538,21 +538,17 @@ def zig_build_impl(ctx, *, kind):
             import_names = import_names,
         )
 
-    if kind == "zig_static_library":
-        command, output_kind = "build-lib", "static_library"
-        mnemonic = "ZigBuildStaticLib"
-    elif kind == "zig_test":
-        command, output_kind = ("test-obj", "object") if use_cc_common_link else ("test", "executable")
-        mnemonic = "ZigBuildTest"
-    elif use_cc_common_link:
-        command, output_kind = "build-obj", "object"
-        mnemonic = "ZigBuildObj"
-    elif kind == "zig_binary":
-        command, output_kind = "build-exe", "executable"
-        mnemonic = "ZigBuildExe"
-    else:  # zig_shared_library
-        command, output_kind = "build-lib", "shared_library"
-        mnemonic = "ZigBuildSharedLib"
+    if use_cc_common_link:
+        command, output_kind, mnemonic = (
+            ("test-obj", "object", "ZigBuildTest") if kind == "zig_test" else ("build-obj", "object", "ZigBuildObj")
+        )
+    else:
+        command, output_kind, mnemonic = {
+            "zig_binary": ("build-exe", "executable", "ZigBuildExe"),
+            "zig_test": ("test", "executable", "ZigBuildTest"),
+            "zig_static_library": ("build-lib", "static_library", "ZigBuildStaticLib"),
+            "zig_shared_library": ("build-lib", "shared_library", "ZigBuildSharedLib"),
+        }[kind]
 
     args = ctx.actions.args()
     args.use_param_file("@%s")
