@@ -705,7 +705,14 @@ def zig_build_impl(ctx, *, kind):
             primary_args.add("-fno-emit-bin")
 
     if output_kind == "shared_library":
-        # Match the SONAME to the declared output filename.
+        # By default, Zig build-lib -dynamic sets the SONAME of the shared
+        # library based on the name of its main module.
+        #
+        # This causes issue because the shared library name might:
+        # 1. Be set by the user using 'shared_lib_name' attribute.
+        # 2. Or default to a name based on the target label.
+        #
+        # Here we explicitly set the SONAME to match the output filename.
         args.add(bin_output_name, format = "-fsoname=%s")
 
     _compile(
