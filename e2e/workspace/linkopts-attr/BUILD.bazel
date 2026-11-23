@@ -22,6 +22,8 @@ zig_test(
     main = "main.zig",
 )
 
+# The split C link needs libc enabled in Zig's compile action to emit C ABI
+# startup symbols. Keep -lc in linkopts above to exercise the combined Zig link.
 zig_configure_binary(
     name = "binary-use_cc_common_link",
     actual = ":binary",
@@ -32,6 +34,7 @@ zig_configure_binary(
         "//conditions:default": [],
     }),
     use_cc_common_link = 1,
+    zigopt = ["-lc"],
 )
 
 zig_configure(
@@ -44,6 +47,7 @@ zig_configure(
         "//conditions:default": [],
     }),
     use_cc_common_link = 1,
+    zigopt = ["-lc"],
 )
 
 zig_configure_test(
@@ -56,6 +60,7 @@ zig_configure_test(
         "//conditions:default": [],
     }),
     use_cc_common_link = 1,
+    zigopt = ["-lc"],
 )
 
 build_test(
