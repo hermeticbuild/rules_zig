@@ -44,7 +44,9 @@ load(
 load(
     "//zig/private/providers:zig_settings_info.bzl",
     "ZigSettingsInfo",
+    "zig_settings",
 )
+load("//zig/private/providers:zig_target_info.bzl", "zig_target_platform")
 load(
     "//zig/private/providers:zig_toolchain_info.bzl",
     "zig_toolchain_executable",
@@ -394,7 +396,6 @@ def zig_build_impl(ctx, *, kind):
         # does not provide. The compiler_runtime attribute can override this.
         cc_link_compile_flags = ["-fcompiler-rt"]
         global_args.add_all(cc_link_compile_flags)
-    target_flags = settings.args + zigtargetinfo.args
 
     # Direct actions also include the SDK and cache options in this group.
     zig_lib_dir(
@@ -405,7 +406,14 @@ def zig_build_impl(ctx, *, kind):
         zigtoolchaininfo = zigtoolchaininfo,
         args = global_args,
     )
-    global_args.add_all(target_flags)
+    zig_settings(
+        settings = settings,
+        args = global_args,
+    )
+    zig_target_platform(
+        target = zigtargetinfo,
+        args = global_args,
+    )
 
     location_targets = ctx.attr.data
 
@@ -564,7 +572,9 @@ def zig_build_impl(ctx, *, kind):
             "outputs": [emission.kind for emission in emissions],
         }))
         args.add_all(compile_outputs)
-        args.add_all(cc_link_compile_flags + target_flags)
+        args.add_all(cc_link_compile_flags)
+        zig_settings(settings = settings, args = args)
+        zig_target_platform(target = zigtargetinfo, args = args)
 
     if ctx.attr.compiler_runtime == "include":
         args.add("-fcompiler-rt")
