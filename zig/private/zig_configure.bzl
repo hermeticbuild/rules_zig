@@ -188,7 +188,7 @@ def _make_attrs(*, executable):
         "use_cc_common_link": attr.int(
             doc = (
                 "Whether to use cc_common.link to link zig binaries, tests and shared libraries. " +
-                "For hosted builds that require libc, add `@rules_zig//zig/lib:libc` to the Zig target's `deps`. " +
+                "For builds that require libc, add `@rules_zig//zig/lib:libc` to the Zig target's `deps`. " +
                 "Possible values: [-1, 0, 1]. " +
                 "-1 means use current configuration value for //zig/settings:use_cc_common_link. " +
                 "0 means do not use cc_common.link (use zig build-exe instead). " +
@@ -201,7 +201,7 @@ def _make_attrs(*, executable):
         "host_use_cc_common_link": attr.int(
             doc = (
                 "Whether to use cc_common.link to link zig binaries, tests and shared libraries in the host configuration. " +
-                "For hosted builds that require libc, add `@rules_zig//zig/lib:libc` to the Zig target's `deps`. " +
+                "For builds that require libc, add `@rules_zig//zig/lib:libc` to the Zig target's `deps`. " +
                 "Possible values: [-1, 0, 1]. " +
                 "-1 means use current host configuration value for //zig/settings:host_use_cc_common_link. " +
                 "0 means do not use cc_common.link (use zig build-exe instead). " +
