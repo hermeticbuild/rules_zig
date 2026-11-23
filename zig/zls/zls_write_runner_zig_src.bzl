@@ -19,17 +19,21 @@ def _zls_write_runner_zig_src_impl(ctx):
     zig_exe_rpath = zig_toolchain_executable_rpath(ctx, zigtoolchaininfo)
     zig_lib_rpath = zig_toolchain_lib_rpath(ctx, zigtoolchaininfo)
 
+    substitutions = {
+        "__ZIG_EXE_RPATH__": zig_exe_rpath,
+        "__ZIG_LIB_RPATH__": zig_lib_rpath,
+        "__ZLS_BIN_RPATH__": to_rlocation_path(ctx, zlstoolchaininfo.bin),
+        "__GLOBAL_CACHE_PATH__": zigtoolchaininfo.zig_cache,
+        "__COMPLETION_PRINTER_TARGET__": ctx.attr.printer_target,
+    }
+    if ctx.file.build_runner:
+        substitutions["__ZLS_BUILD_RUNNER_RPATH__"] = to_rlocation_path(ctx, ctx.file.build_runner)
+
     zls_runner = ctx.outputs.out
     ctx.actions.expand_template(
         output = zls_runner,
-        template = ctx.file._runner_tpl,
-        substitutions = {
-            "__ZIG_EXE_RPATH__": zig_exe_rpath,
-            "__ZIG_LIB_RPATH__": zig_lib_rpath,
-            "__ZLS_BIN_RPATH__": to_rlocation_path(ctx, zlstoolchaininfo.bin),
-            "__ZLS_BUILD_RUNNER_RPATH__": to_rlocation_path(ctx, ctx.file.build_runner),
-            "__GLOBAL_CACHE_PATH__": zigtoolchaininfo.zig_cache,
-        },
+        template = ctx.file.runner_tpl,
+        substitutions = substitutions,
     )
 
     return [
@@ -50,12 +54,12 @@ zls_write_runner_zig_src = rule(
         ),
         "build_runner": attr.label(
             allow_single_file = True,
-            mandatory = True,
         ),
-        "_runner_tpl": attr.label(
-            default = Label("//zig/zls:zls_runner.zig"),
+        "runner_tpl": attr.label(
+            mandatory = True,
             allow_single_file = True,
         ),
+        "printer_target": attr.string(mandatory = True),
     },
     toolchains = [
         "//zig:toolchain_type",

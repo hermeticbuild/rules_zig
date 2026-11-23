@@ -1,0 +1,7 @@
+load("@rules_zig//zig:defs.bzl", "zig_library")
+
+zig_library(
+    name = "external",
+    main = "main.zig",
+    visibility = ["//visibility:public"],
+)

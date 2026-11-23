@@ -1,0 +1,79 @@
+load("@bazel_skylib//rules:write_file.bzl", "write_file")
+load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_library")
+load("@rules_zig//zig/zls:defs.bzl", "zls_completion")
+
+zls_completion(
+    name = "completion",
+    deps = [
+        ":application",
+        ":second",
+    ],
+)
+
+zig_binary(
+    name = "application",
+    main = "root.zig",
+    deps = [
+        ":dep",
+        ":generated",
+        ":linked",
+        "@zls_external//:external",
+    ],
+)
+
+zig_library(
+    name = "second",
+    main = "second.zig",
+    deps = [":dep"],
+)
+
+config_setting(
+    name = "reload",
+    define_values = {"zls_fixture": "reload"},
+)
+
+zig_library(
+    name = "dep",
+    main = "dep.zig",
+    deps = select({
+        ":reload": [":leaf_b"],
+        "//conditions:default": [":leaf_a"],
+    }),
+)
+
+zig_library(
+    name = "leaf_a",
+    import_name = "leaf",
+    main = "leaf_a.zig",
+)
+
+zig_library(
+    name = "leaf_b",
+    import_name = "leaf",
+    main = "leaf_b.zig",
+)
+
+zig_library(
+    name = "generated",
+    main = select({
+        ":reload": ":generated_b.zig",
+        "//conditions:default": ":generated_a.zig",
+    }),
+)
+
+write_file(
+    name = "generate_a",
+    out = "generated_a.zig",
+    content = ["pub const answer = 7;"],
+)
+
+write_file(
+    name = "generate_b",
+    out = "generated_b.zig",
+    content = ["pub const answer = 8;"],
+)
+
+zig_library(
+    name = "linked",
+    main = "linked.zig",
+)

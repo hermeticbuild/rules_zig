@@ -130,6 +130,7 @@ string_flag(
     name = "version",
     values = {zig_versions},
     build_setting_default = {default_version},
+    visibility = ["//visibility:public"],
 )
 """.format(
         zig_versions = repr(unique_zig_versions),
