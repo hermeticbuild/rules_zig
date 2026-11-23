@@ -44,6 +44,7 @@ def zls_completion(name, deps, testonly = False, **kwargs):
         ],
         deps = [
             Label("//zig/runfiles"),
+            Label("//zig/lib:libc"),
         ],
         visibility = ["//visibility:private"],
         testonly = testonly,
@@ -61,9 +62,6 @@ def zls_completion(name, deps, testonly = False, **kwargs):
             ":{}".format(build_config_file),
             ":{}".format(build_config_printer),
         ],
-        zigopts = [
-            "-lc",
-        ],
         env = {
             "COMPLETION_BUILD_CONFIG_RLOCATION": "$(rlocationpath :{})".format(build_config_file),
             "COMPLETION_PACKAGE": native.package_name(),
@@ -71,6 +69,7 @@ def zls_completion(name, deps, testonly = False, **kwargs):
         },
         deps = [
             Label("//zig/runfiles"),
+            Label("//zig/lib:libc"),
         ],
         testonly = testonly,
     )
@@ -123,9 +122,8 @@ def zls_completion(name, deps, testonly = False, **kwargs):
                 Label("//zig/zls:zls_bsp"),
             ],
             "//conditions:default": [],
-        }),
-        zigopts = kwargs.pop("zigopts", []) + select({
-            Label("//zig/zls:native_protocol_macos"): ["-lc"],
+        }) + select({
+            Label("//zig/zls:native_protocol_macos"): [Label("//zig/lib:libc")],
             "//conditions:default": [],
         }),
         testonly = testonly,

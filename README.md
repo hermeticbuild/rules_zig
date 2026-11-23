@@ -126,6 +126,17 @@ to the final link. Use Bazel's `exec_group_compatible_with` and group-prefixed
 `exec_properties` attributes to configure these groups. C preprocessing and
 other linking helper actions may still use the default execution context.
 
+#### C and C++ Standard Libraries
+
+Add `@rules_zig//zig/lib:libc` to a Zig target's `deps` to enable libc, or
+`@rules_zig//zig/lib:libc++` to enable libc++ as well. These dependencies
+configure Zig compilation and carry the library requirements to the final link.
+
+`use_cc_common_link` selects the C/C++ toolchain for the final link. When its
+C runtime expects a C ABI `main`, enable libc in the Zig compilation using one
+of the dependencies above. For freestanding binaries, provide your own entry
+point and configure the C/C++ linker accordingly.
+
 ## Usage Examples
 
 <!-- TODO[AH] Create an instructive example.
