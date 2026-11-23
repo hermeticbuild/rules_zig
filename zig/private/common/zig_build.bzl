@@ -741,36 +741,9 @@ def zig_build_impl(ctx, *, kind):
         **zig_build_kwargs
     )
 
-    if kind == "zig_binary":
-        if use_cc_common_link:
-            static_lib = cc_static_lib
-            library_to_link = cc_common.create_library_to_link(
-                actions = ctx.actions,
-                feature_configuration = feature_configuration,
-                cc_toolchain = cc_toolchain,
-                static_library = static_lib,
-            )
-            linking_context = cc_common.create_linking_context(
-                linker_inputs = depset([
-                    cc_common.create_linker_input(
-                        owner = ctx.label,
-                        libraries = depset([library_to_link]),
-                    ),
-                ]),
-            )
-            link_outputs = cc_common_link(
-                actions = ctx.actions,
-                feature_configuration = feature_configuration,
-                cc_toolchain = cc_toolchain,
-                name = ctx.label.name,
-                output_type = "executable",
-                main_output = bin_output,
-                linking_contexts = [linking_context, root_module.cc_info.linking_context],
-                user_link_flags = linkopts,
-                **cc_link_kwargs
-            )
-    elif kind == "zig_test":
-        if use_cc_common_link:
+    if use_cc_common_link:
+        static_lib = cc_static_lib
+        if kind == "zig_test":
             archive_emission = struct(
                 kind = "bin",
                 file = ctx.actions.declare_file(ctx.label.name + _static_lib_extension(zigtargetinfo.triple.os)),
@@ -805,31 +778,36 @@ def zig_build_impl(ctx, *, kind):
                 **zig_build_kwargs
             )
 
-            library_to_link = cc_common.create_library_to_link(
-                actions = ctx.actions,
-                feature_configuration = feature_configuration,
-                cc_toolchain = cc_toolchain,
-                static_library = static_lib,
-            )
-            linking_context = cc_common.create_linking_context(
-                linker_inputs = depset([
-                    cc_common.create_linker_input(
-                        owner = ctx.label,
-                        libraries = depset([library_to_link]),
-                    ),
-                ]),
-            )
-            link_outputs = cc_common_link(
-                actions = ctx.actions,
-                feature_configuration = feature_configuration,
-                cc_toolchain = cc_toolchain,
-                name = ctx.label.name,
-                output_type = "executable",
-                main_output = bin_output,
-                linking_contexts = [linking_context, root_module.cc_info.linking_context],
-                user_link_flags = linkopts,
-                **cc_link_kwargs
-            )
+        is_shared_library = kind == "zig_shared_library"
+        library_to_link = cc_common.create_library_to_link(
+            actions = ctx.actions,
+            feature_configuration = feature_configuration,
+            cc_toolchain = cc_toolchain,
+            static_library = static_lib,
+            alwayslink = is_shared_library,
+        )
+        linking_context = cc_common.create_linking_context(
+            linker_inputs = depset([
+                cc_common.create_linker_input(
+                    owner = ctx.label,
+                    libraries = depset([library_to_link]),
+                ),
+            ]),
+        )
+        link_outputs = cc_common_link(
+            actions = ctx.actions,
+            feature_configuration = feature_configuration,
+            cc_toolchain = cc_toolchain,
+            name = ctx.label.name,
+            output_type = "dynamic_library" if is_shared_library else "executable",
+            main_output = bin_output,
+            linking_contexts = [linking_context, root_module.cc_info.linking_context],
+            user_link_flags = linkopts,
+            **cc_link_kwargs
+        )
+        if is_shared_library:
+            exported_library_to_link = link_outputs.library_to_link
+
     elif kind == "zig_static_library":
         if ctx.attr.emit_bin:
             cc_toolchain, feature_configuration = find_cc_toolchain(ctx, mandatory = False)
@@ -842,47 +820,15 @@ def zig_build_impl(ctx, *, kind):
                 )
 
     elif kind == "zig_shared_library":
-        if use_cc_common_link:
-            static_lib = cc_static_lib
-            library_to_link = cc_common.create_library_to_link(
+        cc_toolchain, feature_configuration = find_cc_toolchain(ctx, mandatory = False)
+        if cc_toolchain:
+            exported_library_to_link = cc_common.create_library_to_link(
                 actions = ctx.actions,
                 feature_configuration = feature_configuration,
                 cc_toolchain = cc_toolchain,
-                static_library = static_lib,
-                alwayslink = True,
+                dynamic_library = bin_output,
             )
-            linking_context = cc_common.create_linking_context(
-                linker_inputs = depset([
-                    cc_common.create_linker_input(
-                        owner = ctx.label,
-                        libraries = depset([library_to_link]),
-                    ),
-                ]),
-            )
-            link_outputs = cc_common_link(
-                actions = ctx.actions,
-                feature_configuration = feature_configuration,
-                cc_toolchain = cc_toolchain,
-                name = ctx.label.name,
-                output_type = "dynamic_library",
-                main_output = bin_output,
-                linking_contexts = [linking_context, root_module.cc_info.linking_context],
-                user_link_flags = linkopts,
-                **cc_link_kwargs
-            )
-
-            exported_library_to_link = link_outputs.library_to_link
-
-        else:
-            cc_toolchain, feature_configuration = find_cc_toolchain(ctx, mandatory = False)
-            if cc_toolchain:
-                exported_library_to_link = cc_common.create_library_to_link(
-                    actions = ctx.actions,
-                    feature_configuration = feature_configuration,
-                    cc_toolchain = cc_toolchain,
-                    dynamic_library = bin_output,
-                )
-    else:
+    elif kind not in ("zig_binary", "zig_test"):
         fail("Unknown rule kind '{}'.".format(kind))
 
     if root_module.cc_info:
