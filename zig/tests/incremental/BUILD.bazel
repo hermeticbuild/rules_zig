@@ -16,6 +16,14 @@ zig_test(
     visibility = ["//zig/tests:__pkg__"],
 )
 
+zig_test(
+    name = "test_without_compiler_runtime",
+    compiler_runtime = "exclude",
+    main = "test.zig",
+    tags = ["manual"],
+    visibility = ["//zig/tests:__pkg__"],
+)
+
 zig_static_library(
     name = "static_library",
     main = "library.zig",

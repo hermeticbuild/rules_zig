@@ -46,7 +46,7 @@ def _dsyms_enabled_test_impl(ctx):
         )
 
     for action in analysistest.target_actions(env):
-        if action.mnemonic in ["ZigBuildLib", "ZigBuildTest"]:
+        if action.mnemonic in ["ZigBuildObj", "ZigBuildTest"]:
             assert_flag_unset(env, "-fstrip", action.argv)
 
     return analysistest.end(env)
@@ -81,7 +81,7 @@ def _dsyms_disabled_test_impl(ctx):
 
     asserts.false(env, hasattr(output_groups, "dsyms"), "dSYMs should not be exposed when generate_dsym_file is disabled.")
     assert_find_action(env, "CppLink")
-    assert_flag_set(env, "-fstrip", assert_find_action(env, "ZigBuildLib").argv)
+    assert_flag_set(env, "-fstrip", assert_find_action(env, "ZigBuildObj").argv)
 
     return analysistest.end(env)
 

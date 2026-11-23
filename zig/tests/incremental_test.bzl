@@ -101,11 +101,15 @@ def _cc_binary_handoff_test_impl(ctx):
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
     compile = assert_find_action(env, "ZigIncrementalCompile")
+    runtime = assert_find_action(env, "ZigCompilerRuntime")
     link = assert_find_action(env, "CppLink")
 
-    archives = compile.outputs.to_list()
-    asserts.equals(env, 1, len(archives))
-    asserts.true(env, archives[0] in link.inputs.to_list(), "The separate link must consume the worker's archive.")
+    objects = compile.outputs.to_list()
+    asserts.equals(env, 1, len(objects))
+    asserts.true(env, objects[0] in link.inputs.to_list(), "The separate link must consume the worker's object.")
+    asserts.true(env, "-fno-compiler-rt" in compile.argv)
+    if runtime:
+        asserts.true(env, runtime.outputs.to_list()[0] in link.inputs.to_list())
 
     executable = target[DefaultInfo].files_to_run.executable
     asserts.equals(env, [executable], target[DefaultInfo].files.to_list())
@@ -126,20 +130,22 @@ def _cc_test_handoff_test_impl(ctx):
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
     compile = assert_find_action(env, "ZigIncrementalCompile")
-    archive = assert_find_action(env, "ZigBuildLib")
+    runtime = assert_find_action(env, "ZigCompilerRuntime")
     link = assert_find_action(env, "CppLink")
 
     for flag in ["--zig-lib-dir", "--cache-dir", "--global-cache-dir"]:
-        asserts.equals(env, 1, len([arg for arg in archive.argv if arg == flag]), "Ordinary packaging needs exactly one {}.".format(flag))
+        asserts.equals(env, 1, len([arg for arg in runtime.argv if arg == flag]), "The runtime build needs exactly one {}.".format(flag))
         asserts.false(env, flag in compile.argv, "The worker owns its SDK/cache paths; {} must not leak into the request.".format(flag))
 
     objects = compile.outputs.to_list()
     asserts.equals(env, 1, len(objects))
-    asserts.true(env, objects[0] in archive.inputs.to_list(), "Ordinary archive packaging must consume the worker's test object.")
+    asserts.true(env, "-fno-compiler-rt" in compile.argv)
+    asserts.false(env, objects[0] in runtime.inputs.to_list(), "The runtime build can run independently of test compilation.")
+    asserts.true(env, objects[0] in link.inputs.to_list(), "The separate link must consume the worker's test object.")
 
-    archives = archive.outputs.to_list()
-    asserts.equals(env, 1, len(archives))
-    asserts.true(env, archives[0] in link.inputs.to_list(), "The separate link must consume the packaged test archive.")
+    runtime_outputs = runtime.outputs.to_list()
+    asserts.equals(env, 1, len(runtime_outputs))
+    asserts.true(env, runtime_outputs[0] in link.inputs.to_list(), "The separate link must consume the runtime object.")
 
     executable = target[DefaultInfo].files_to_run.executable
     asserts.equals(env, [executable], target[DefaultInfo].files.to_list())
@@ -149,15 +155,28 @@ def _cc_test_handoff_test_impl(ctx):
 
 _cc_test_handoff_test = analysistest.make(_cc_test_handoff_test_impl, config_settings = _CC_SETTINGS)
 
+def _cc_test_without_runtime_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    compile = assert_find_action(env, "ZigIncrementalCompile")
+    link = assert_find_action(env, "CppLink")
+
+    asserts.true(env, "-fno-compiler-rt" in compile.argv)
+    asserts.equals(env, [], [action for action in analysistest.target_actions(env) if action.mnemonic == "ZigCompilerRuntime"])
+    asserts.true(env, compile.outputs.to_list()[0] in link.inputs.to_list())
+
+    return analysistest.end(env)
+
+_cc_test_without_runtime_test = analysistest.make(_cc_test_without_runtime_test_impl, config_settings = _CC_SETTINGS)
+
 def _cc_shared_handoff_test_impl(ctx):
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
     compile = assert_find_action(env, "ZigIncrementalCompile")
     link = assert_find_action(env, "CppLink")
 
-    archives = compile.outputs.to_list()
-    asserts.equals(env, 1, len(archives))
-    asserts.true(env, archives[0] in link.inputs.to_list(), "The separate link must consume the worker's archive.")
+    objects = compile.outputs.to_list()
+    asserts.equals(env, 1, len(objects))
+    asserts.true(env, objects[0] in link.inputs.to_list(), "The separate link must consume the worker's object.")
 
     libraries = target[DefaultInfo].files.to_list()
     asserts.equals(env, 1, len(libraries))
@@ -186,9 +205,9 @@ def _auxiliary_outputs_test_impl(ctx):
         asserts.true(env, file in compile.outputs.to_list(), "Auxiliary outputs belong to compilation, not linking.")
         asserts.false(env, file in link.outputs.to_list())
 
-    archives = [file for file in compile.outputs.to_list() if file not in auxiliary]
-    asserts.equals(env, 1, len(archives))
-    asserts.true(env, archives[0] in link.inputs.to_list())
+    objects = [file for file in compile.outputs.to_list() if file not in auxiliary]
+    asserts.equals(env, 1, len(objects))
+    asserts.true(env, objects[0] in link.inputs.to_list())
 
     executable = target[DefaultInfo].files_to_run.executable
     asserts.equals(env, [executable], target[DefaultInfo].files.to_list())
@@ -285,7 +304,7 @@ def incremental_test_suite(name):
         partial.make(_test_binary_test, target_under_test = "//zig/tests/incremental:test_binary", size = "small"),
         partial.make(_static_library_test, target_under_test = "//zig/tests/incremental:static_library", size = "small"),
         partial.make(_shared_library_test, target_under_test = "//zig/tests/incremental:shared_library", size = "small"),
-        # Test the archive and test-object handoffs to cc_common.link.
+        # Test the object handoffs to cc_common.link.
         partial.make(_cc_binary_handoff_test, target_under_test = "//zig/tests/incremental:native_binary", size = "small"),
         partial.make(_cc_test_handoff_test, target_under_test = "//zig/tests/incremental:test_binary", size = "small"),
         partial.make(_cc_shared_handoff_test, target_under_test = "//zig/tests/incremental:shared_library", size = "small"),
@@ -298,4 +317,5 @@ def incremental_test_suite(name):
         partial.make(_unsupported_os_test, target_under_test = "//zig/tests/incremental:binary", size = "small"),
         partial.make(_unsupported_execution_toolchain_test, target_under_test = "//zig/tests/incremental:binary", size = "small"),
         partial.make(_unsupported_c_sources_test, target_under_test = "//zig/tests/incremental:c_sources", size = "small"),
+        partial.make(_cc_test_without_runtime_test, target_under_test = "//zig/tests/incremental:test_without_compiler_runtime", size = "small"),
     )

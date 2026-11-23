@@ -167,7 +167,7 @@ const Compilation = struct {
 
         const valid_command = switch (result.output_kind) {
             .executable => std.mem.eql(u8, result.command, "build-exe") or std.mem.eql(u8, result.command, "test"),
-            .object => std.mem.eql(u8, result.command, "test-obj"),
+            .object => std.mem.eql(u8, result.command, "build-obj") or std.mem.eql(u8, result.command, "test-obj"),
             .static_library, .shared_library => std.mem.eql(u8, result.command, "build-lib"),
         };
 
@@ -443,8 +443,10 @@ const Worker = struct {
         switch (compilation.output_kind) {
             .static_library => try argv.append("-static"),
             .shared_library => try argv.append("-dynamic"),
-            .executable => if (std.mem.eql(u8, compilation.command, "test")) try argv.append("--test-no-exec"),
-            .object => try argv.append("--test-no-exec"),
+            .executable, .object => {},
+        }
+        if (std.mem.eql(u8, compilation.command, "test") or std.mem.eql(u8, compilation.command, "test-obj")) {
+            try argv.append("--test-no-exec");
         }
 
         var emit_bin = false;
