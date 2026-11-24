@@ -41,7 +41,12 @@ load(
     "zig_module_info",
     "zig_module_specifications",
 )
-load("//zig/private/providers:zig_settings_info.bzl", "ZigSettingsInfo")
+load(
+    "//zig/private/providers:zig_settings_info.bzl",
+    "ZigSettingsInfo",
+    "zig_settings",
+)
+load("//zig/private/providers:zig_target_info.bzl", "zig_target_platform")
 load(
     "//zig/private/providers:zig_toolchain_info.bzl",
     "zig_toolchain_executable",
@@ -528,14 +533,14 @@ def zig_build_impl(ctx, *, kind):
             "zig_shared_library": ("build-lib", "shared_library", "ZigBuildSharedLib"),
         }[kind]
 
-    global_args = settings.args + zigtargetinfo.args
     args = ctx.actions.args()
     args.use_param_file("@%s")
     if command in ("test", "test-obj"):
         args.add("--test-no-exec")
     if output_kind == "shared_library":
         args.add("-dynamic")
-    args.add_all(global_args)
+    zig_settings(settings = settings, args = args)
+    zig_target_platform(target = zigtargetinfo, args = args)
 
     # The C/C++ link gets compiler-rt from a separate object when enabled.
     if use_cc_common_link or ctx.attr.compiler_runtime == "exclude":
@@ -582,7 +587,8 @@ def zig_build_impl(ctx, *, kind):
             zig_lib_dir(zigtoolchaininfo = zigtoolchaininfo, args = translate_c_args)
             zig_cache_output(zigtoolchaininfo = zigtoolchaininfo, args = translate_c_args)
             translate_c_args.use_param_file("@%s")
-            translate_c_args.add_all(global_args)
+            zig_settings(settings = settings, args = translate_c_args)
+            zig_target_platform(target = zigtargetinfo, args = translate_c_args)
         c_module = zig_translate_c(
             ctx = ctx,
             name = "c",
@@ -721,7 +727,8 @@ def zig_build_impl(ctx, *, kind):
             compiler_rt = ctx.actions.declare_file(ctx.label.name + ".compiler_rt" + _object_extension(zigtargetinfo.triple.os))
             runtime_args = ctx.actions.args()
             runtime_args.use_param_file("@%s")
-            runtime_args.add_all(global_args)
+            zig_settings(settings = settings, args = runtime_args)
+            zig_target_platform(target = zigtargetinfo, args = runtime_args)
             runtime_args.add_all(
                 root_module.cc_info.linking_context.linker_inputs,
                 map_each = zig_cdeps_libc_flags,
