@@ -540,9 +540,13 @@ def zig_build_impl(ctx, *, kind):
         )
 
     if use_cc_common_link:
-        command, output_kind, mnemonic = (
-            ("test-obj", "object", "ZigBuildTest") if kind == "zig_test" else ("build-obj", "object", "ZigBuildObj")
-        )
+        if kind == "zig_static_library":
+            fail("Internal error: zig_static_library cannot use cc_common.link.")
+        command, output_kind, mnemonic = {
+            "zig_binary": ("build-obj", "object", "ZigBuildObj"),
+            "zig_test": ("test-obj", "object", "ZigBuildTest"),
+            "zig_shared_library": ("build-obj", "object", "ZigBuildObj"),
+        }[kind]
     else:
         command, output_kind, mnemonic = {
             "zig_binary": ("build-exe", "executable", "ZigBuildExe"),
@@ -565,6 +569,7 @@ def zig_build_impl(ctx, *, kind):
         zig_settings(settings = settings, args = args)
         zig_target_platform(target = zigtargetinfo, args = args)
 
+    # The C/C++ link gets compiler-rt from a separate object when enabled.
     if use_cc_common_link or ctx.attr.compiler_runtime == "exclude":
         args.add("-fno-compiler-rt")
     elif ctx.attr.compiler_runtime == "include":
@@ -690,6 +695,8 @@ def zig_build_impl(ctx, *, kind):
         strings = ctx.attr.linkopts,
     )
 
+    # Pass linkopts to the final linker. Static archives have no final link.
+    # The C/C++ path passes the same linkopts to cc_common.link below.
     if not use_cc_common_link and kind != "zig_static_library":
         args.add_all(linkopts)
 
