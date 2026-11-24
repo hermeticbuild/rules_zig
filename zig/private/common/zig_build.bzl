@@ -268,7 +268,7 @@ def _references_auto_c(root_module):
                 return True
     return False
 
-def _compile(ctx, *, zigtoolchaininfo, command, output_kind, global_args, compiler_args, test_output_args, worker, **kwargs):
+def _compile(ctx, *, zigtoolchaininfo, command, output_kind, global_args, compiler_args, worker, **kwargs):
     """Register a compilation through the selected execution adapter."""
     executable = zig_toolchain_executable(zigtoolchaininfo)
 
@@ -306,8 +306,6 @@ def _compile(ctx, *, zigtoolchaininfo, command, output_kind, global_args, compil
         elif output_kind == "shared_library":
             arguments.append("-dynamic")
         arguments.extend([global_args, compiler_args])
-        if test_output_args:
-            arguments.append(test_output_args)
     ctx.actions.run(
         executable = executable,
         arguments = arguments,
@@ -705,18 +703,13 @@ def zig_build_impl(ctx, *, kind):
         args.add_all(linkopts)
 
     # The worker already has the declared outputs in its request header.
-    test_output_args = None
     if not incremental_worker:
         for emission in auxiliary_emissions:
             args.add(emission.file, format = emission.flag)
-        if command == "test-obj":
-            # Keep the explicit test-object path in its own argument group.
-            test_output_args = ctx.actions.args()
-        primary_args = test_output_args if test_output_args else args
         if primary_emission:
-            primary_args.add(primary_emission.file, format = primary_emission.flag)
+            args.add(primary_emission.file, format = primary_emission.flag)
         else:
-            primary_args.add("-fno-emit-bin")
+            args.add("-fno-emit-bin")
 
     if output_kind == "shared_library":
         # By default, Zig build-lib -dynamic sets the SONAME of the shared
@@ -736,7 +729,6 @@ def zig_build_impl(ctx, *, kind):
         output_kind = output_kind,
         global_args = global_args,
         compiler_args = args,
-        test_output_args = test_output_args,
         worker = incremental_worker,
         outputs = compile_outputs,
         inputs = inputs,
@@ -780,7 +772,6 @@ def zig_build_impl(ctx, *, kind):
                 output_kind = "object",
                 global_args = global_args,
                 compiler_args = runtime_args,
-                test_output_args = None,
                 worker = None,
                 outputs = [compiler_rt],
                 inputs = runtime_inputs,
