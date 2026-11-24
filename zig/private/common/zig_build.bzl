@@ -430,9 +430,10 @@ def zig_build_impl(ctx, *, kind):
             "/".join([".." for _ in ctx.label.package.split("/")]),
             paths.join(bin_output.basename + ".runfiles", ctx.workspace_name),
         ]
-    elif kind == "zig_static_library" and ctx.attr.emit_bin:
-        bin_output_name = _lib_prefix(zigtargetinfo.triple.os) + ctx.label.name + _static_lib_extension(zigtargetinfo.triple.os)
-        bin_output = ctx.actions.declare_file(bin_output_name)
+    elif kind == "zig_static_library":
+        if ctx.attr.emit_bin:
+            bin_output_name = _lib_prefix(zigtargetinfo.triple.os) + ctx.label.name + _static_lib_extension(zigtargetinfo.triple.os)
+            bin_output = ctx.actions.declare_file(bin_output_name)
     elif kind == "zig_shared_library":
         if (ctx.attr.shared_lib_name):
             bin_output_name = ctx.attr.shared_lib_name
@@ -441,6 +442,8 @@ def zig_build_impl(ctx, *, kind):
             bin_output_name = _lib_prefix(zigtargetinfo.triple.os) + ctx.label.name + _shared_lib_extension(zigtargetinfo.triple.os)
             bin_output = ctx.actions.declare_file(bin_output_name)
         solib_parents = [""]
+    else:
+        fail("Unknown rule kind '{}'.".format(kind))
 
     cc_link_kwargs = {}
     if generate_dsym_file:
@@ -460,7 +463,7 @@ def zig_build_impl(ctx, *, kind):
         compile_bin_output = ctx.actions.declare_file(ctx.label.name + _object_extension(zigtargetinfo.triple.os))
 
     primary_emission = None
-    if bin_output:
+    if compile_bin_output:
         primary_emission = struct(
             kind = "bin",
             file = compile_bin_output,
@@ -815,8 +818,6 @@ def zig_build_impl(ctx, *, kind):
                 cc_toolchain = cc_toolchain,
                 dynamic_library = bin_output,
             )
-    elif kind not in ("zig_binary", "zig_test"):
-        fail("Unknown rule kind '{}'.".format(kind))
 
     if root_module.cc_info:
         transitive_data.append(depset(cc_helper.get_dynamic_libraries_for_runtime(root_module.cc_info.linking_context, True)))
