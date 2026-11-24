@@ -59,8 +59,8 @@ def _binary_test_impl(ctx):
         "output-kind=executable",
         "name=" + root_module_name,
         "target=" + target_flag,
-        "emit-arg-count=1",
-    ], compile.argv[boundary + 1:boundary + 6])
+    ], compile.argv[boundary + 1:boundary + 5])
+    asserts.true(env, compile.argv[boundary + 5].startswith("input="))
 
     asserts.equals(env, ["--compilation-output=" + executable.path], [arg for arg in compile.argv if arg.startswith("--compilation-output=")])
 
@@ -250,13 +250,23 @@ def _auxiliary_only_test_impl(ctx):
         "-femit-llvm-bc=" + llvm_bc[0].path,
         "-fno-emit-bin",
     ], compile.argv[boundary - 4:boundary])
-    asserts.equals(env, "emit-arg-count=4", compile.argv[boundary + 5])
     for file in asm + llvm_ir + llvm_bc:
         asserts.true(env, file in compile.outputs.to_list(), "The worker must produce the requested auxiliary outputs without an archive.")
 
     return analysistest.end(env)
 
 _auxiliary_only_test = analysistest.make(_auxiliary_only_test_impl, config_settings = _SETTINGS)
+
+def _emission_linkopt_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "Remove '-femit-asm=unexpected.s' from linkopts")
+    return analysistest.end(env)
+
+_emission_linkopt_test = analysistest.make(
+    _emission_linkopt_test_impl,
+    config_settings = _SETTINGS,
+    expect_failure = True,
+)
 
 def _unsupported_version_test_impl(ctx):
     env = analysistest.begin(ctx)
@@ -329,6 +339,7 @@ def incremental_test_suite(name):
         # Test auxiliary output ownership with a separate link and without a binary.
         partial.make(_auxiliary_outputs_test, target_under_test = "//zig/tests/incremental:auxiliary_outputs", size = "small"),
         partial.make(_auxiliary_only_test, target_under_test = "//zig/tests/incremental:auxiliary_only", size = "small"),
+        partial.make(_emission_linkopt_test, target_under_test = "//zig/tests/incremental:emission_linkopt", size = "small"),
         # Test deliberate configuration restrictions.
         partial.make(_unsupported_version_test, target_under_test = "//zig/tests/incremental:binary", size = "small"),
         partial.make(_unsupported_arch_test, target_under_test = "//zig/tests/incremental:binary", size = "small"),

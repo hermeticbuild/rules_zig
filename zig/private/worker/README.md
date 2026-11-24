@@ -20,9 +20,9 @@ key, each with its own compiler state. [Bazel's worker key and instance limits][
 ## Updating a compiler session
 
 The action supplies ordered Zig arguments followed by `--` and worker
-records. The records include the number of rule-generated output flags just
-before `--`, so the adapter can read their destinations and request cached
-outputs from Zig. The other compiler arguments pass through in order.
+records. The adapter reads the trailing emission flags just before `--`
+to find the declared destinations and request cached outputs from Zig.
+The other compiler arguments pass through in order.
 
 Each session has a private execroot for staged inputs and an in-memory map of
 their Bazel digests, keyed by path.

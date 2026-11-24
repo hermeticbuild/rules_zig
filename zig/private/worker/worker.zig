@@ -103,6 +103,14 @@ const EmitKind = enum {
 const EmittedOutput = struct {
     kind: EmitKind,
     path: []const u8,
+
+    fn fromFlag(arg: []const u8) ?EmittedOutput {
+        const flag, const path = std.mem.cutScalar(u8, arg, '=') orelse return null;
+        for (std.meta.tags(EmitKind)) |kind| {
+            if (std.mem.eql(u8, kind.flag(), flag)) return .{ .kind = kind, .path = path };
+        }
+        return null;
+    }
 };
 
 const Compilation = struct {
@@ -123,39 +131,33 @@ const Compilation = struct {
         } else return error.InvalidCompilationRequest;
 
         const trailer = data[boundary + 1 ..];
-        const metadata_len = 5;
-        if (trailer.len < metadata_len) return error.InvalidCompilationRequest;
+        const metadata_len = 4;
+        if (boundary == 0 or trailer.len < metadata_len) return error.InvalidCompilationRequest;
 
         const command = std.mem.cutPrefix(u8, trailer[0], "command=") orelse return error.InvalidCompilationRequest;
         const output_kind_arg = std.mem.cutPrefix(u8, trailer[1], "output-kind=") orelse return error.InvalidCompilationRequest;
         const output_kind = std.meta.stringToEnum(OutputKind, output_kind_arg) orelse return error.InvalidCompilationRequest;
         const name = std.mem.cutPrefix(u8, trailer[2], "name=") orelse return error.InvalidCompilationRequest;
         const target = std.mem.cutPrefix(u8, trailer[3], "target=") orelse return error.InvalidCompilationRequest;
-        const emit_count_arg = std.mem.cutPrefix(u8, trailer[4], "emit-arg-count=") orelse return error.InvalidCompilationRequest;
-        const emit_count = std.fmt.parseInt(usize, emit_count_arg, 10) catch return error.InvalidCompilationRequest;
-        if (emit_count == 0 or emit_count > boundary) return error.InvalidCompilationRequest;
 
-        // Decode only the rule-generated suffix. The rest of argv passes
-        // through unchanged, even when a user argument resembles an emit flag.
-        const emissions_start = boundary - emit_count;
+        // The rule reserves the trailing block for its emission flags. Walk
+        // backward from the delimiter until the regular compiler arguments.
         const emit_bin = !std.mem.eql(u8, data[boundary - 1], "-fno-emit-bin");
-        const emission_flags = data[emissions_start .. boundary - @intFromBool(!emit_bin)];
-        if (emission_flags.len == 0) return error.InvalidCompilationRequest;
         if (!emit_bin and output_kind != .static_library) return error.UnsupportedCompilationRequest;
 
-        const outputs = try a.alloc(EmittedOutput, emission_flags.len);
+        var emissions_start = boundary - @intFromBool(!emit_bin);
+        var outputs: std.ArrayList(EmittedOutput) = .empty;
         var emitted: std.EnumSet(EmitKind) = .empty;
-        for (outputs, emission_flags) |*output, arg| {
-            const flag, const path = std.mem.cutScalar(u8, arg, '=') orelse return error.InvalidCompilationRequest;
-            const kind = for (std.meta.tags(EmitKind)) |kind| {
-                if (std.mem.eql(u8, kind.flag(), flag)) break kind;
-            } else return error.InvalidCompilationRequest;
-            if (emitted.contains(kind)) return error.InvalidCompilationRequest;
-            emitted.insert(kind);
-            try safePath(path, false);
-            output.* = .{ .kind = kind, .path = path };
+        while (emissions_start > 0) {
+            const output = EmittedOutput.fromFlag(data[emissions_start - 1]) orelse break;
+            if (emitted.contains(output.kind)) return error.InvalidCompilationRequest;
+            emitted.insert(output.kind);
+            try safePath(output.path, false);
+            try outputs.append(a, output);
+            emissions_start -= 1;
         }
-        if (emit_bin != emitted.contains(.bin)) return error.InvalidCompilationRequest;
+        if (outputs.items.len == 0 or emit_bin != emitted.contains(.bin)) return error.InvalidCompilationRequest;
+        std.mem.reverse(EmittedOutput, outputs.items);
 
         const paths = try a.alloc([]const u8, trailer.len - metadata_len);
         for (paths, trailer[metadata_len..]) |*path, record| {
@@ -168,7 +170,7 @@ const Compilation = struct {
             .output_kind = output_kind,
             .name = name,
             .target = target,
-            .outputs = outputs,
+            .outputs = outputs.items,
             .arguments = data[0..emissions_start],
             .input_paths = paths,
         };
@@ -984,7 +986,6 @@ const test_trailer = [_][]const u8{
     "output-kind=static_library",
     "name=probe",
     "target=x86_64-linux",
-    "emit-arg-count=1",
 };
 
 test "request framing uses the last separator and preserves compiler arguments" {

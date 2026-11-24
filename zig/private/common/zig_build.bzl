@@ -274,14 +274,12 @@ def _compile(ctx, *, zigtoolchaininfo, command, output_kind, global_args, compil
 
     if worker:
         # The final delimiter separates the Zig arguments from worker metadata.
-        # The emission count identifies the rule-generated flags immediately
-        # before it, and prefixed input records keep it unambiguous.
+        # Prefixed records keep it unambiguous.
         compiler_args.add("--")
         compiler_args.add(command, format = "command=%s")
         compiler_args.add(output_kind, format = "output-kind=%s")
         compiler_args.add(worker.name, format = "name=%s")
         compiler_args.add(worker.target, format = "target=%s")
-        compiler_args.add(worker.emit_arg_count, format = "emit-arg-count=%s")
         compiler_args.add_all(kwargs["inputs"], format_each = "input=%s")
         compiler_args.use_param_file("@%s", use_always = True)
         compiler_args.set_param_file_format("multiline")
@@ -697,6 +695,11 @@ def zig_build_impl(ctx, *, kind):
     # Pass linkopts to the final linker. Static archives have no final link.
     # The C/C++ path passes the same linkopts to cc_common.link below.
     if not use_cc_common_link and kind != "zig_static_library":
+        if incremental_worker:
+            # The worker reads the trailing emission flags as declared outputs.
+            for flag in linkopts:
+                if flag.startswith("-femit-") or flag.startswith("-fno-emit-"):
+                    fail("Incremental compilation reserves Zig emission flags. Remove '{}' from linkopts and use the emit attributes.".format(flag))
         args.add_all(linkopts)
 
     if output_kind == "shared_library":
@@ -730,7 +733,6 @@ def zig_build_impl(ctx, *, kind):
             tool = incremental_worker,
             name = root_module.canonical_name,
             target = zigtargetinfo.target,
-            emit_arg_count = len(auxiliary_emissions) + 1,
         ) if incremental_worker else None,
         outputs = compile_outputs,
         inputs = inputs,
