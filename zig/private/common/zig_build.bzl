@@ -336,6 +336,7 @@ def zig_build_impl(ctx, *, kind):
         if not (ctx.attr.emit_bin or ctx.attr.emit_asm or ctx.attr.emit_llvm_ir or ctx.attr.emit_llvm_bc):
             fail("At least one emitted output must be enabled.")
 
+    # Resolve toolchains and select the execution and link modes.
     zigtoolchaininfo = zig_exec_group_toolchain(ctx)
     zigtargetinfo = ctx.toolchains["//zig/target:toolchain_type"].zigtargetinfo
     translate_c_toolchain = translate_c_exec_group_toolchain(ctx)
@@ -413,6 +414,7 @@ def zig_build_impl(ctx, *, kind):
 
     location_targets = ctx.attr.data
 
+    # Declare the final artifacts and the outputs produced by Zig.
     bin_output_is_executable = False
     bin_output_name = None
     bin_output = None
@@ -497,6 +499,7 @@ def zig_build_impl(ctx, *, kind):
     emissions = ([primary_emission] if primary_emission else []) + auxiliary_emissions
     compile_outputs = [emission.file for emission in emissions]
 
+    # Resolve the root module and its dependencies.
     zigopts = location_expansion(
         ctx = ctx,
         targets = location_targets,
@@ -539,6 +542,7 @@ def zig_build_impl(ctx, *, kind):
             import_names = import_names,
         )
 
+    # Assemble and register the primary Zig compilation.
     if use_cc_common_link:
         if kind == "zig_static_library":
             fail("Internal error: zig_static_library cannot use cc_common.link.")
@@ -741,6 +745,7 @@ def zig_build_impl(ctx, *, kind):
         **zig_build_kwargs
     )
 
+    # Perform any separate C/C++ link and prepare library link metadata.
     if use_cc_common_link:
         is_shared_library = kind == "zig_shared_library"
         objects = [compile_bin_output]
@@ -826,6 +831,7 @@ def zig_build_impl(ctx, *, kind):
                 dynamic_library = bin_output,
             )
 
+    # Publish the target's outputs, runfiles, and providers.
     if root_module.cc_info:
         transitive_data.append(depset(cc_helper.get_dynamic_libraries_for_runtime(root_module.cc_info.linking_context, True)))
 
