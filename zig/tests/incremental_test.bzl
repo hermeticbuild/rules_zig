@@ -54,7 +54,8 @@ def _binary_test_impl(ctx):
     boundary = compile.argv.index("--")
     asserts.equals(env, "build-exe", compile.argv[1])
     asserts.equals(env, "--zig-lib-dir", compile.argv[3])
-    asserts.true(env, "-target" in compile.argv[6:boundary])
+    asserts.equals(env, ["--zig-lib-dir", "--cache-dir", "--global-cache-dir"], compile.argv[6:12:2])
+    asserts.true(env, "-target" in compile.argv[12:boundary])
     asserts.equals(env, "-femit-bin=" + executable.path, compile.argv[boundary - 1])
     asserts.equals(env, "name=" + root_module_name, compile.argv[boundary + 1])
     asserts.true(env, compile.argv[boundary + 2].startswith("input="))
@@ -96,6 +97,7 @@ def _shared_library_test_impl(ctx):
     target = analysistest.target_under_test(env)
     compile = assert_find_action(env, "ZigIncrementalCompile")
 
+    asserts.true(env, compile.argv.index("-target") < compile.argv.index("-dynamic"))
     libraries = target[DefaultInfo].files.to_list()
     asserts.equals(env, 1, len(libraries))
     asserts.equals(env, libraries, compile.outputs.to_list())
@@ -142,8 +144,6 @@ def _cc_test_handoff_test_impl(ctx):
 
     for flag in ["--zig-lib-dir", "--cache-dir", "--global-cache-dir"]:
         asserts.equals(env, 1, len([arg for arg in runtime.argv if arg == flag]), "The runtime build needs exactly one {}.".format(flag))
-    for flag in ["--cache-dir", "--global-cache-dir"]:
-        asserts.false(env, flag in compile.argv, "The worker sets its own {}.".format(flag))
 
     objects = compile.outputs.to_list()
     asserts.equals(env, 1, len(objects))

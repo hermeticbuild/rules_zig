@@ -20,8 +20,10 @@ key, each with its own compiler state. [Bazel's worker key and instance limits][
 ## Updating a compiler session
 
 The request starts with the Zig compiler arguments, followed by `--` and
-records for the compilation name and declared inputs. The adapter
-reads the root module's target from the arguments. The emission flags just
+records for the compilation name and declared inputs. The adapter skips the
+leading SDK and cache flags. It uses the SDK from startup and its own cache
+paths.
+It reads the root module's target from the arguments. The emission flags just
 before `--` tell it which outputs to request from Zig's cache and where to
 publish them.
 The other compiler arguments pass through in order.

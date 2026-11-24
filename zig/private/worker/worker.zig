@@ -128,7 +128,17 @@ const Compilation = struct {
     arguments: []const []const u8,
     input_paths: []const []const u8,
 
-    fn parse(a: Allocator, command: Command, data: []const []const u8) !Compilation {
+    fn parse(a: Allocator, command: Command, request_args: []const []const u8) !Compilation {
+        // Skip the rule-generated SDK and cache flags for direct Zig.
+        // The child uses the SDK from startup and the worker's cache paths.
+        const setup_flags = [_][]const u8{ "--zig-lib-dir", "--cache-dir", "--global-cache-dir" };
+        const setup_len = 2 * setup_flags.len;
+        if (request_args.len < setup_len) return error.InvalidCompilationRequest;
+        for (setup_flags, 0..) |flag, i| {
+            if (!std.mem.eql(u8, request_args[2 * i], flag)) return error.InvalidCompilationRequest;
+        }
+        const data = request_args[setup_len..];
+
         // The trailer uses prefixed records, so the final '--' always frames it,
         // independently of empty arguments or '--' in the compiler vector.
         const boundary = for (0..data.len) |n| {
@@ -139,18 +149,11 @@ const Compilation = struct {
         const trailer = data[boundary + 1 ..];
         if (boundary == 0 or trailer.len == 0) return error.InvalidCompilationRequest;
 
-        const output_kind: OutputKind = switch (command) {
-            .@"build-exe", .@"test" => .executable,
-            .@"build-obj", .@"test-obj" => .object,
-            // The rule emits -dynamic first for shared libraries.
-            .@"build-lib" => if (std.mem.eql(u8, data[0], "-dynamic")) .shared_library else .static_library,
-        };
         const name = std.mem.cutPrefix(u8, trailer[0], "name=") orelse return error.InvalidCompilationRequest;
 
         // The rule reserves the trailing block for its emission flags. Walk
         // backward from the delimiter until the regular compiler arguments.
         const emit_bin = !std.mem.eql(u8, data[boundary - 1], "-fno-emit-bin");
-        if (!emit_bin and output_kind != .static_library) return error.UnsupportedCompilationRequest;
 
         var emissions_start = boundary - @intFromBool(!emit_bin);
         var outputs: std.ArrayList(EmittedOutput) = .empty;
@@ -167,6 +170,18 @@ const Compilation = struct {
         std.mem.reverse(EmittedOutput, outputs.items);
 
         const arguments = data[0..emissions_start];
+        const output_kind: OutputKind = switch (command) {
+            .@"build-exe", .@"test" => .executable,
+            .@"build-obj", .@"test-obj" => .object,
+            // Zig uses the last link mode flag.
+            .@"build-lib" => for (0..arguments.len) |i| {
+                const arg = arguments[arguments.len - 1 - i];
+                if (std.mem.eql(u8, arg, "-dynamic")) break .shared_library;
+                if (std.mem.eql(u8, arg, "-static")) break .static_library;
+            } else .static_library,
+        };
+        if (!emit_bin and output_kind != .static_library) return error.UnsupportedCompilationRequest;
+
         // The first -M consumes the root module's options. Later modules have
         // their own options and do not determine the output artifact's name.
         var target: ?[]const u8 = null;
@@ -991,6 +1006,15 @@ test "artifact naming requires explicit architecture and OS" {
     try std.testing.expectError(error.InvalidCompilationTarget, expectArtifactName("x86_64-native", .executable, .bin, "probe"));
 }
 
+const test_setup = [_][]const u8{
+    "--zig-lib-dir",
+    "sdk/lib",
+    "--cache-dir",
+    "direct-cache",
+    "--global-cache-dir",
+    "direct-global-cache",
+};
+
 const test_trailer = [_][]const u8{
     "--",
     "name=probe",
@@ -1004,23 +1028,24 @@ test "request framing uses the last separator and preserves compiler arguments" 
         "x86_64-linux-musl",
         "-target",
         "x86_64-linux-gnu",
+        "-dynamic",
         "",
         "--",
-        "-femit-bin=other.a",
+        "-femit-bin=other.so",
         "-Mroot=main.zig",
         "-target",
         "aarch64-linux",
         "-Mdep=dep.zig",
     };
-    const compilation = try Compilation.parse(arena.allocator(), .@"build-lib", &(arguments ++
-        [_][]const u8{"-femit-bin=out=debug.a"} ++ test_trailer ++
+    const compilation = try Compilation.parse(arena.allocator(), .@"build-lib", &(test_setup ++ arguments ++
+        [_][]const u8{"-femit-bin=out=debug.so"} ++ test_trailer ++
         [_][]const u8{ "input=main.zig", "input=--" }));
-    try std.testing.expectEqual(.static_library, compilation.output_kind);
+    try std.testing.expectEqual(.shared_library, compilation.output_kind);
     try std.testing.expectEqualStrings("x86_64-linux-gnu", compilation.target);
     try std.testing.expectEqualSlices([]const u8, &arguments, compilation.arguments);
     try std.testing.expectEqual(@as(usize, 1), compilation.outputs.len);
     try std.testing.expectEqual(.bin, compilation.outputs[0].kind);
-    try std.testing.expectEqualStrings("out=debug.a", compilation.outputs[0].path);
+    try std.testing.expectEqualStrings("out=debug.so", compilation.outputs[0].path);
     try std.testing.expectEqualStrings("main.zig", compilation.input_paths[0]);
     try std.testing.expectEqualStrings("--", compilation.input_paths[1]);
 }
@@ -1031,11 +1056,11 @@ test "request framing rejects missing paths and separators" {
     const a = arena.allocator();
     const command: Command = .@"build-lib";
     try std.testing.expectError(error.InvalidCompilationRequest, Compilation.parse(a, command, &.{}));
-    try std.testing.expectError(error.InvalidCompilationRequest, Compilation.parse(a, command, &.{"-femit-bin=out.a"}));
-    try std.testing.expectError(error.InvalidCompilationRequest, Compilation.parse(a, command, &test_trailer));
+    try std.testing.expectError(error.InvalidCompilationRequest, Compilation.parse(a, command, &(test_setup ++ [_][]const u8{"-femit-bin=out.a"})));
+    try std.testing.expectError(error.InvalidCompilationRequest, Compilation.parse(a, command, &(test_setup ++ test_trailer)));
     const arguments = [_][]const u8{ "-target", "x86_64-linux", "-Mroot=main.zig" };
-    try std.testing.expectError(error.InvalidCompilationRequest, Compilation.parse(a, command, &(arguments ++ [_][]const u8{"-femit-bin"} ++ test_trailer)));
-    const compilation = try Compilation.parse(a, command, &(arguments ++ [_][]const u8{"-femit-bin=out.a"} ++ test_trailer));
+    try std.testing.expectError(error.InvalidCompilationRequest, Compilation.parse(a, command, &(test_setup ++ arguments ++ [_][]const u8{"-femit-bin"} ++ test_trailer)));
+    const compilation = try Compilation.parse(a, command, &(test_setup ++ arguments ++ [_][]const u8{"-femit-bin=out.a"} ++ test_trailer));
     try std.testing.expectEqualSlices([]const u8, &arguments, compilation.arguments);
     try std.testing.expectEqual(@as(usize, 0), compilation.input_paths.len);
 }
