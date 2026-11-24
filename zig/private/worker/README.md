@@ -1,4 +1,11 @@
-# Zig incremental compilation worker
+# Zig compilation worker
+
+In cache-only mode the adapter keeps a private local and global Zig cache.
+It runs a fresh compiler in Bazel's execroot for each request, and Zig writes
+the declared outputs directly. The startup arguments identify the compiler,
+SDK, and subcommand, so actions with different outputs can share the worker.
+
+## Incremental mode
 
 [`worker.zig`](worker.zig) keeps a Zig compiler running across Bazel requests.
 It starts Zig with `-fincremental` and `--listen=-`. Zig keeps fine-grained

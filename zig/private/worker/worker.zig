@@ -1,4 +1,4 @@
-//! Singleplex Bazel adapter for Zig 0.17's incremental compiler protocol.
+//! Singleplex Bazel adapter for ordinary and incremental Zig compilation.
 const std = @import("std");
 const builtin = @import("builtin");
 const Io = std.Io;
@@ -120,6 +120,18 @@ const EmittedOutput = struct {
     }
 };
 
+fn compilerArguments(request_args: []const []const u8) ![]const []const u8 {
+    // Skip the rule-generated SDK and cache flags for direct Zig.
+    // The child uses the SDK from startup and the worker's cache paths.
+    const setup_flags = [_][]const u8{ "--zig-lib-dir", "--cache-dir", "--global-cache-dir" };
+    const setup_len = 2 * setup_flags.len;
+    if (request_args.len < setup_len) return error.InvalidCompilationRequest;
+    for (setup_flags, 0..) |flag, i| {
+        if (!std.mem.eql(u8, request_args[2 * i], flag)) return error.InvalidCompilationRequest;
+    }
+    return request_args[setup_len..];
+}
+
 const Compilation = struct {
     output_kind: OutputKind,
     name: []const u8,
@@ -129,15 +141,7 @@ const Compilation = struct {
     input_paths: []const []const u8,
 
     fn parse(a: Allocator, command: Command, request_args: []const []const u8) !Compilation {
-        // Skip the rule-generated SDK and cache flags for direct Zig.
-        // The child uses the SDK from startup and the worker's cache paths.
-        const setup_flags = [_][]const u8{ "--zig-lib-dir", "--cache-dir", "--global-cache-dir" };
-        const setup_len = 2 * setup_flags.len;
-        if (request_args.len < setup_len) return error.InvalidCompilationRequest;
-        for (setup_flags, 0..) |flag, i| {
-            if (!std.mem.eql(u8, request_args[2 * i], flag)) return error.InvalidCompilationRequest;
-        }
-        const data = request_args[setup_len..];
+        const data = try compilerArguments(request_args);
 
         // The trailer uses prefixed records, so the final '--' always frames it,
         // independently of empty arguments or '--' in the compiler vector.
@@ -319,10 +323,18 @@ fn readLines(a: Allocator, io: Io, path: []const u8, result: *std.array_list.Man
 // User-supplied response files are unsupported. Zig reads their options
 // only at startup, so changed contents would not update a reused compiler.
 // Nested response files can also discard remaining outer arguments.
-// Our generated response file is derived entirely from the session-key argv.
-fn appendResponseFile(argv: *std.array_list.Managed([]const u8), io: Io, root: []const u8, arguments: []const []const u8) !void {
+fn appendCompilerArguments(argv: *std.array_list.Managed([]const u8), io: Io, root: []const u8, arguments: []const []const u8) !void {
     if (arguments.len == 0) {
         return;
+    }
+
+    // Zig 0.17 cannot encode apostrophes in response files and consumes
+    // direct argv before response contents. Use one representation for the
+    // entire semantic vector so module dependency ordering stays intact.
+    for (arguments) |arg| {
+        if (std.mem.findScalar(u8, arg, '\'') != null) {
+            return argv.appendSlice(arguments);
+        }
     }
 
     const a = argv.allocator;
@@ -413,6 +425,7 @@ const Worker = struct {
     zig_input: []const u8,
     lib_input: []const u8,
     root: []const u8,
+    cache_only: bool,
     session: ?*Session = null,
     generation: usize = 0,
     message_buffer: std.ArrayList(u8) = .empty,
@@ -495,21 +508,11 @@ const Worker = struct {
             try argv.append("-fno-emit-bin");
         }
 
-        // Zig 0.17 cannot encode apostrophes in response files and consumes
-        // direct argv before response contents. Use one representation for the
-        // entire semantic vector so module dependency ordering stays intact.
-        const direct = for (arguments) |arg| {
-            if (std.mem.findScalar(u8, arg, '\'') != null) break true;
-        } else false;
-
         // Raw arguments pass through unchanged. They must preserve the adapter's
         // protocol, incremental mode, SDK/cache locations, and output metadata.
         // Conflicting overrides are not validated: they can fail publication,
         // break the protocol, or hang when the compiler stops speaking on stdio.
-        if (direct)
-            try argv.appendSlice(arguments)
-        else
-            try appendResponseFile(&argv, self.io, root, arguments);
+        try appendCompilerArguments(&argv, self.io, root, arguments);
 
         const stderr = try Dir.cwd().createFile(self.io, try std.fs.path.join(a, &.{ root, "stderr" }), .{ .read = true });
         errdefer stderr.close(self.io);
@@ -549,6 +552,12 @@ const Worker = struct {
     }
 
     fn execute(self: *Worker, request: Request, a: Allocator, diagnostics: *Io.Writer) !u8 {
+        if (request.requestId != 0 or request.cancel or request.sandboxDir.len != 0) {
+            return error.OnlySingleplexSupported;
+        }
+        if (self.cache_only) {
+            return self.compileCacheOnly(request, a, diagnostics);
+        }
         return self.compile(request, a, diagnostics) catch |err| switch (err) {
             error.EndOfStream, error.ReadFailed, error.WriteFailed => {
                 // Readers erase Canceled to ReadFailed. Termination must not
@@ -562,11 +571,37 @@ const Worker = struct {
         };
     }
 
-    fn compile(self: *Worker, request: Request, a: Allocator, diagnostics: *Io.Writer) !u8 {
-        if (request.requestId != 0 or request.cancel or request.sandboxDir.len != 0) {
-            return error.OnlySingleplexSupported;
-        }
+    fn compileCacheOnly(self: *Worker, request: Request, a: Allocator, diagnostics: *Io.Writer) !u8 {
+        const arguments = try compilerArguments(request.arguments);
+        const cache = try std.fs.path.join(a, &.{ self.root, "cache" });
+        const global_cache = try std.fs.path.join(a, &.{ self.root, "global-cache" });
+        var argv: std.array_list.Managed([]const u8) = .init(a);
+        try argv.appendSlice(&.{
+            self.zig,
+            @tagName(self.command),
+            "--zig-lib-dir",
+            self.lib_input,
+            "--cache-dir",
+            cache,
+            "--global-cache-dir",
+            global_cache,
+        });
+        try appendCompilerArguments(&argv, self.io, self.root, arguments);
 
+        // Zig runs in Bazel's execroot and writes the declared outputs itself.
+        const result = try std.process.run(a, self.io, .{ .argv = argv.items });
+        try diagnostics.writeAll(result.stdout);
+        try diagnostics.writeAll(result.stderr);
+        return switch (result.term) {
+            .exited => |code| code,
+            else => blk: {
+                try diagnostics.print("zig compiler terminated unexpectedly ({t})\n", .{result.term});
+                break :blk 1;
+            },
+        };
+    }
+
+    fn compile(self: *Worker, request: Request, a: Allocator, diagnostics: *Io.Writer) !u8 {
         const compilation = try Compilation.parse(a, self.command, request.arguments);
         try compilation.checkConfiguration(diagnostics);
         const arguments = compilation.arguments;
@@ -853,6 +888,7 @@ pub fn main(init: std.process.Init) !u8 {
     var zig_path: ?[]const u8 = null;
     var lib_path: ?[]const u8 = null;
     var persistent = false;
+    var cache_only = false;
     var flags: std.array_list.Managed([]const u8) = .init(a);
     var i: usize = 2;
     while (i < args.len) : (i += 1) {
@@ -865,6 +901,8 @@ pub fn main(init: std.process.Init) !u8 {
             lib_path = args[i];
         } else if (std.mem.eql(u8, arg, "--persistent_worker")) {
             persistent = true;
+        } else if (std.mem.eql(u8, arg, "--cache-only")) {
+            cache_only = true;
         } else if (std.mem.cutPrefix(u8, arg, "--compilation-output=")) |path| {
             // Routing identity for Bazel's worker pool, not a compiler option.
             try safePath(path, false);
@@ -899,6 +937,7 @@ pub fn main(init: std.process.Init) !u8 {
         .zig_input = zig_path.?,
         .lib_input = lib_path.?,
         .root = root,
+        .cache_only = cache_only,
     };
     defer {
         worker.deinit();
@@ -932,7 +971,7 @@ fn serve(worker: *Worker, init: std.process.Init, persistent: bool, flags: []con
         var diagnostics: Io.Writer.Allocating = .init(a);
         const code = worker.execute(.{ .arguments = flags }, a, &diagnostics.writer) catch |err| blk: {
             if (Shutdown.requested.load(.monotonic)) return 143;
-            try diagnostics.writer.print("zig incremental compilation: {t}\n", .{err});
+            try diagnostics.writer.print("zig worker compilation: {t}\n", .{err});
             break :blk 1;
         };
         if (Shutdown.requested.load(.monotonic)) return 143;
@@ -961,7 +1000,7 @@ fn serve(worker: *Worker, init: std.process.Init, persistent: bool, flags: []con
         const code = worker.execute(request, ra, &diagnostics.writer) catch |err| blk: {
             if (Shutdown.requested.load(.monotonic)) return 143;
             worker.reset();
-            try diagnostics.writer.print("zig incremental worker: {t}\n", .{err});
+            try diagnostics.writer.print("zig worker: {t}\n", .{err});
             break :blk 1;
         };
 

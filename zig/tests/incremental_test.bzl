@@ -5,6 +5,7 @@ load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
 load(":util.bzl", "assert_find_action", "canonical_label")
 
 _INCREMENTAL = canonical_label("@//zig/settings:incremental")
+_USE_WORKER = canonical_label("@//zig/settings:use_worker")
 _VERSION = canonical_label("@zig_toolchains//:version")
 _PLATFORMS = "//command_line_option:platforms"
 _EXEC_PLATFORMS = "//command_line_option:extra_execution_platforms"
@@ -16,6 +17,7 @@ _LINUX = canonical_label("@//zig/tests/platforms:x86_64-linux")
 # when checking the target-OS restriction.
 _SETTINGS = {
     _INCREMENTAL: True,
+    _USE_WORKER: False,
     _VERSION: "0.17.1",
     _PLATFORMS: _LINUX,
     _EXEC_PLATFORMS: [canonical_label("@buildbuddy_toolchain//:platform_linux_x86_64")],
@@ -38,6 +40,28 @@ def _disabled_test_impl(ctx):
 _disabled_test = analysistest.make(
     _disabled_test_impl,
     config_settings = _SETTINGS | {_INCREMENTAL: False},
+)
+
+def _cache_worker_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    compile = assert_find_action(env, "ZigWorkerCompile")
+
+    executable = target[DefaultInfo].files_to_run.executable
+    asserts.equals(env, [executable], compile.outputs.to_list())
+    asserts.true(env, "--cache-only" in compile.argv)
+    asserts.equals(env, "-femit-bin=" + executable.path, compile.argv[-1])
+    asserts.equals(env, [], [
+        arg
+        for arg in compile.argv
+        if arg.startswith("--compilation-output=")
+    ])
+
+    return analysistest.end(env)
+
+_cache_worker_test = analysistest.make(
+    _cache_worker_test_impl,
+    config_settings = _SETTINGS | {_INCREMENTAL: False, _USE_WORKER: True},
 )
 
 def _binary_test_impl(ctx):
@@ -64,7 +88,10 @@ def _binary_test_impl(ctx):
 
     return analysistest.end(env)
 
-_binary_test = analysistest.make(_binary_test_impl, config_settings = _SETTINGS)
+_binary_test = analysistest.make(
+    _binary_test_impl,
+    config_settings = _SETTINGS | {_USE_WORKER: True},
+)
 
 def _test_binary_test_impl(ctx):
     env = analysistest.begin(ctx)
@@ -315,6 +342,7 @@ def incremental_test_suite(name):
         name,
         # Test action selection and primary output ownership.
         partial.make(_disabled_test, target_under_test = "//zig/tests/incremental:binary", size = "small"),
+        partial.make(_cache_worker_test, target_under_test = "//zig/tests/incremental:binary", size = "small"),
         partial.make(_binary_test, target_under_test = "//zig/tests/incremental:binary", size = "small"),
         partial.make(_test_binary_test, target_under_test = "//zig/tests/incremental:test_binary", size = "small"),
         partial.make(_static_library_test, target_under_test = "//zig/tests/incremental:static_library", size = "small"),
