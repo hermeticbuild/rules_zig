@@ -450,13 +450,8 @@ const Worker = struct {
             self.lib,
         });
 
-        switch (compilation.output_kind) {
-            .static_library => try argv.append("-static"),
-            .shared_library => try argv.append("-dynamic"),
-            .executable, .object => {},
-        }
-        if (std.mem.eql(u8, compilation.command, "test") or std.mem.eql(u8, compilation.command, "test-obj")) {
-            try argv.append("--test-no-exec");
+        if (compilation.output_kind == .static_library) {
+            try argv.append("-static");
         }
 
         var emit_bin = false;

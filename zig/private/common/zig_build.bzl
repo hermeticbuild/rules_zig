@@ -41,12 +41,7 @@ load(
     "zig_module_info",
     "zig_module_specifications",
 )
-load(
-    "//zig/private/providers:zig_settings_info.bzl",
-    "ZigSettingsInfo",
-    "zig_settings",
-)
-load("//zig/private/providers:zig_target_info.bzl", "zig_target_platform")
+load("//zig/private/providers:zig_settings_info.bzl", "ZigSettingsInfo")
 load(
     "//zig/private/providers:zig_toolchain_info.bzl",
     "zig_toolchain_executable",
@@ -268,7 +263,13 @@ def _references_auto_c(root_module):
                 return True
     return False
 
-def _compile(ctx, *, zigtoolchaininfo, command, output_kind, global_args, compiler_args, worker, **kwargs):
+def _direct_zig_args(ctx, zigtoolchaininfo):
+    args = ctx.actions.args()
+    zig_lib_dir(zigtoolchaininfo = zigtoolchaininfo, args = args)
+    zig_cache_output(zigtoolchaininfo = zigtoolchaininfo, args = args)
+    return args
+
+def _compile(ctx, *, zigtoolchaininfo, command, output_kind, compiler_args, worker, **kwargs):
     """Register a compilation through the selected execution adapter."""
     executable = zig_toolchain_executable(zigtoolchaininfo)
 
@@ -303,12 +304,7 @@ def _compile(ctx, *, zigtoolchaininfo, command, output_kind, global_args, compil
             "no-remote-cache": "1",
         }
     else:
-        arguments = [command]
-        if command in ("test", "test-obj"):
-            arguments.append("--test-no-exec")
-        elif output_kind == "shared_library":
-            arguments.append("-dynamic")
-        arguments.extend([global_args, compiler_args])
+        arguments = [command, _direct_zig_args(ctx, zigtoolchaininfo), compiler_args]
     ctx.actions.run(
         executable = executable,
         arguments = arguments,
@@ -390,27 +386,6 @@ def zig_build_impl(ctx, *, kind):
         deps = ctx.attr.deps,
         transitive_data = transitive_data,
         transitive_runfiles = transitive_runfiles,
-    )
-
-    global_args = ctx.actions.args()
-    global_args.use_param_file("@%s")
-
-    # Direct actions also include the SDK and cache options in this group.
-    zig_lib_dir(
-        zigtoolchaininfo = zigtoolchaininfo,
-        args = global_args,
-    )
-    zig_cache_output(
-        zigtoolchaininfo = zigtoolchaininfo,
-        args = global_args,
-    )
-    zig_settings(
-        settings = settings,
-        args = global_args,
-    )
-    zig_target_platform(
-        target = zigtargetinfo,
-        args = global_args,
     )
 
     location_targets = ctx.attr.data
@@ -560,11 +535,14 @@ def zig_build_impl(ctx, *, kind):
             "zig_shared_library": ("build-lib", "shared_library", "ZigBuildSharedLib"),
         }[kind]
 
+    global_args = settings.args + zigtargetinfo.args
     args = ctx.actions.args()
     args.use_param_file("@%s")
-    if incremental_worker:
-        zig_settings(settings = settings, args = args)
-        zig_target_platform(target = zigtargetinfo, args = args)
+    if command in ("test", "test-obj"):
+        args.add("--test-no-exec")
+    if output_kind == "shared_library":
+        args.add("-dynamic")
+    args.add_all(global_args)
 
     # The C/C++ link gets compiler-rt from a separate object when enabled.
     if use_cc_common_link or ctx.attr.compiler_runtime == "exclude":
@@ -605,12 +583,17 @@ def zig_build_impl(ctx, *, kind):
 
     c_module = None
     if need_translate_c(root_module.cc_info) and _references_auto_c(root_module):
+        translate_c_args = None
+        if not translatectoolchaininfo:
+            translate_c_args = _direct_zig_args(ctx, zigtoolchaininfo)
+            translate_c_args.use_param_file("@%s")
+            translate_c_args.add_all(global_args)
         c_module = zig_translate_c(
             ctx = ctx,
             name = "c",
             canonical_name = "c",
             zigtoolchaininfo = zigtoolchaininfo,
-            global_args = global_args,
+            global_args = translate_c_args,
             cc_infos = [root_module.cc_info],
             translatectoolchaininfo = translatectoolchaininfo,
         )
@@ -722,7 +705,6 @@ def zig_build_impl(ctx, *, kind):
         zigtoolchaininfo = zigtoolchaininfo,
         command = command,
         output_kind = output_kind,
-        global_args = global_args,
         compiler_args = args,
         worker = struct(
             tool = incremental_worker,
@@ -747,6 +729,8 @@ def zig_build_impl(ctx, *, kind):
             # target, including Zig-specific symbols such as __zig_probe_stack.
             compiler_rt = ctx.actions.declare_file(ctx.label.name + ".compiler_rt" + _object_extension(zigtargetinfo.triple.os))
             runtime_args = ctx.actions.args()
+            runtime_args.use_param_file("@%s")
+            runtime_args.add_all(global_args)
             runtime_args.add_all(
                 root_module.cc_info.linking_context.linker_inputs,
                 map_each = zig_cdeps_libc_flags,
@@ -769,7 +753,6 @@ def zig_build_impl(ctx, *, kind):
                 zigtoolchaininfo = zigtoolchaininfo,
                 command = "build-obj",
                 output_kind = "object",
-                global_args = global_args,
                 compiler_args = runtime_args,
                 worker = None,
                 outputs = [compiler_rt],
