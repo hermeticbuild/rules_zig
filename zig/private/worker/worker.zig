@@ -839,11 +839,15 @@ pub fn main(init: std.process.Init) !u8 {
     var lib_path: ?[]const u8 = null;
     var persistent = false;
     var flags: std.array_list.Managed([]const u8) = .init(a);
-    for (args[2..]) |arg| {
+    var i: usize = 2;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
         if (std.mem.startsWith(u8, arg, "--zig=")) {
             zig_path = arg[6..];
-        } else if (std.mem.startsWith(u8, arg, "--lib=")) {
-            lib_path = arg[6..];
+        } else if (std.mem.eql(u8, arg, "--zig-lib-dir")) {
+            i += 1;
+            if (i == args.len) return error.MissingLibPath;
+            lib_path = args[i];
         } else if (std.mem.eql(u8, arg, "--persistent_worker")) {
             persistent = true;
         } else if (std.mem.cutPrefix(u8, arg, "--compilation-output=")) |path| {

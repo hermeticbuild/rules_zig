@@ -53,7 +53,8 @@ def _binary_test_impl(ctx):
     root_module_name = root_module_arg[2:].split("=", 1)[0]
     boundary = compile.argv.index("--")
     asserts.equals(env, "build-exe", compile.argv[1])
-    asserts.true(env, "-target" in compile.argv[5:boundary])
+    asserts.equals(env, "--zig-lib-dir", compile.argv[3])
+    asserts.true(env, "-target" in compile.argv[6:boundary])
     asserts.equals(env, "-femit-bin=" + executable.path, compile.argv[boundary - 1])
     asserts.equals(env, "name=" + root_module_name, compile.argv[boundary + 1])
     asserts.true(env, compile.argv[boundary + 2].startswith("input="))
@@ -141,7 +142,8 @@ def _cc_test_handoff_test_impl(ctx):
 
     for flag in ["--zig-lib-dir", "--cache-dir", "--global-cache-dir"]:
         asserts.equals(env, 1, len([arg for arg in runtime.argv if arg == flag]), "The runtime build needs exactly one {}.".format(flag))
-        asserts.false(env, flag in compile.argv, "The worker owns its SDK/cache paths; {} must not leak into the request.".format(flag))
+    for flag in ["--cache-dir", "--global-cache-dir"]:
+        asserts.false(env, flag in compile.argv, "The worker sets its own {}.".format(flag))
 
     objects = compile.outputs.to_list()
     asserts.equals(env, 1, len(objects))

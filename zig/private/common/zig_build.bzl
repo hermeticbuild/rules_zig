@@ -263,33 +263,27 @@ def _references_auto_c(root_module):
                 return True
     return False
 
-def _direct_zig_args(ctx, zigtoolchaininfo):
-    args = ctx.actions.args()
-    zig_lib_dir(zigtoolchaininfo = zigtoolchaininfo, args = args)
-    zig_cache_output(zigtoolchaininfo = zigtoolchaininfo, args = args)
-    return args
-
-def _compile(ctx, *, zigtoolchaininfo, command, compiler_args, worker, **kwargs):
+def _compile(ctx, *, compilation_name, zigtoolchaininfo, command, compiler_args, worker, **kwargs):
     """Register a compilation through the selected execution adapter."""
     executable = zig_toolchain_executable(zigtoolchaininfo)
 
-    if worker:
+    if worker != None:
         # The final delimiter separates the Zig arguments from worker metadata.
         # Prefixed records keep it unambiguous.
         compiler_args.add("--")
-        compiler_args.add(worker.name, format = "name=%s")
+        compiler_args.add(compilation_name, format = "name=%s")
         compiler_args.add_all(kwargs["inputs"], format_each = "input=%s")
         compiler_args.use_param_file("@%s", use_always = True)
         compiler_args.set_param_file_format("multiline")
         startup = ctx.actions.args()
         startup.add(executable, format = "--zig=%s")
-        startup.add(zig_toolchain_lib_dir(zigtoolchaininfo), format = "--lib=%s")
+        zig_lib_dir(zigtoolchaininfo = zigtoolchaininfo, args = startup)
 
         # Bazel retains a separate worker pool for each compilation action.
         # One output anchors the whole invocation, including auxiliary outputs.
         startup.add(kwargs["outputs"][0], format = "--compilation-output=%s")
         kwargs["tools"] = [executable, zig_toolchain_lib_dir(zigtoolchaininfo)]
-        executable = worker.tool
+        executable = worker
         kwargs["mnemonic"] = "ZigIncrementalCompile"
 
         # The adapter also supports one-shot execution. Let the selected
@@ -300,7 +294,10 @@ def _compile(ctx, *, zigtoolchaininfo, command, compiler_args, worker, **kwargs)
             "no-remote-cache": "1",
         }
     else:
-        startup = _direct_zig_args(ctx, zigtoolchaininfo)
+        startup = ctx.actions.args()
+        zig_lib_dir(zigtoolchaininfo = zigtoolchaininfo, args = startup)
+        zig_cache_output(zigtoolchaininfo = zigtoolchaininfo, args = startup)
+
     ctx.actions.run(
         executable = executable,
         arguments = [command, startup, compiler_args],
@@ -581,7 +578,9 @@ def zig_build_impl(ctx, *, kind):
     if need_translate_c(root_module.cc_info) and _references_auto_c(root_module):
         translate_c_args = None
         if not translatectoolchaininfo:
-            translate_c_args = _direct_zig_args(ctx, zigtoolchaininfo)
+            translate_c_args = ctx.actions.args()
+            zig_lib_dir(zigtoolchaininfo = zigtoolchaininfo, args = translate_c_args)
+            zig_cache_output(zigtoolchaininfo = zigtoolchaininfo, args = translate_c_args)
             translate_c_args.use_param_file("@%s")
             translate_c_args.add_all(global_args)
         c_module = zig_translate_c(
@@ -698,13 +697,11 @@ def zig_build_impl(ctx, *, kind):
 
     _compile(
         ctx,
+        compilation_name = root_module.canonical_name,
         zigtoolchaininfo = zigtoolchaininfo,
         command = command,
         compiler_args = args,
-        worker = struct(
-            tool = incremental_worker,
-            name = root_module.canonical_name,
-        ) if incremental_worker else None,
+        worker = incremental_worker,
         outputs = compile_outputs,
         inputs = inputs,
         mnemonic = mnemonic,
@@ -744,6 +741,7 @@ def zig_build_impl(ctx, *, kind):
 
             _compile(
                 ctx,
+                compilation_name = None,
                 zigtoolchaininfo = zigtoolchaininfo,
                 command = "build-obj",
                 compiler_args = runtime_args,
