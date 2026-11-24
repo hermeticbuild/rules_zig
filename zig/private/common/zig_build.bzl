@@ -378,7 +378,6 @@ def zig_build_impl(ctx, *, kind):
     transitive_data = []
     transitive_runfiles = []
 
-    outputs = []
     output_groups = {}
 
     direct_inputs = []
@@ -452,8 +451,8 @@ def zig_build_impl(ctx, *, kind):
         }
         output_groups["dsyms"] = depset([dsym_file])
 
-    # zig_binary, zig_test and zig_shared_library must produce their primary output, so emit_bin is not user configurable and considered true.
-    should_emit_bin = bin_output_is_executable or kind == "zig_shared_library" or ctx.attr.emit_bin
+    # Only zig_static_library can omit its primary output through emit_bin.
+    outputs = [bin_output] if bin_output else []
 
     compile_bin_output = bin_output
     if use_cc_common_link:
@@ -461,8 +460,7 @@ def zig_build_impl(ctx, *, kind):
         compile_bin_output = ctx.actions.declare_file(ctx.label.name + _object_extension(zigtargetinfo.triple.os))
 
     primary_emission = None
-    if should_emit_bin:
-        outputs.append(bin_output)
+    if bin_output:
         primary_emission = struct(
             kind = "bin",
             file = compile_bin_output,
@@ -826,7 +824,7 @@ def zig_build_impl(ctx, *, kind):
     providers.extend([
         DefaultInfo(
             executable = bin_output if bin_output_is_executable else None,
-            files = depset([bin_output] if should_emit_bin else []),
+            files = depset(outputs),
             runfiles = zig_create_runfiles(
                 ctx_runfiles = ctx.runfiles,
                 direct_data = direct_data,
