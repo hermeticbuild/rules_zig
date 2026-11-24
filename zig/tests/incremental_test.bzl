@@ -49,18 +49,14 @@ def _binary_test_impl(ctx):
     asserts.equals(env, [executable], target[DefaultInfo].files.to_list())
     asserts.equals(env, [executable], compile.outputs.to_list())
 
-    target_flag = compile.argv[compile.argv.index("-target") + 1]
     root_module_arg = [arg for arg in compile.argv if arg.startswith("-M")][0]
     root_module_name = root_module_arg[2:].split("=", 1)[0]
     boundary = compile.argv.index("--")
+    asserts.equals(env, "build-exe", compile.argv[1])
+    asserts.true(env, "-target" in compile.argv[5:boundary])
     asserts.equals(env, "-femit-bin=" + executable.path, compile.argv[boundary - 1])
-    asserts.equals(env, [
-        "command=build-exe",
-        "output-kind=executable",
-        "name=" + root_module_name,
-        "target=" + target_flag,
-    ], compile.argv[boundary + 1:boundary + 5])
-    asserts.true(env, compile.argv[boundary + 5].startswith("input="))
+    asserts.equals(env, "name=" + root_module_name, compile.argv[boundary + 1])
+    asserts.true(env, compile.argv[boundary + 2].startswith("input="))
 
     asserts.equals(env, ["--compilation-output=" + executable.path], [arg for arg in compile.argv if arg.startswith("--compilation-output=")])
 

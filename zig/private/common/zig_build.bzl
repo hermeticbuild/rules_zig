@@ -269,7 +269,7 @@ def _direct_zig_args(ctx, zigtoolchaininfo):
     zig_cache_output(zigtoolchaininfo = zigtoolchaininfo, args = args)
     return args
 
-def _compile(ctx, *, zigtoolchaininfo, command, output_kind, compiler_args, worker, **kwargs):
+def _compile(ctx, *, zigtoolchaininfo, command, compiler_args, worker, **kwargs):
     """Register a compilation through the selected execution adapter."""
     executable = zig_toolchain_executable(zigtoolchaininfo)
 
@@ -277,10 +277,7 @@ def _compile(ctx, *, zigtoolchaininfo, command, output_kind, compiler_args, work
         # The final delimiter separates the Zig arguments from worker metadata.
         # Prefixed records keep it unambiguous.
         compiler_args.add("--")
-        compiler_args.add(command, format = "command=%s")
-        compiler_args.add(output_kind, format = "output-kind=%s")
         compiler_args.add(worker.name, format = "name=%s")
-        compiler_args.add(worker.target, format = "target=%s")
         compiler_args.add_all(kwargs["inputs"], format_each = "input=%s")
         compiler_args.use_param_file("@%s", use_always = True)
         compiler_args.set_param_file_format("multiline")
@@ -293,7 +290,6 @@ def _compile(ctx, *, zigtoolchaininfo, command, output_kind, compiler_args, work
         startup.add(kwargs["outputs"][0], format = "--compilation-output=%s")
         kwargs["tools"] = [executable, zig_toolchain_lib_dir(zigtoolchaininfo)]
         executable = worker.tool
-        arguments = [startup, compiler_args]
         kwargs["mnemonic"] = "ZigIncrementalCompile"
 
         # The adapter also supports one-shot execution. Let the selected
@@ -304,10 +300,10 @@ def _compile(ctx, *, zigtoolchaininfo, command, output_kind, compiler_args, work
             "no-remote-cache": "1",
         }
     else:
-        arguments = [command, _direct_zig_args(ctx, zigtoolchaininfo), compiler_args]
+        startup = _direct_zig_args(ctx, zigtoolchaininfo)
     ctx.actions.run(
         executable = executable,
-        arguments = arguments,
+        arguments = [command, startup, compiler_args],
         **kwargs
     )
 
@@ -704,12 +700,10 @@ def zig_build_impl(ctx, *, kind):
         ctx,
         zigtoolchaininfo = zigtoolchaininfo,
         command = command,
-        output_kind = output_kind,
         compiler_args = args,
         worker = struct(
             tool = incremental_worker,
             name = root_module.canonical_name,
-            target = zigtargetinfo.target,
         ) if incremental_worker else None,
         outputs = compile_outputs,
         inputs = inputs,
@@ -752,7 +746,6 @@ def zig_build_impl(ctx, *, kind):
                 ctx,
                 zigtoolchaininfo = zigtoolchaininfo,
                 command = "build-obj",
-                output_kind = "object",
                 compiler_args = runtime_args,
                 worker = None,
                 outputs = [compiler_rt],
