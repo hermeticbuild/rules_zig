@@ -273,10 +273,15 @@ def _compile(ctx, *, zigtoolchaininfo, command, output_kind, global_args, compil
     executable = zig_toolchain_executable(zigtoolchaininfo)
 
     if worker:
-        # Metadata, output paths, ordered compiler arguments, then a framed
-        # input list. Prefixing input paths makes the final delimiter unambiguous,
-        # even when a compiler operand or an input file is named "--".
+        # The final delimiter separates the Zig arguments from worker metadata.
+        # The emission count identifies the rule-generated flags immediately
+        # before it, and prefixed input records keep it unambiguous.
         compiler_args.add("--")
+        compiler_args.add(command, format = "command=%s")
+        compiler_args.add(output_kind, format = "output-kind=%s")
+        compiler_args.add(worker.name, format = "name=%s")
+        compiler_args.add(worker.target, format = "target=%s")
+        compiler_args.add(worker.emit_arg_count, format = "emit-arg-count=%s")
         compiler_args.add_all(kwargs["inputs"], format_each = "input=%s")
         compiler_args.use_param_file("@%s", use_always = True)
         compiler_args.set_param_file_format("multiline")
@@ -288,7 +293,7 @@ def _compile(ctx, *, zigtoolchaininfo, command, output_kind, global_args, compil
         # One output anchors the whole invocation, including auxiliary outputs.
         startup.add(kwargs["outputs"][0], format = "--compilation-output=%s")
         kwargs["tools"] = [executable, zig_toolchain_lib_dir(zigtoolchaininfo)]
-        executable = worker
+        executable = worker.tool
         arguments = [startup, compiler_args]
         kwargs["mnemonic"] = "ZigIncrementalCompile"
 
@@ -560,14 +565,6 @@ def zig_build_impl(ctx, *, kind):
     args = ctx.actions.args()
     args.use_param_file("@%s")
     if incremental_worker:
-        args.add(json.encode({
-            "command": command,
-            "output_kind": output_kind,
-            "name": root_module.canonical_name,
-            "target": zigtargetinfo.target,
-            "outputs": [emission.kind for emission in emissions],
-        }))
-        args.add_all(compile_outputs)
         zig_settings(settings = settings, args = args)
         zig_target_platform(target = zigtargetinfo, args = args)
 
@@ -702,15 +699,6 @@ def zig_build_impl(ctx, *, kind):
     if not use_cc_common_link and kind != "zig_static_library":
         args.add_all(linkopts)
 
-    # The worker already has the declared outputs in its request header.
-    if not incremental_worker:
-        for emission in auxiliary_emissions:
-            args.add(emission.file, format = emission.flag)
-        if primary_emission:
-            args.add(primary_emission.file, format = primary_emission.flag)
-        else:
-            args.add("-fno-emit-bin")
-
     if output_kind == "shared_library":
         # By default, Zig build-lib -dynamic sets the SONAME of the shared
         # library based on the name of its main module.
@@ -722,6 +710,15 @@ def zig_build_impl(ctx, *, kind):
         # Here we explicitly set the SONAME to match the output filename.
         args.add(bin_output_name, format = "-fsoname=%s")
 
+    # Direct Zig uses these paths. The worker decodes this final block to
+    # publish the same outputs from its private compiler cache.
+    for emission in auxiliary_emissions:
+        args.add(emission.file, format = emission.flag)
+    if primary_emission:
+        args.add(primary_emission.file, format = primary_emission.flag)
+    else:
+        args.add("-fno-emit-bin")
+
     _compile(
         ctx,
         zigtoolchaininfo = zigtoolchaininfo,
@@ -729,7 +726,12 @@ def zig_build_impl(ctx, *, kind):
         output_kind = output_kind,
         global_args = global_args,
         compiler_args = args,
-        worker = incremental_worker,
+        worker = struct(
+            tool = incremental_worker,
+            name = root_module.canonical_name,
+            target = zigtargetinfo.target,
+            emit_arg_count = len(auxiliary_emissions) + 1,
+        ) if incremental_worker else None,
         outputs = compile_outputs,
         inputs = inputs,
         mnemonic = mnemonic,

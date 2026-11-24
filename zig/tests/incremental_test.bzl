@@ -45,12 +45,22 @@ def _binary_test_impl(ctx):
     target = analysistest.target_under_test(env)
     compile = assert_find_action(env, "ZigIncrementalCompile")
 
-    metadata = json.decode([arg for arg in compile.argv if arg.startswith("{")][0])
-    asserts.equals(env, compile.argv[compile.argv.index("-target") + 1], metadata.get("target"))
-
     executable = target[DefaultInfo].files_to_run.executable
     asserts.equals(env, [executable], target[DefaultInfo].files.to_list())
     asserts.equals(env, [executable], compile.outputs.to_list())
+
+    target_flag = compile.argv[compile.argv.index("-target") + 1]
+    root_module_arg = [arg for arg in compile.argv if arg.startswith("-M")][0]
+    root_module_name = root_module_arg[2:].split("=", 1)[0]
+    boundary = compile.argv.index("--")
+    asserts.equals(env, "-femit-bin=" + executable.path, compile.argv[boundary - 1])
+    asserts.equals(env, [
+        "command=build-exe",
+        "output-kind=executable",
+        "name=" + root_module_name,
+        "target=" + target_flag,
+        "emit-arg-count=1",
+    ], compile.argv[boundary + 1:boundary + 6])
 
     asserts.equals(env, ["--compilation-output=" + executable.path], [arg for arg in compile.argv if arg.startswith("--compilation-output=")])
 
@@ -233,6 +243,14 @@ def _auxiliary_only_test_impl(ctx):
     asserts.equals(env, 1, len(llvm_bc))
     asserts.equals(env, 3, len(compile.outputs.to_list()))
     asserts.equals(env, ["--compilation-output=" + compile.outputs.to_list()[0].path], [arg for arg in compile.argv if arg.startswith("--compilation-output=")])
+    boundary = compile.argv.index("--")
+    asserts.equals(env, [
+        "-femit-asm=" + asm[0].path,
+        "-femit-llvm-ir=" + llvm_ir[0].path,
+        "-femit-llvm-bc=" + llvm_bc[0].path,
+        "-fno-emit-bin",
+    ], compile.argv[boundary - 4:boundary])
+    asserts.equals(env, "emit-arg-count=4", compile.argv[boundary + 5])
     for file in asm + llvm_ir + llvm_bc:
         asserts.true(env, file in compile.outputs.to_list(), "The worker must produce the requested auxiliary outputs without an archive.")
 

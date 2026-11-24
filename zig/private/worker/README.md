@@ -19,9 +19,13 @@ key, each with its own compiler state. [Bazel's worker key and instance limits][
 
 ## Updating a compiler session
 
-The action supplies the input paths, output metadata, and ordered Zig
-arguments. Each session has a private execroot for staged inputs and an
-in-memory map of their Bazel digests, keyed by path.
+The action supplies ordered Zig arguments followed by `--` and worker
+records. The records include the number of rule-generated output flags just
+before `--`, so the adapter can read their destinations and request cached
+outputs from Zig. The other compiler arguments pass through in order.
+
+Each session has a private execroot for staged inputs and an in-memory map of
+their Bazel digests, keyed by path.
 
 1. **Check for reuse.** Start a new session if the compiler arguments or
    output metadata changed. A change to the set of staged paths also starts a
