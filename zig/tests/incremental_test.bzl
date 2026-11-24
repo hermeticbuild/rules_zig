@@ -257,17 +257,6 @@ def _auxiliary_only_test_impl(ctx):
 
 _auxiliary_only_test = analysistest.make(_auxiliary_only_test_impl, config_settings = _SETTINGS)
 
-def _emission_linkopt_test_impl(ctx):
-    env = analysistest.begin(ctx)
-    asserts.expect_failure(env, "Remove '-femit-asm=unexpected.s' from linkopts")
-    return analysistest.end(env)
-
-_emission_linkopt_test = analysistest.make(
-    _emission_linkopt_test_impl,
-    config_settings = _SETTINGS,
-    expect_failure = True,
-)
-
 def _unsupported_version_test_impl(ctx):
     env = analysistest.begin(ctx)
     asserts.expect_failure(env, "requires Zig 0.17.x")
@@ -339,7 +328,6 @@ def incremental_test_suite(name):
         # Test auxiliary output ownership with a separate link and without a binary.
         partial.make(_auxiliary_outputs_test, target_under_test = "//zig/tests/incremental:auxiliary_outputs", size = "small"),
         partial.make(_auxiliary_only_test, target_under_test = "//zig/tests/incremental:auxiliary_only", size = "small"),
-        partial.make(_emission_linkopt_test, target_under_test = "//zig/tests/incremental:emission_linkopt", size = "small"),
         # Test deliberate configuration restrictions.
         partial.make(_unsupported_version_test, target_under_test = "//zig/tests/incremental:binary", size = "small"),
         partial.make(_unsupported_arch_test, target_under_test = "//zig/tests/incremental:binary", size = "small"),

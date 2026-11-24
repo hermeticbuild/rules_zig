@@ -695,11 +695,6 @@ def zig_build_impl(ctx, *, kind):
     # Pass linkopts to the final linker. Static archives have no final link.
     # The C/C++ path passes the same linkopts to cc_common.link below.
     if not use_cc_common_link and kind != "zig_static_library":
-        if incremental_worker:
-            # The worker reads the trailing emission flags as declared outputs.
-            for flag in linkopts:
-                if flag.startswith("-femit-") or flag.startswith("-fno-emit-"):
-                    fail("Incremental compilation reserves Zig emission flags. Remove '{}' from linkopts and use the emit attributes.".format(flag))
         args.add_all(linkopts)
 
     if output_kind == "shared_library":

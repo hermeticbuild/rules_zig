@@ -86,11 +86,3 @@ zig_binary(
     tags = ["manual"],
     visibility = ["//zig/tests:__pkg__"],
 )
-
-zig_binary(
-    name = "emission_linkopt",
-    linkopts = ["-femit-asm=unexpected.s"],
-    main = "main.zig",
-    tags = ["manual"],
-    visibility = ["//zig/tests:__pkg__"],
-)
