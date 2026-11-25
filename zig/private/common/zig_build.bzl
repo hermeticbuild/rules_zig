@@ -268,6 +268,24 @@ def _references_auto_c(root_module):
                 return True
     return False
 
+def _common_zig_args(*, zigtoolchaininfo, settings, zigtargetinfo, args):
+    zig_lib_dir(
+        zigtoolchaininfo = zigtoolchaininfo,
+        args = args,
+    )
+    zig_cache_output(
+        zigtoolchaininfo = zigtoolchaininfo,
+        args = args,
+    )
+    zig_settings(
+        settings = settings,
+        args = args,
+    )
+    zig_target_platform(
+        target = zigtargetinfo,
+        args = args,
+    )
+
 def _compile(ctx, *, compilation_name, zigtoolchaininfo, command, compiler_args, worker, **kwargs):
     """Register a compilation through the selected execution adapter."""
     executable = zig_toolchain_executable(zigtoolchaininfo)
@@ -534,21 +552,10 @@ def zig_build_impl(ctx, *, kind):
     args = ctx.actions.args()
     args.use_param_file("@%s")
 
-    zig_lib_dir(
+    _common_zig_args(
         zigtoolchaininfo = zigtoolchaininfo,
-        args = args,
-    )
-    zig_cache_output(
-        zigtoolchaininfo = zigtoolchaininfo,
-        args = args,
-    )
-
-    zig_settings(
         settings = settings,
-        args = args,
-    )
-    zig_target_platform(
-        target = zigtargetinfo,
+        zigtargetinfo = zigtargetinfo,
         args = args,
     )
 
@@ -602,20 +609,10 @@ def zig_build_impl(ctx, *, kind):
             translate_c_args = ctx.actions.args()
             translate_c_args.use_param_file("@%s")
 
-            zig_lib_dir(
+            _common_zig_args(
                 zigtoolchaininfo = zigtoolchaininfo,
-                args = translate_c_args,
-            )
-            zig_cache_output(
-                zigtoolchaininfo = zigtoolchaininfo,
-                args = translate_c_args,
-            )
-            zig_settings(
                 settings = settings,
-                args = translate_c_args,
-            )
-            zig_target_platform(
-                target = zigtargetinfo,
+                zigtargetinfo = zigtargetinfo,
                 args = translate_c_args,
             )
 
@@ -759,20 +756,10 @@ def zig_build_impl(ctx, *, kind):
             runtime_args = ctx.actions.args()
             runtime_args.use_param_file("@%s")
 
-            zig_lib_dir(
+            _common_zig_args(
                 zigtoolchaininfo = zigtoolchaininfo,
-                args = runtime_args,
-            )
-            zig_cache_output(
-                zigtoolchaininfo = zigtoolchaininfo,
-                args = runtime_args,
-            )
-            zig_settings(
                 settings = settings,
-                args = runtime_args,
-            )
-            zig_target_platform(
-                target = zigtargetinfo,
+                zigtargetinfo = zigtargetinfo,
                 args = runtime_args,
             )
             runtime_args.add_all(
