@@ -32,6 +32,7 @@ load(
 load("//zig/private/common:linker_script.bzl", "zig_linker_script")
 load("//zig/private/common:location_expansion.bzl", "location_expansion")
 load("//zig/private/common:semver.bzl", "semver")
+load("//zig/private/common:thin_lto.bzl", "zig_thin_lto_prepare", "zig_thin_lto_validate")
 load("//zig/private/common:translate_c.bzl", "zig_translate_c")
 load("//zig/private/common:zig_cache.bzl", "zig_cache_output")
 load("//zig/private/common:zig_lib_dir.bzl", "zig_lib_dir")
@@ -354,9 +355,24 @@ def zig_build_impl(ctx, *, kind):
     translatectoolchaininfo = translate_c_toolchain.translatectoolchaininfo if translate_c_toolchain else None
 
     settings = ctx.attr._settings[ZigSettingsInfo]
-    use_cc_common_link = settings.use_cc_common_link and kind != "zig_static_library"
+    cc_toolchain, feature_configuration = find_cc_toolchain(
+        ctx,
+        mandatory = settings.use_cc_common_link and kind != "zig_static_library",
+        exec_group = "cpp_link",
+    )
+    thin_lto = cc_toolchain != None and cc_common.is_enabled(
+        feature_configuration = feature_configuration,
+        feature_name = "thin_lto",
+    )
+    if not thin_lto and "thin_lto" in ctx.features and "thin_lto" not in ctx.disabled_features:
+        fail("Zig ThinLTO requires a C/C++ toolchain that enables the thin_lto feature.")
+    use_cc_common_link = (settings.use_cc_common_link or thin_lto) and kind != "zig_static_library"
+    build_object = use_cc_common_link or thin_lto
+
     incremental_worker = None
     if settings.incremental:
+        if thin_lto:
+            fail("ThinLTO is incompatible with incremental Zig compilation.")
         if zigtoolchaininfo.mode != "file" or zigtoolchaininfo.zig_exe.file.basename.endswith(".exe"):
             fail("Incremental compilation requires a hermetic Zig toolchain with a POSIX worker adapter.")
         version = zigtoolchaininfo.zig_version
@@ -370,15 +386,8 @@ def zig_build_impl(ctx, *, kind):
         if ctx.attr.csrcs or ctx.attr.copts or ctx.file.linker_script:
             fail("Incremental compilation requires no C sources/compiler options or linker scripts.")
 
-    cc_toolchain = None
-    feature_configuration = None
     generate_dsym_file = False
     if use_cc_common_link:
-        cc_toolchain, feature_configuration = find_cc_toolchain(
-            ctx,
-            mandatory = True,
-            exec_group = "cpp_link",
-        )
         generate_dsym_file = cc_common.is_enabled(
             feature_configuration = feature_configuration,
             feature_name = "generate_dsym_file",
@@ -446,11 +455,16 @@ def zig_build_impl(ctx, *, kind):
         }
         output_groups["dsyms"] = depset([dsym_file])
 
+    if thin_lto and use_cc_common_link:
+        cc_link_kwargs["test_only_target"] = kind == "zig_test" or cc_helper.is_test_target(ctx)
+
     # Only zig_static_library can omit its primary output through emit_bin.
     outputs = [bin_output] if bin_output else []
 
     compile_bin_output = bin_output
-    if use_cc_common_link:
+    if thin_lto:
+        compile_bin_output = ctx.actions.declare_file(ctx.label.name + ".raw.bc")
+    elif use_cc_common_link:
         # Zig produces the object; the separate C/C++ link produces bin_output.
         compile_bin_output = ctx.actions.declare_file(ctx.label.name + _object_extension(zigtargetinfo.triple.os))
 
@@ -459,7 +473,7 @@ def zig_build_impl(ctx, *, kind):
         primary_emission = struct(
             kind = "bin",
             file = compile_bin_output,
-            flag = "-femit-bin=%s",
+            flag = "--verbose-llvm-bc=%s" if thin_lto else "-femit-bin=%s",
         )
 
     auxiliary_emissions = []
@@ -532,13 +546,25 @@ def zig_build_impl(ctx, *, kind):
             import_names = import_names,
         )
 
+    if thin_lto:
+        if not bin_output:
+            fail("ThinLTO requires emit_bin=True for a Zig static library.")
+        zig_thin_lto_validate(
+            ctx,
+            zigtoolchaininfo = zigtoolchaininfo,
+            target = zigtargetinfo,
+            settings = settings,
+            root_module = root_module,
+        )
+
     # Assemble and register the primary Zig compilation.
-    if use_cc_common_link:
-        if kind == "zig_static_library":
+    if build_object:
+        if use_cc_common_link and kind == "zig_static_library":
             fail("Internal error: zig_static_library cannot use cc_common.link.")
         command, output_kind, mnemonic = {
             "zig_binary": ("build-obj", "object", "ZigBuildObj"),
             "zig_test": ("test-obj", "object", "ZigBuildTest"),
+            "zig_static_library": ("build-obj", "object", "ZigBuildObj"),
             "zig_shared_library": ("build-obj", "object", "ZigBuildObj"),
         }[kind]
     else:
@@ -559,13 +585,24 @@ def zig_build_impl(ctx, *, kind):
         args = args,
     )
 
+    if thin_lto:
+        # Zig 0.17 emits raw bitcode as a diagnostic dump. Disable its regular
+        # object output and leave LLVM optimization to the C/C++ toolchain.
+        mnemonic = "ZigEmitBitcode"
+        args.add_all([
+            "-fllvm",
+            "-fno-libllvm",
+            "-fno-lld",
+            "-fno-emit-bin",
+        ])
+
     if command in ("test", "test-obj"):
         args.add("--test-no-exec")
     if output_kind == "shared_library":
         args.add("-dynamic")
 
     # The C/C++ link gets compiler-rt from a separate object when enabled.
-    if use_cc_common_link or ctx.attr.compiler_runtime == "exclude":
+    if build_object or ctx.attr.compiler_runtime == "exclude":
         args.add("-fno-compiler-rt")
     elif ctx.attr.compiler_runtime == "include":
         args.add("-fcompiler-rt")
@@ -659,11 +696,11 @@ def zig_build_impl(ctx, *, kind):
 
             transitive_inputs.append(depset(cdeps_inputs))
 
-    if use_cc_common_link:
+    if build_object:
         # The C/C++ toolchain can select PIC inputs even for an executable.
         args.add("-fPIC")
 
-    if command == "test-obj":
+    if command == "test-obj" and not thin_lto:
         # Zig 0.16's LLVM StackProtector pass crashes for test-obj when
         # compiler-rt provides __stack_chk_fail as an alias.
         # See: https://codeberg.org/ziglang/zig/issues/31702
@@ -743,10 +780,23 @@ def zig_build_impl(ctx, *, kind):
     )
 
     # Perform any separate C/C++ link and prepare library link metadata.
-    if use_cc_common_link:
-        is_shared_library = kind == "zig_shared_library"
-        objects = [compile_bin_output]
-        if ctx.attr.compiler_runtime != "exclude":
+    compilation_outputs = None
+    if build_object:
+        object_file = compile_bin_output
+        compilation_kwargs = {}
+        if thin_lto:
+            object_file, lto_context = zig_thin_lto_prepare(
+                ctx,
+                raw = compile_bin_output,
+                cc_toolchain = cc_toolchain,
+                feature_configuration = feature_configuration,
+                target = zigtargetinfo,
+                mode = settings.mode,
+            )
+            compilation_kwargs["lto_compilation_context"] = lto_context
+
+        objects = [object_file]
+        if ctx.attr.compiler_runtime == "include" or (use_cc_common_link and ctx.attr.compiler_runtime == "default"):
             # Zig 0.17 omits compiler-rt exports from test-obj. Zig 0.16 can
             # crash when LLVM emits stack protection and compiler-rt into the
             # same object. Build the runtime separately with the same SDK and
@@ -796,17 +846,26 @@ def zig_build_impl(ctx, *, kind):
 
         # The same PIC objects can be used for either C/C++ link mode.
         objects = depset(objects)
-        link_outputs = cc_common_link(
+        compilation_outputs = cc_common.create_compilation_outputs(
+            objects = objects,
+            pic_objects = objects,
+            **compilation_kwargs
+        )
+
+    if use_cc_common_link:
+        is_shared_library = kind == "zig_shared_library"
+
+        # ThinLTO requires the rules_zig allowlist entry. Keep the main_output
+        # shim for ordinary links on versions that predate that entry.
+        link = cc_common.link if thin_lto else cc_common_link
+        link_outputs = link(
             actions = ctx.actions,
             feature_configuration = feature_configuration,
             cc_toolchain = cc_toolchain,
             name = ctx.label.name,
             output_type = "dynamic_library" if is_shared_library else "executable",
             main_output = bin_output,
-            compilation_outputs = cc_common.create_compilation_outputs(
-                objects = objects,
-                pic_objects = objects,
-            ),
+            compilation_outputs = compilation_outputs,
             linking_contexts = [root_module.cc_info.linking_context],
             user_link_flags = linkopts,
             **cc_link_kwargs
@@ -814,6 +873,21 @@ def zig_build_impl(ctx, *, kind):
         if is_shared_library:
             exported_library_to_link = link_outputs.library_to_link
 
+    elif thin_lto:
+        # Preserve the archive's member objects and their LTO context so a
+        # downstream C/C++ link can schedule backends for those members.
+        _, link_outputs = cc_common.create_linking_context_from_compilation_outputs(
+            actions = ctx.actions,
+            name = ctx.label.name,
+            feature_configuration = feature_configuration,
+            cc_toolchain = cc_toolchain,
+            compilation_outputs = compilation_outputs,
+            disallow_dynamic_library = True,
+        )
+        exported_library_to_link = link_outputs.library_to_link
+        archive = exported_library_to_link.static_library or exported_library_to_link.pic_static_library
+        if archive != bin_output:
+            ctx.actions.symlink(output = bin_output, target_file = archive)
     elif kind == "zig_static_library":
         if ctx.attr.emit_bin:
             cc_toolchain, feature_configuration = find_cc_toolchain(ctx, mandatory = False)

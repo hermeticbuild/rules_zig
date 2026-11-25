@@ -1,0 +1,11 @@
+import %workspace%/../../.bazelrc.common
+
+build -c opt
+build --strip=never
+
+build:native --features=-thin_lto
+
+build:thin_lto --features=thin_lto
+# Require a per-link index for the static archive members in this test.
+build:thin_lto --features=-thin_lto_all_linkstatic_use_shared_nonlto_backends
+build:thin_lto --features=-thin_lto_linkstatic_tests_use_shared_nonlto_backends
