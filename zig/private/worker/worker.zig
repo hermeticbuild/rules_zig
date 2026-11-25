@@ -425,7 +425,7 @@ const Worker = struct {
     zig_input: []const u8,
     lib_input: []const u8,
     root: []const u8,
-    cache_only: bool,
+    incremental: bool,
     session: ?*Session = null,
     generation: usize = 0,
     message_buffer: std.ArrayList(u8) = .empty,
@@ -555,23 +555,23 @@ const Worker = struct {
         if (request.requestId != 0 or request.cancel or request.sandboxDir.len != 0) {
             return error.OnlySingleplexSupported;
         }
-        if (self.cache_only) {
-            return self.compileCacheOnly(request, a, diagnostics);
+        if (!self.incremental) {
+            return self.compileOnce(request, a, diagnostics);
         }
-        return self.compile(request, a, diagnostics) catch |err| switch (err) {
+        return self.compileIncremental(request, a, diagnostics) catch |err| switch (err) {
             error.EndOfStream, error.ReadFailed, error.WriteFailed => {
                 // Readers erase Canceled to ReadFailed. Termination must not
                 // be mistaken for a dead compiler and start a replacement.
                 if (Shutdown.requested.load(.monotonic)) return error.Canceled;
                 std.log.warn("zig-worker compiler transport failed ({t}); restarting", .{err});
                 self.reset();
-                return self.compile(request, a, diagnostics);
+                return self.compileIncremental(request, a, diagnostics);
             },
             else => return err,
         };
     }
 
-    fn compileCacheOnly(self: *Worker, request: Request, a: Allocator, diagnostics: *Io.Writer) !u8 {
+    fn compileOnce(self: *Worker, request: Request, a: Allocator, diagnostics: *Io.Writer) !u8 {
         const arguments = try compilerArguments(request.arguments);
         const cache = try std.fs.path.join(a, &.{ self.root, "cache" });
         const global_cache = try std.fs.path.join(a, &.{ self.root, "global-cache" });
@@ -601,7 +601,7 @@ const Worker = struct {
         };
     }
 
-    fn compile(self: *Worker, request: Request, a: Allocator, diagnostics: *Io.Writer) !u8 {
+    fn compileIncremental(self: *Worker, request: Request, a: Allocator, diagnostics: *Io.Writer) !u8 {
         const compilation = try Compilation.parse(a, self.command, request.arguments);
         try compilation.checkConfiguration(diagnostics);
         const arguments = compilation.arguments;
@@ -888,7 +888,7 @@ pub fn main(init: std.process.Init) !u8 {
     var zig_path: ?[]const u8 = null;
     var lib_path: ?[]const u8 = null;
     var persistent = false;
-    var cache_only = false;
+    var incremental = false;
     var flags: std.array_list.Managed([]const u8) = .init(a);
     var i: usize = 2;
     while (i < args.len) : (i += 1) {
@@ -901,8 +901,8 @@ pub fn main(init: std.process.Init) !u8 {
             lib_path = args[i];
         } else if (std.mem.eql(u8, arg, "--persistent_worker")) {
             persistent = true;
-        } else if (std.mem.eql(u8, arg, "--cache-only")) {
-            cache_only = true;
+        } else if (std.mem.eql(u8, arg, "--incremental")) {
+            incremental = true;
         } else if (std.mem.cutPrefix(u8, arg, "--compilation-output=")) |path| {
             // Routing identity for Bazel's worker pool, not a compiler option.
             try safePath(path, false);
@@ -937,7 +937,7 @@ pub fn main(init: std.process.Init) !u8 {
         .zig_input = zig_path.?,
         .lib_input = lib_path.?,
         .root = root,
-        .cache_only = cache_only,
+        .incremental = incremental,
     };
     defer {
         worker.deinit();

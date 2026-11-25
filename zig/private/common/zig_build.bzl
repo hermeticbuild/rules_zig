@@ -317,10 +317,10 @@ def _compile(ctx, *, compilation_name, zigtoolchaininfo, command, compiler_args,
 
             # One output anchors the whole incremental invocation, including auxiliary outputs.
             startup.add(kwargs["outputs"][0], format = "--compilation-output=%s")
+            startup.add("--incremental")
             kwargs["mnemonic"] = "ZigIncrementalCompile"
             kwargs["execution_requirements"]["no-remote-cache"] = "1"
         else:
-            startup.add("--cache-only")
             kwargs["mnemonic"] = "ZigWorkerCompile"
     ctx.actions.run(
         executable = executable,

@@ -42,14 +42,14 @@ _disabled_test = analysistest.make(
     config_settings = _SETTINGS | {_INCREMENTAL: False},
 )
 
-def _cache_worker_test_impl(ctx):
+def _worker_test_impl(ctx):
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
     compile = assert_find_action(env, "ZigWorkerCompile")
 
     executable = target[DefaultInfo].files_to_run.executable
     asserts.equals(env, [executable], compile.outputs.to_list())
-    asserts.true(env, "--cache-only" in compile.argv)
+    asserts.false(env, "--incremental" in compile.argv)
     asserts.equals(env, "-femit-bin=" + executable.path, compile.argv[-1])
     asserts.equals(env, [], [
         arg
@@ -59,8 +59,8 @@ def _cache_worker_test_impl(ctx):
 
     return analysistest.end(env)
 
-_cache_worker_test = analysistest.make(
-    _cache_worker_test_impl,
+_worker_test = analysistest.make(
+    _worker_test_impl,
     config_settings = _SETTINGS | {_INCREMENTAL: False, _USE_WORKER: True},
 )
 
@@ -78,8 +78,9 @@ def _binary_test_impl(ctx):
     boundary = compile.argv.index("--")
     asserts.equals(env, "build-exe", compile.argv[1])
     asserts.equals(env, "--zig-lib-dir", compile.argv[3])
-    asserts.equals(env, ["--zig-lib-dir", "--cache-dir", "--global-cache-dir"], compile.argv[6:12:2])
-    asserts.true(env, "-target" in compile.argv[12:boundary])
+    asserts.equals(env, "--incremental", compile.argv[6])
+    asserts.equals(env, ["--zig-lib-dir", "--cache-dir", "--global-cache-dir"], compile.argv[7:13:2])
+    asserts.true(env, "-target" in compile.argv[13:boundary])
     asserts.equals(env, "-femit-bin=" + executable.path, compile.argv[boundary - 1])
     asserts.equals(env, "name=" + root_module_name, compile.argv[boundary + 1])
     asserts.true(env, compile.argv[boundary + 2].startswith("input="))
@@ -342,7 +343,7 @@ def incremental_test_suite(name):
         name,
         # Test action selection and primary output ownership.
         partial.make(_disabled_test, target_under_test = "//zig/tests/incremental:binary", size = "small"),
-        partial.make(_cache_worker_test, target_under_test = "//zig/tests/incremental:binary", size = "small"),
+        partial.make(_worker_test, target_under_test = "//zig/tests/incremental:binary", size = "small"),
         partial.make(_binary_test, target_under_test = "//zig/tests/incremental:binary", size = "small"),
         partial.make(_test_binary_test, target_under_test = "//zig/tests/incremental:test_binary", size = "small"),
         partial.make(_static_library_test, target_under_test = "//zig/tests/incremental:static_library", size = "small"),
