@@ -40,21 +40,6 @@ def zig_thin_lto_validate(ctx, *, zigtoolchaininfo, target, settings, root_modul
         if option in ("-fno-llvm", "-flibllvm", "-flld", "-fno-PIC", "-target", "-mcpu") or option.startswith(("-ofmt=", "-flto", "-femit-", "-fno-emit-", "-mcpu=", "-O", "--verbose-llvm-bc")):
             fail("ThinLTO cannot be combined with Zig option '{}'.".format(option))
 
-def zig_thin_lto_emit_args(*, args, output):
-    """Emit the frontend module through the Zig 0.17 bitcode dump interface.
-
-    Args:
-        args: Zig compiler arguments to extend.
-        output: Declared raw bitcode output.
-    """
-    args.add_all([
-        "-fllvm",
-        "-fno-libllvm",
-        "-fno-lld",
-        "-fno-emit-bin",
-    ])
-    args.add(output, format = "--verbose-llvm-bc=%s")
-
 def _check_target(target, command_line):
     # Clang can retarget an LLVM module. Require an explicit compatible triple
     # before allowing equivalent spellings to override the module triple.

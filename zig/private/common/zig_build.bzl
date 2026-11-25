@@ -32,7 +32,7 @@ load(
 load("//zig/private/common:linker_script.bzl", "zig_linker_script")
 load("//zig/private/common:location_expansion.bzl", "location_expansion")
 load("//zig/private/common:semver.bzl", "semver")
-load("//zig/private/common:thin_lto.bzl", "zig_thin_lto_emit_args", "zig_thin_lto_prepare", "zig_thin_lto_validate")
+load("//zig/private/common:thin_lto.bzl", "zig_thin_lto_prepare", "zig_thin_lto_validate")
 load("//zig/private/common:translate_c.bzl", "zig_translate_c")
 load("//zig/private/common:zig_cache.bzl", "zig_cache_output")
 load("//zig/private/common:zig_lib_dir.bzl", "zig_lib_dir")
@@ -473,7 +473,7 @@ def zig_build_impl(ctx, *, kind):
         primary_emission = struct(
             kind = "bin",
             file = compile_bin_output,
-            flag = "-femit-bin=%s",
+            flag = "--verbose-llvm-bc=%s" if thin_lto else "-femit-bin=%s",
         )
 
     auxiliary_emissions = []
@@ -584,6 +584,17 @@ def zig_build_impl(ctx, *, kind):
         zigtargetinfo = zigtargetinfo,
         args = args,
     )
+
+    if thin_lto:
+        # Zig 0.17 emits raw bitcode as a diagnostic dump. Disable its regular
+        # object output and leave LLVM optimization to the C/C++ toolchain.
+        mnemonic = "ZigEmitBitcode"
+        args.add_all([
+            "-fllvm",
+            "-fno-libllvm",
+            "-fno-lld",
+            "-fno-emit-bin",
+        ])
 
     if command in ("test", "test-obj"):
         args.add("--test-no-exec")
@@ -745,18 +756,14 @@ def zig_build_impl(ctx, *, kind):
         # Here we explicitly set the SONAME to match the output filename.
         args.add(bin_output_name, format = "-fsoname=%s")
 
-    if thin_lto:
-        zig_thin_lto_emit_args(args = args, output = compile_bin_output)
-        mnemonic = "ZigEmitBitcode"
+    # Direct Zig uses these paths. The worker decodes this final block to
+    # publish the same outputs from its private compiler cache.
+    for emission in auxiliary_emissions:
+        args.add(emission.file, format = emission.flag)
+    if primary_emission:
+        args.add(primary_emission.file, format = primary_emission.flag)
     else:
-        # Direct Zig uses these paths. The worker decodes this final block to
-        # publish the same outputs from its private compiler cache.
-        for emission in auxiliary_emissions:
-            args.add(emission.file, format = emission.flag)
-        if primary_emission:
-            args.add(primary_emission.file, format = primary_emission.flag)
-        else:
-            args.add("-fno-emit-bin")
+        args.add("-fno-emit-bin")
 
     _compile(
         ctx,
