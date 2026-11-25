@@ -56,6 +56,26 @@ def _archive_test_impl(ctx):
 
 _archive_test = analysistest.make(_archive_test_impl, config_settings = _SETTINGS)
 
+def _archive_consumer_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    index = assert_find_action(env, "CppLTOIndexing")
+    if index:
+        indexing_path = target.label.package + "/library.indexing.o"
+        zig_indexing_files = [file for file in index.inputs.to_list() if file.short_path == indexing_path]
+        asserts.equals(env, 1, len(zig_indexing_files), "The consumer must index the Zig archive member.")
+        if zig_indexing_files:
+            zig_object_path = zig_indexing_files[0].path.removesuffix(".indexing.o") + ".o"
+            zig_backends = [
+                action
+                for action in analysistest.target_actions(env)
+                if action.mnemonic == "CcLtoBackendCompile" and zig_object_path in action.argv
+            ]
+            asserts.equals(env, 1, len(zig_backends), "The consumer must compile a backend for the full Zig object.")
+    return analysistest.end(env)
+
+_archive_consumer_test = analysistest.make(_archive_consumer_test_impl, config_settings = _SETTINGS)
+
 def _disabled_test_impl(ctx):
     env = analysistest.begin(ctx)
     assert_find_action(env, "ZigBuildExe")
@@ -91,6 +111,7 @@ def thin_lto_test_suite(name):
     for suffix, test_rule, target in [
         ("binary", _binary_test, "simple-binary:binary"),
         ("archive", _archive_test, "simple-library:library"),
+        ("archive_consumer", _archive_consumer_test, "simple-library:thin_lto_consumer"),
         ("disabled", _disabled_test, "simple-binary:binary"),
         ("incremental", _incremental_test, "simple-binary:binary"),
     ]:

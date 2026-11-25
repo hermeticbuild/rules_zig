@@ -1,7 +1,16 @@
+load("@rules_cc//cc:defs.bzl", "cc_binary")
 load("@rules_zig//zig:defs.bzl", "zig_static_library")
 
 zig_static_library(
     name = "library",
     main = "main.zig",
     visibility = ["//zig/tests:__pkg__"],
+)
+
+cc_binary(
+    name = "thin_lto_consumer",
+    srcs = ["thin_lto_consumer.c"],
+    tags = ["manual"],
+    visibility = ["//zig/tests:__pkg__"],
+    deps = [":library"],
 )
