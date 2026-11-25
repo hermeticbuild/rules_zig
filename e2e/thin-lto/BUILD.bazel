@@ -1,0 +1,49 @@
+load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("@rules_zig//zig:defs.bzl", "zig_static_library")
+
+cc_library(
+    name = "scale",
+    srcs = ["scale.cc"],
+    linkstatic = True,
+)
+
+zig_static_library(
+    name = "math",
+    main = "math.zig",
+    deps = [":scale"],
+)
+
+cc_test(
+    name = "cross_language_test",
+    size = "small",
+    srcs = ["main.cc"],
+    linkstatic = True,
+    target_compatible_with = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:linux",
+    ],
+    deps = [":math"],
+)
+
+config_setting(
+    name = "thin_lto_enabled",
+    values = {"features": "thin_lto"},
+)
+
+sh_test(
+    name = "binary_test",
+    size = "small",
+    srcs = ["check_binary.sh"],
+    args = [
+        "$(rootpath @llvm//tools:llvm-objdump)",
+        "$(rootpath :cross_language_test)",
+    ] + select({
+        ":thin_lto_enabled": ["no-call"],
+        "//conditions:default": ["call"],
+    }),
+    data = [
+        ":cross_language_test",
+        "@llvm//tools:llvm-objdump",
+    ],
+)

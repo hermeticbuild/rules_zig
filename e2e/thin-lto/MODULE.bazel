@@ -1,0 +1,35 @@
+module(
+    name = "rules_zig_thin_lto_e2e",
+    bazel_compatibility = [">=9.0.0"],
+)
+
+bazel_dep(name = "llvm", version = "0.8.27")
+bazel_dep(name = "platforms", version = "1.1.0")
+bazel_dep(name = "rules_cc", version = "0.2.28")
+bazel_dep(name = "rules_shell", version = "0.8.0")
+bazel_dep(name = "rules_zig", version = "0.6.1")
+local_path_override(
+    module_name = "rules_zig",
+    path = "../..",
+)
+
+# Use the first commit with the rules_zig ThinLTO allowlist entry until it is released.
+archive_override(
+    module_name = "rules_cc",
+    integrity = "sha256-l9ObceIqP+Q8mmDsHF06smGzFomssn5ymeWsyTxT2YE=",
+    strip_prefix = "rules_cc-72090051be39b2629cf21a14d51d35bd08da8653",
+    urls = ["https://github.com/bazelbuild/rules_cc/archive/72090051be39b2629cf21a14d51d35bd08da8653.tar.gz"],
+)
+
+zig = use_extension("@rules_zig//zig:extensions.bzl", "zig")
+zig.toolchain(
+    default = True,
+    zig_version = "0.17.1",
+)
+
+llvm = use_extension("@llvm//extensions:llvm.bzl", "llvm")
+llvm.version(llvm_version = "22.1.8")
+llvm.configure(targets = ["X86"])
+use_repo(llvm, "llvm-project")
+
+register_toolchains("@llvm//toolchain:all")
