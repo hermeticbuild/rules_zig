@@ -45,12 +45,20 @@ def _binary_test_impl(ctx):
     target = analysistest.target_under_test(env)
     compile = assert_find_action(env, "ZigIncrementalCompile")
 
-    metadata = json.decode([arg for arg in compile.argv if arg.startswith("{")][0])
-    asserts.equals(env, compile.argv[compile.argv.index("-target") + 1], metadata.get("target"))
-
     executable = target[DefaultInfo].files_to_run.executable
     asserts.equals(env, [executable], target[DefaultInfo].files.to_list())
     asserts.equals(env, [executable], compile.outputs.to_list())
+
+    root_module_arg = [arg for arg in compile.argv if arg.startswith("-M")][0]
+    root_module_name = root_module_arg[2:].split("=", 1)[0]
+    boundary = compile.argv.index("--")
+    asserts.equals(env, "build-exe", compile.argv[1])
+    asserts.equals(env, "--zig-lib-dir", compile.argv[3])
+    asserts.equals(env, ["--zig-lib-dir", "--cache-dir", "--global-cache-dir"], compile.argv[6:12:2])
+    asserts.true(env, "-target" in compile.argv[12:boundary])
+    asserts.equals(env, "-femit-bin=" + executable.path, compile.argv[boundary - 1])
+    asserts.equals(env, "name=" + root_module_name, compile.argv[boundary + 1])
+    asserts.true(env, compile.argv[boundary + 2].startswith("input="))
 
     asserts.equals(env, ["--compilation-output=" + executable.path], [arg for arg in compile.argv if arg.startswith("--compilation-output=")])
 
@@ -89,6 +97,7 @@ def _shared_library_test_impl(ctx):
     target = analysistest.target_under_test(env)
     compile = assert_find_action(env, "ZigIncrementalCompile")
 
+    asserts.true(env, compile.argv.index("-target") < compile.argv.index("-dynamic"))
     libraries = target[DefaultInfo].files.to_list()
     asserts.equals(env, 1, len(libraries))
     asserts.equals(env, libraries, compile.outputs.to_list())
@@ -135,7 +144,6 @@ def _cc_test_handoff_test_impl(ctx):
 
     for flag in ["--zig-lib-dir", "--cache-dir", "--global-cache-dir"]:
         asserts.equals(env, 1, len([arg for arg in runtime.argv if arg == flag]), "The runtime build needs exactly one {}.".format(flag))
-        asserts.false(env, flag in compile.argv, "The worker owns its SDK/cache paths; {} must not leak into the request.".format(flag))
 
     objects = compile.outputs.to_list()
     asserts.equals(env, 1, len(objects))
@@ -233,6 +241,13 @@ def _auxiliary_only_test_impl(ctx):
     asserts.equals(env, 1, len(llvm_bc))
     asserts.equals(env, 3, len(compile.outputs.to_list()))
     asserts.equals(env, ["--compilation-output=" + compile.outputs.to_list()[0].path], [arg for arg in compile.argv if arg.startswith("--compilation-output=")])
+    boundary = compile.argv.index("--")
+    asserts.equals(env, [
+        "-femit-asm=" + asm[0].path,
+        "-femit-llvm-ir=" + llvm_ir[0].path,
+        "-femit-llvm-bc=" + llvm_bc[0].path,
+        "-fno-emit-bin",
+    ], compile.argv[boundary - 4:boundary])
     for file in asm + llvm_ir + llvm_bc:
         asserts.true(env, file in compile.outputs.to_list(), "The worker must produce the requested auxiliary outputs without an archive.")
 

@@ -7,10 +7,10 @@ compilation state in memory and uses it to decide what to recompile on each
 
 ## Routing and reuse
 
-Bazel owns the worker pool. The rules pass the compiler and SDK paths at
-startup. They also pass the first declared output path, which gives the
-compilation action its own worker key. All outputs of the action share that
-key.
+Bazel owns the worker pool. The rules pass the Zig subcommand and the compiler
+and SDK paths at startup. They also pass the first declared output path,
+which gives the compilation action its own worker key. All outputs of the
+action share that key.
 
 Each adapter handles one request at a time and owns at most one Zig child.
 Different compilations can stay warm independently. Each retained compiler
@@ -19,9 +19,17 @@ key, each with its own compiler state. [Bazel's worker key and instance limits][
 
 ## Updating a compiler session
 
-The action supplies the input paths, output metadata, and ordered Zig
-arguments. Each session has a private execroot for staged inputs and an
-in-memory map of their Bazel digests, keyed by path.
+The request starts with the Zig compiler arguments, followed by `--` and
+records for the compilation name and declared inputs. The adapter skips the
+leading SDK and cache flags. It uses the SDK from startup and its own cache
+paths.
+It reads the root module's target from the arguments. The emission flags just
+before `--` tell it which outputs to request from Zig's cache and where to
+publish them.
+The other compiler arguments pass through in order.
+
+Each session has a private execroot for staged inputs and an in-memory map of
+their Bazel digests, keyed by path.
 
 1. **Check for reuse.** Start a new session if the compiler arguments or
    output metadata changed. A change to the set of staged paths also starts a

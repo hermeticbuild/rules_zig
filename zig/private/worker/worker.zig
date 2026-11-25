@@ -76,7 +76,14 @@ const Response = struct {
     output: []const u8,
 };
 
-// These controls come from the action owner, never from a parsed compiler argv.
+const Command = enum {
+    @"build-exe",
+    @"build-obj",
+    @"build-lib",
+    @"test",
+    @"test-obj",
+};
+
 const OutputKind = enum {
     executable,
     object,
@@ -89,15 +96,31 @@ const EmitKind = enum {
     @"asm",
     llvm_ir,
     llvm_bc,
+
+    fn flag(kind: EmitKind) []const u8 {
+        return switch (kind) {
+            .bin => "-femit-bin",
+            .@"asm" => "-femit-asm",
+            .llvm_ir => "-femit-llvm-ir",
+            .llvm_bc => "-femit-llvm-bc",
+        };
+    }
 };
 
 const EmittedOutput = struct {
     kind: EmitKind,
     path: []const u8,
+
+    fn fromFlag(arg: []const u8) ?EmittedOutput {
+        const flag, const path = std.mem.cutScalar(u8, arg, '=') orelse return null;
+        for (std.meta.tags(EmitKind)) |kind| {
+            if (std.mem.eql(u8, kind.flag(), flag)) return .{ .kind = kind, .path = path };
+        }
+        return null;
+    }
 };
 
 const Compilation = struct {
-    command: []const u8,
     output_kind: OutputKind,
     name: []const u8,
     target: []const u8,
@@ -105,81 +128,95 @@ const Compilation = struct {
     arguments: []const []const u8,
     input_paths: []const []const u8,
 
-    const Metadata = struct {
-        command: []const u8,
-        output_kind: OutputKind,
-        name: []const u8,
-        target: []const u8,
-        outputs: []const EmitKind,
-    };
-
-    fn parse(a: Allocator, data: []const []const u8) !Compilation {
-        if (data.len < 3) {
-            return error.InvalidCompilationRequest;
+    fn parse(a: Allocator, command: Command, request_args: []const []const u8) !Compilation {
+        // Skip the rule-generated SDK and cache flags for direct Zig.
+        // The child uses the SDK from startup and the worker's cache paths.
+        const setup_flags = [_][]const u8{ "--zig-lib-dir", "--cache-dir", "--global-cache-dir" };
+        const setup_len = 2 * setup_flags.len;
+        if (request_args.len < setup_len) return error.InvalidCompilationRequest;
+        for (setup_flags, 0..) |flag, i| {
+            if (!std.mem.eql(u8, request_args[2 * i], flag)) return error.InvalidCompilationRequest;
         }
+        const data = request_args[setup_len..];
 
-        const metadata = try std.json.parseFromSliceLeaky(Metadata, a, data[0], .{});
-        if (metadata.outputs.len == 0 or metadata.outputs.len > data.len - 2) {
-            return error.InvalidCompilationRequest;
-        }
-
-        const arguments_start = 1 + metadata.outputs.len;
-        const outputs = try a.alloc(EmittedOutput, metadata.outputs.len);
-        var emitted: std.EnumSet(EmitKind) = .empty;
-        for (outputs, metadata.outputs, data[1..arguments_start]) |*output, kind, path| {
-            if (emitted.contains(kind)) {
-                return error.InvalidCompilationRequest;
-            }
-
-            emitted.insert(kind);
-            try safePath(path, false);
-            output.* = .{ .kind = kind, .path = path };
-        }
-
-        if (!emitted.contains(.bin) and metadata.output_kind != .static_library) {
-            return error.UnsupportedCompilationRequest;
-        }
-
-        if (data.len < arguments_start) return error.InvalidCompilationRequest;
-
-        // Inputs are prefixed records, so the final '--' always frames them,
+        // The trailer uses prefixed records, so the final '--' always frames it,
         // independently of empty arguments or '--' in the compiler vector.
-        const boundary = for (0..data.len - arguments_start) |n| {
+        const boundary = for (0..data.len) |n| {
             const i = data.len - 1 - n;
             if (std.mem.eql(u8, data[i], "--")) break i;
         } else return error.InvalidCompilationRequest;
 
-        const paths = try a.alloc([]const u8, data.len - boundary - 1);
-        for (paths, data[boundary + 1 ..]) |*path, record| {
+        const trailer = data[boundary + 1 ..];
+        if (boundary == 0 or trailer.len == 0) return error.InvalidCompilationRequest;
+
+        const name = std.mem.cutPrefix(u8, trailer[0], "name=") orelse return error.InvalidCompilationRequest;
+
+        // The rule reserves the trailing block for its emission flags. Walk
+        // backward from the delimiter until the regular compiler arguments.
+        const emit_bin = !std.mem.eql(u8, data[boundary - 1], "-fno-emit-bin");
+
+        var emissions_start = boundary - @intFromBool(!emit_bin);
+        var outputs: std.ArrayList(EmittedOutput) = .empty;
+        var emitted: std.EnumSet(EmitKind) = .empty;
+        while (emissions_start > 0) {
+            const output = EmittedOutput.fromFlag(data[emissions_start - 1]) orelse break;
+            if (emitted.contains(output.kind)) return error.InvalidCompilationRequest;
+            emitted.insert(output.kind);
+            try safePath(output.path, false);
+            try outputs.append(a, output);
+            emissions_start -= 1;
+        }
+        if (outputs.items.len == 0 or emit_bin != emitted.contains(.bin)) return error.InvalidCompilationRequest;
+        std.mem.reverse(EmittedOutput, outputs.items);
+
+        const arguments = data[0..emissions_start];
+        const output_kind: OutputKind = switch (command) {
+            .@"build-exe", .@"test" => .executable,
+            .@"build-obj", .@"test-obj" => .object,
+            // Zig uses the last link mode flag.
+            .@"build-lib" => for (0..arguments.len) |i| {
+                const arg = arguments[arguments.len - 1 - i];
+                if (std.mem.eql(u8, arg, "-dynamic")) break .shared_library;
+                if (std.mem.eql(u8, arg, "-static")) break .static_library;
+            } else .static_library,
+        };
+        if (!emit_bin and output_kind != .static_library) return error.UnsupportedCompilationRequest;
+
+        // The first -M consumes the root module's options. Later modules have
+        // their own options and do not determine the output artifact's name.
+        var target: ?[]const u8 = null;
+        var i: usize = 0;
+        while (i < arguments.len) : (i += 1) {
+            const arg = arguments[i];
+            if (std.mem.startsWith(u8, arg, "-M")) break;
+            if (std.mem.eql(u8, arg, "-target")) {
+                i += 1;
+                if (i == arguments.len) return error.InvalidCompilationTarget;
+                target = arguments[i];
+            }
+        }
+
+        const paths = try a.alloc([]const u8, trailer.len - 1);
+        for (paths, trailer[1..]) |*path, record| {
             path.* = std.mem.cutPrefix(u8, record, "input=") orelse return error.InvalidCompilationRequest;
             try safePath(path.*, true);
         }
 
         const result: Compilation = .{
-            .command = metadata.command,
-            .output_kind = metadata.output_kind,
-            .name = metadata.name,
-            .target = metadata.target,
-            .outputs = outputs,
-            .arguments = data[arguments_start..boundary],
+            .output_kind = output_kind,
+            .name = name,
+            .target = target orelse return error.InvalidCompilationTarget,
+            .outputs = outputs.items,
+            .arguments = arguments,
             .input_paths = paths,
         };
-
-        const valid_command = switch (result.output_kind) {
-            .executable => std.mem.eql(u8, result.command, "build-exe") or std.mem.eql(u8, result.command, "test"),
-            .object => std.mem.eql(u8, result.command, "build-obj") or std.mem.eql(u8, result.command, "test-obj"),
-            .static_library, .shared_library => std.mem.eql(u8, result.command, "build-lib"),
-        };
-
-        if (!valid_command) {
-            return error.UnsupportedCompilationRequest;
-        }
 
         if (result.name.len == 0 or !std.mem.eql(u8, std.fs.path.basename(result.name), result.name)) {
             return error.InvalidCompilationName;
         }
 
-        _ = try result.binNameOptions();
+        const naming = try result.binNameOptions();
+        if (naming.cpu_arch != .x86_64 or naming.os_tag != .linux) return error.UnsupportedCompilationRequest;
         return result;
     }
 
@@ -370,6 +407,7 @@ const Session = struct {
 const Worker = struct {
     gpa: Allocator,
     io: Io,
+    command: Command,
     zig: []const u8,
     lib: []const u8,
     zig_input: []const u8,
@@ -427,7 +465,7 @@ const Worker = struct {
         var argv: std.array_list.Managed([]const u8) = .init(a);
         try argv.appendSlice(&.{
             self.zig,
-            compilation.command,
+            @tagName(self.command),
             "--listen=-",
             "-fincremental",
             "--name",
@@ -440,23 +478,13 @@ const Worker = struct {
             self.lib,
         });
 
-        switch (compilation.output_kind) {
-            .static_library => try argv.append("-static"),
-            .shared_library => try argv.append("-dynamic"),
-            .executable, .object => {},
-        }
-        if (std.mem.eql(u8, compilation.command, "test") or std.mem.eql(u8, compilation.command, "test-obj")) {
-            try argv.append("--test-no-exec");
+        if (compilation.output_kind == .static_library) {
+            try argv.append("-static");
         }
 
         var emit_bin = false;
         for (compilation.outputs) |output| {
-            try argv.append(switch (output.kind) {
-                .bin => "-femit-bin",
-                .@"asm" => "-femit-asm",
-                .llvm_ir => "-femit-llvm-ir",
-                .llvm_bc => "-femit-llvm-bc",
-            });
+            try argv.append(output.kind.flag());
 
             if (output.kind == .bin) {
                 emit_bin = true;
@@ -539,15 +567,12 @@ const Worker = struct {
             return error.OnlySingleplexSupported;
         }
 
-        const compilation = try Compilation.parse(a, request.arguments);
+        const compilation = try Compilation.parse(a, self.command, request.arguments);
         try compilation.checkConfiguration(diagnostics);
         const arguments = compilation.arguments;
         const inputs = try compilation.inputs(a, request.inputs);
         const key = try std.json.Stringify.valueAlloc(a, .{
-            compilation.command,
-            compilation.output_kind,
             compilation.name,
-            compilation.target,
             compilation.outputs,
             arguments,
         }, .{});
@@ -823,15 +848,21 @@ pub fn main(init: std.process.Init) !u8 {
     const io = init.io;
 
     const args = try init.minimal.args.toSlice(a);
+    if (args.len < 2) return error.InvalidStartupArgument;
+    const command = std.meta.stringToEnum(Command, args[1]) orelse return error.InvalidStartupArgument;
     var zig_path: ?[]const u8 = null;
     var lib_path: ?[]const u8 = null;
     var persistent = false;
     var flags: std.array_list.Managed([]const u8) = .init(a);
-    for (args[1..]) |arg| {
+    var i: usize = 2;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
         if (std.mem.startsWith(u8, arg, "--zig=")) {
             zig_path = arg[6..];
-        } else if (std.mem.startsWith(u8, arg, "--lib=")) {
-            lib_path = arg[6..];
+        } else if (std.mem.eql(u8, arg, "--zig-lib-dir")) {
+            i += 1;
+            if (i == args.len) return error.MissingLibPath;
+            lib_path = args[i];
         } else if (std.mem.eql(u8, arg, "--persistent_worker")) {
             persistent = true;
         } else if (std.mem.cutPrefix(u8, arg, "--compilation-output=")) |path| {
@@ -862,6 +893,7 @@ pub fn main(init: std.process.Init) !u8 {
     var worker: Worker = .{
         .gpa = init.gpa,
         .io = io,
+        .command = command,
         .zig = zig,
         .lib = lib,
         .zig_input = zig_path.?,
@@ -951,7 +983,6 @@ fn expectArtifactName(target: []const u8, output_kind: OutputKind, kind: EmitKin
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const compilation: Compilation = .{
-        .command = "",
         .output_kind = output_kind,
         .name = "probe",
         .target = target,
@@ -975,20 +1006,46 @@ test "artifact naming requires explicit architecture and OS" {
     try std.testing.expectError(error.InvalidCompilationTarget, expectArtifactName("x86_64-native", .executable, .bin, "probe"));
 }
 
-const test_metadata =
-    \\{"command":"build-lib","output_kind":"static_library","name":"probe","target":"x86_64-linux","outputs":["bin"]}
-;
+const test_setup = [_][]const u8{
+    "--zig-lib-dir",
+    "sdk/lib",
+    "--cache-dir",
+    "direct-cache",
+    "--global-cache-dir",
+    "direct-global-cache",
+};
+
+const test_trailer = [_][]const u8{
+    "--",
+    "name=probe",
+};
 
 test "request framing uses the last separator and preserves compiler arguments" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    const compilation = try Compilation.parse(arena.allocator(), &.{
-        test_metadata, "out.a", "", "--", "-Mroot=main.zig", "--", "input=main.zig", "input=--",
-    });
-    try std.testing.expectEqual(@as(usize, 3), compilation.arguments.len);
-    try std.testing.expectEqualStrings("", compilation.arguments[0]);
-    try std.testing.expectEqualStrings("--", compilation.arguments[1]);
-    try std.testing.expectEqualStrings("-Mroot=main.zig", compilation.arguments[2]);
+    const arguments = [_][]const u8{
+        "-target",
+        "x86_64-linux-musl",
+        "-target",
+        "x86_64-linux-gnu",
+        "-dynamic",
+        "",
+        "--",
+        "-femit-bin=other.so",
+        "-Mroot=main.zig",
+        "-target",
+        "aarch64-linux",
+        "-Mdep=dep.zig",
+    };
+    const compilation = try Compilation.parse(arena.allocator(), .@"build-lib", &(test_setup ++ arguments ++
+        [_][]const u8{"-femit-bin=out=debug.so"} ++ test_trailer ++
+        [_][]const u8{ "input=main.zig", "input=--" }));
+    try std.testing.expectEqual(.shared_library, compilation.output_kind);
+    try std.testing.expectEqualStrings("x86_64-linux-gnu", compilation.target);
+    try std.testing.expectEqualSlices([]const u8, &arguments, compilation.arguments);
+    try std.testing.expectEqual(@as(usize, 1), compilation.outputs.len);
+    try std.testing.expectEqual(.bin, compilation.outputs[0].kind);
+    try std.testing.expectEqualStrings("out=debug.so", compilation.outputs[0].path);
     try std.testing.expectEqualStrings("main.zig", compilation.input_paths[0]);
     try std.testing.expectEqualStrings("--", compilation.input_paths[1]);
 }
@@ -997,11 +1054,13 @@ test "request framing rejects missing paths and separators" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    try std.testing.expectError(error.InvalidCompilationRequest, Compilation.parse(a, &.{}));
-    try std.testing.expectError(error.InvalidCompilationRequest, Compilation.parse(a, &.{test_metadata}));
-    try std.testing.expectError(error.InvalidCompilationRequest, Compilation.parse(a, &.{ test_metadata, "out.a" }));
-    try std.testing.expectError(error.InvalidCompilationRequest, Compilation.parse(a, &.{ test_metadata, "out.a", "-Mroot=main.zig" }));
-    const compilation = try Compilation.parse(a, &.{ test_metadata, "out.a", "--" });
-    try std.testing.expectEqual(@as(usize, 0), compilation.arguments.len);
+    const command: Command = .@"build-lib";
+    try std.testing.expectError(error.InvalidCompilationRequest, Compilation.parse(a, command, &.{}));
+    try std.testing.expectError(error.InvalidCompilationRequest, Compilation.parse(a, command, &(test_setup ++ [_][]const u8{"-femit-bin=out.a"})));
+    try std.testing.expectError(error.InvalidCompilationRequest, Compilation.parse(a, command, &(test_setup ++ test_trailer)));
+    const arguments = [_][]const u8{ "-target", "x86_64-linux", "-Mroot=main.zig" };
+    try std.testing.expectError(error.InvalidCompilationRequest, Compilation.parse(a, command, &(test_setup ++ arguments ++ [_][]const u8{"-femit-bin"} ++ test_trailer)));
+    const compilation = try Compilation.parse(a, command, &(test_setup ++ arguments ++ [_][]const u8{"-femit-bin=out.a"} ++ test_trailer));
+    try std.testing.expectEqualSlices([]const u8, &arguments, compilation.arguments);
     try std.testing.expectEqual(@as(usize, 0), compilation.input_paths.len);
 }

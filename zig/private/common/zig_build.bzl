@@ -268,28 +268,48 @@ def _references_auto_c(root_module):
                 return True
     return False
 
-def _compile(ctx, *, zigtoolchaininfo, command, output_kind, global_args, compiler_args, worker, **kwargs):
+def _common_zig_args(*, zigtoolchaininfo, settings, zigtargetinfo, args):
+    zig_lib_dir(
+        zigtoolchaininfo = zigtoolchaininfo,
+        args = args,
+    )
+    zig_cache_output(
+        zigtoolchaininfo = zigtoolchaininfo,
+        args = args,
+    )
+    zig_settings(
+        settings = settings,
+        args = args,
+    )
+    zig_target_platform(
+        target = zigtargetinfo,
+        args = args,
+    )
+
+def _compile(ctx, *, compilation_name, zigtoolchaininfo, command, compiler_args, worker, **kwargs):
     """Register a compilation through the selected execution adapter."""
     executable = zig_toolchain_executable(zigtoolchaininfo)
+    startup = ctx.actions.args()
 
-    if worker:
-        # Metadata, output paths, ordered compiler arguments, then a framed
-        # input list. Prefixing input paths makes the final delimiter unambiguous,
-        # even when a compiler operand or an input file is named "--".
+    if worker != None:
+        # The final delimiter separates the Zig arguments from worker metadata.
+        # Prefixed records keep it unambiguous.
         compiler_args.add("--")
+        compiler_args.add(compilation_name, format = "name=%s")
         compiler_args.add_all(kwargs["inputs"], format_each = "input=%s")
         compiler_args.use_param_file("@%s", use_always = True)
         compiler_args.set_param_file_format("multiline")
-        startup = ctx.actions.args()
         startup.add(executable, format = "--zig=%s")
-        startup.add(zig_toolchain_lib_dir(zigtoolchaininfo), format = "--lib=%s")
+        zig_lib_dir(
+            zigtoolchaininfo = zigtoolchaininfo,
+            args = startup,
+        )
 
         # Bazel retains a separate worker pool for each compilation action.
         # One output anchors the whole invocation, including auxiliary outputs.
         startup.add(kwargs["outputs"][0], format = "--compilation-output=%s")
         kwargs["tools"] = [executable, zig_toolchain_lib_dir(zigtoolchaininfo)]
         executable = worker
-        arguments = [startup, compiler_args]
         kwargs["mnemonic"] = "ZigIncrementalCompile"
 
         # The adapter also supports one-shot execution. Let the selected
@@ -299,16 +319,9 @@ def _compile(ctx, *, zigtoolchaininfo, command, output_kind, global_args, compil
             "requires-worker-protocol": "json",
             "no-remote-cache": "1",
         }
-    else:
-        arguments = [command]
-        if command in ("test", "test-obj"):
-            arguments.append("--test-no-exec")
-        elif output_kind == "shared_library":
-            arguments.append("-dynamic")
-        arguments.extend([global_args, compiler_args])
     ctx.actions.run(
         executable = executable,
-        arguments = arguments,
+        arguments = [command, startup, compiler_args],
         **kwargs
     )
 
@@ -387,27 +400,6 @@ def zig_build_impl(ctx, *, kind):
         deps = ctx.attr.deps,
         transitive_data = transitive_data,
         transitive_runfiles = transitive_runfiles,
-    )
-
-    global_args = ctx.actions.args()
-    global_args.use_param_file("@%s")
-
-    # Direct actions also include the SDK and cache options in this group.
-    zig_lib_dir(
-        zigtoolchaininfo = zigtoolchaininfo,
-        args = global_args,
-    )
-    zig_cache_output(
-        zigtoolchaininfo = zigtoolchaininfo,
-        args = global_args,
-    )
-    zig_settings(
-        settings = settings,
-        args = global_args,
-    )
-    zig_target_platform(
-        target = zigtargetinfo,
-        args = global_args,
     )
 
     location_targets = ctx.attr.data
@@ -559,17 +551,18 @@ def zig_build_impl(ctx, *, kind):
 
     args = ctx.actions.args()
     args.use_param_file("@%s")
-    if incremental_worker:
-        args.add(json.encode({
-            "command": command,
-            "output_kind": output_kind,
-            "name": root_module.canonical_name,
-            "target": zigtargetinfo.target,
-            "outputs": [emission.kind for emission in emissions],
-        }))
-        args.add_all(compile_outputs)
-        zig_settings(settings = settings, args = args)
-        zig_target_platform(target = zigtargetinfo, args = args)
+
+    _common_zig_args(
+        zigtoolchaininfo = zigtoolchaininfo,
+        settings = settings,
+        zigtargetinfo = zigtargetinfo,
+        args = args,
+    )
+
+    if command in ("test", "test-obj"):
+        args.add("--test-no-exec")
+    if output_kind == "shared_library":
+        args.add("-dynamic")
 
     # The C/C++ link gets compiler-rt from a separate object when enabled.
     if use_cc_common_link or ctx.attr.compiler_runtime == "exclude":
@@ -610,12 +603,25 @@ def zig_build_impl(ctx, *, kind):
 
     c_module = None
     if need_translate_c(root_module.cc_info) and _references_auto_c(root_module):
+        translate_c_args = None
+
+        if not translatectoolchaininfo:
+            translate_c_args = ctx.actions.args()
+            translate_c_args.use_param_file("@%s")
+
+            _common_zig_args(
+                zigtoolchaininfo = zigtoolchaininfo,
+                settings = settings,
+                zigtargetinfo = zigtargetinfo,
+                args = translate_c_args,
+            )
+
         c_module = zig_translate_c(
             ctx = ctx,
             name = "c",
             canonical_name = "c",
             zigtoolchaininfo = zigtoolchaininfo,
-            global_args = global_args,
+            global_args = translate_c_args,
             cc_infos = [root_module.cc_info],
             translatectoolchaininfo = translatectoolchaininfo,
         )
@@ -702,15 +708,6 @@ def zig_build_impl(ctx, *, kind):
     if not use_cc_common_link and kind != "zig_static_library":
         args.add_all(linkopts)
 
-    # The worker already has the declared outputs in its request header.
-    if not incremental_worker:
-        for emission in auxiliary_emissions:
-            args.add(emission.file, format = emission.flag)
-        if primary_emission:
-            args.add(primary_emission.file, format = primary_emission.flag)
-        else:
-            args.add("-fno-emit-bin")
-
     if output_kind == "shared_library":
         # By default, Zig build-lib -dynamic sets the SONAME of the shared
         # library based on the name of its main module.
@@ -722,12 +719,20 @@ def zig_build_impl(ctx, *, kind):
         # Here we explicitly set the SONAME to match the output filename.
         args.add(bin_output_name, format = "-fsoname=%s")
 
+    # Direct Zig uses these paths. The worker decodes this final block to
+    # publish the same outputs from its private compiler cache.
+    for emission in auxiliary_emissions:
+        args.add(emission.file, format = emission.flag)
+    if primary_emission:
+        args.add(primary_emission.file, format = primary_emission.flag)
+    else:
+        args.add("-fno-emit-bin")
+
     _compile(
         ctx,
+        compilation_name = root_module.canonical_name,
         zigtoolchaininfo = zigtoolchaininfo,
         command = command,
-        output_kind = output_kind,
-        global_args = global_args,
         compiler_args = args,
         worker = incremental_worker,
         outputs = compile_outputs,
@@ -747,7 +752,16 @@ def zig_build_impl(ctx, *, kind):
             # same object. Build the runtime separately with the same SDK and
             # target, including Zig-specific symbols such as __zig_probe_stack.
             compiler_rt = ctx.actions.declare_file(ctx.label.name + ".compiler_rt" + _object_extension(zigtargetinfo.triple.os))
+
             runtime_args = ctx.actions.args()
+            runtime_args.use_param_file("@%s")
+
+            _common_zig_args(
+                zigtoolchaininfo = zigtoolchaininfo,
+                settings = settings,
+                zigtargetinfo = zigtargetinfo,
+                args = runtime_args,
+            )
             runtime_args.add_all(
                 root_module.cc_info.linking_context.linker_inputs,
                 map_each = zig_cdeps_libc_flags,
@@ -767,10 +781,9 @@ def zig_build_impl(ctx, *, kind):
 
             _compile(
                 ctx,
+                compilation_name = None,
                 zigtoolchaininfo = zigtoolchaininfo,
                 command = "build-obj",
-                output_kind = "object",
-                global_args = global_args,
                 compiler_args = runtime_args,
                 worker = None,
                 outputs = [compiler_rt],
