@@ -137,6 +137,21 @@ C runtime expects a C ABI `main`, enable libc in the Zig compilation using one
 of the dependencies above. For freestanding binaries, provide your own entry
 point and configure the C/C++ linker accordingly.
 
+#### Cross-language ThinLTO
+
+`--features=thin_lto` enables ThinLTO for Zig targets when the resolved C/C++
+toolchain provides it. Zig binaries, tests, and shared libraries then use the
+C/C++ link. Static libraries expose their ThinLTO members through `CcInfo` for
+downstream C/C++ links. Enable the feature on each compilation that should
+participate and on the final link. Keep bitcode archives on links with a
+compatible LLVM toolchain.
+
+This path currently supports Zig 0.17.1 targeting x86-64 Linux with a matching
+Clang toolchain. It requires rules_cc with the `rules_zig` ThinLTO
+[allowlist entry](https://github.com/bazelbuild/rules_cc/commit/72090051be39b2629cf21a14d51d35bd08da8653).
+Incremental compilation and auxiliary assembly and LLVM outputs are unsupported
+in this mode. Build C sources in `cc_library` dependencies.
+
 ## Usage Examples
 
 <!-- TODO[AH] Create an instructive example.

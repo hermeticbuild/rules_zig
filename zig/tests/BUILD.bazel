@@ -13,6 +13,7 @@ load(":rules_test.bzl", "rules_test_suite")
 load(":semver_test.bzl", "semver_test_suite")
 load(":target_platform_test.bzl", "target_platform_test_suite")
 load(":target_triple_test.bzl", "target_triple_test_suite")
+load(":thin_lto_test.bzl", "thin_lto_test_suite")
 load(":threaded_test.bzl", "threaded_test_suite")
 load(":toolchain_header_test.bzl", "toolchain_header_test_suite")
 load(":translate_c_action_test.bzl", "translate_c_action_test_suite")
@@ -54,6 +55,8 @@ semver_test_suite(name = "semver_test")
 target_platform_test_suite(name = "target_platform_test")
 
 target_triple_test_suite(name = "target_triple_test")
+
+thin_lto_test_suite(name = "thin_lto_test")
 
 threaded_test_suite(name = "threaded_test")
 
