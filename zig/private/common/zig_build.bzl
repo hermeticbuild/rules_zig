@@ -336,6 +336,7 @@ def zig_build_impl(ctx, *, kind):
         if not (ctx.attr.emit_bin or ctx.attr.emit_asm or ctx.attr.emit_llvm_ir or ctx.attr.emit_llvm_bc):
             fail("At least one emitted output must be enabled.")
 
+    # Resolve toolchains and select the execution and link modes.
     zigtoolchaininfo = zig_exec_group_toolchain(ctx)
     zigtargetinfo = ctx.toolchains["//zig/target:toolchain_type"].zigtargetinfo
     translate_c_toolchain = translate_c_exec_group_toolchain(ctx)
@@ -378,7 +379,6 @@ def zig_build_impl(ctx, *, kind):
     transitive_data = []
     transitive_runfiles = []
 
-    outputs = []
     output_groups = {}
 
     direct_inputs = []
@@ -414,6 +414,7 @@ def zig_build_impl(ctx, *, kind):
 
     location_targets = ctx.attr.data
 
+    # Declare the final artifacts and the outputs produced by Zig.
     bin_output_is_executable = False
     bin_output_name = None
     bin_output = None
@@ -431,9 +432,10 @@ def zig_build_impl(ctx, *, kind):
             "/".join([".." for _ in ctx.label.package.split("/")]),
             paths.join(bin_output.basename + ".runfiles", ctx.workspace_name),
         ]
-    elif kind == "zig_static_library" and ctx.attr.emit_bin:
-        bin_output_name = _lib_prefix(zigtargetinfo.triple.os) + ctx.label.name + _static_lib_extension(zigtargetinfo.triple.os)
-        bin_output = ctx.actions.declare_file(bin_output_name)
+    elif kind == "zig_static_library":
+        if ctx.attr.emit_bin:
+            bin_output_name = _lib_prefix(zigtargetinfo.triple.os) + ctx.label.name + _static_lib_extension(zigtargetinfo.triple.os)
+            bin_output = ctx.actions.declare_file(bin_output_name)
     elif kind == "zig_shared_library":
         if (ctx.attr.shared_lib_name):
             bin_output_name = ctx.attr.shared_lib_name
@@ -442,6 +444,8 @@ def zig_build_impl(ctx, *, kind):
             bin_output_name = _lib_prefix(zigtargetinfo.triple.os) + ctx.label.name + _shared_lib_extension(zigtargetinfo.triple.os)
             bin_output = ctx.actions.declare_file(bin_output_name)
         solib_parents = [""]
+    else:
+        fail("Unknown rule kind '{}'.".format(kind))
 
     cc_link_kwargs = {}
     if generate_dsym_file:
@@ -452,8 +456,8 @@ def zig_build_impl(ctx, *, kind):
         }
         output_groups["dsyms"] = depset([dsym_file])
 
-    # zig_binary, zig_test and zig_shared_library must produce their primary output, so emit_bin is not user configurable and considered true.
-    should_emit_bin = bin_output_is_executable or kind == "zig_shared_library" or ctx.attr.emit_bin
+    # Only zig_static_library can omit its primary output through emit_bin.
+    outputs = [bin_output] if bin_output else []
 
     compile_bin_output = bin_output
     if use_cc_common_link:
@@ -461,8 +465,7 @@ def zig_build_impl(ctx, *, kind):
         compile_bin_output = ctx.actions.declare_file(ctx.label.name + _object_extension(zigtargetinfo.triple.os))
 
     primary_emission = None
-    if should_emit_bin:
-        outputs.append(bin_output)
+    if compile_bin_output:
         primary_emission = struct(
             kind = "bin",
             file = compile_bin_output,
@@ -496,6 +499,7 @@ def zig_build_impl(ctx, *, kind):
     emissions = ([primary_emission] if primary_emission else []) + auxiliary_emissions
     compile_outputs = [emission.file for emission in emissions]
 
+    # Resolve the root module and its dependencies.
     zigopts = location_expansion(
         ctx = ctx,
         targets = location_targets,
@@ -538,10 +542,15 @@ def zig_build_impl(ctx, *, kind):
             import_names = import_names,
         )
 
+    # Assemble and register the primary Zig compilation.
     if use_cc_common_link:
-        command, output_kind, mnemonic = (
-            ("test-obj", "object", "ZigBuildTest") if kind == "zig_test" else ("build-obj", "object", "ZigBuildObj")
-        )
+        if kind == "zig_static_library":
+            fail("Internal error: zig_static_library cannot use cc_common.link.")
+        command, output_kind, mnemonic = {
+            "zig_binary": ("build-obj", "object", "ZigBuildObj"),
+            "zig_test": ("test-obj", "object", "ZigBuildTest"),
+            "zig_shared_library": ("build-obj", "object", "ZigBuildObj"),
+        }[kind]
     else:
         command, output_kind, mnemonic = {
             "zig_binary": ("build-exe", "executable", "ZigBuildExe"),
@@ -564,6 +573,7 @@ def zig_build_impl(ctx, *, kind):
         zig_settings(settings = settings, args = args)
         zig_target_platform(target = zigtargetinfo, args = args)
 
+    # The C/C++ link gets compiler-rt from a separate object when enabled.
     if use_cc_common_link or ctx.attr.compiler_runtime == "exclude":
         args.add("-fno-compiler-rt")
     elif ctx.attr.compiler_runtime == "include":
@@ -689,6 +699,8 @@ def zig_build_impl(ctx, *, kind):
         strings = ctx.attr.linkopts,
     )
 
+    # Pass linkopts to the final linker. Static archives have no final link.
+    # The C/C++ path passes the same linkopts to cc_common.link below.
     if not use_cc_common_link and kind != "zig_static_library":
         args.add_all(linkopts)
 
@@ -733,6 +745,7 @@ def zig_build_impl(ctx, *, kind):
         **zig_build_kwargs
     )
 
+    # Perform any separate C/C++ link and prepare library link metadata.
     if use_cc_common_link:
         is_shared_library = kind == "zig_shared_library"
         objects = [compile_bin_output]
@@ -817,16 +830,15 @@ def zig_build_impl(ctx, *, kind):
                 cc_toolchain = cc_toolchain,
                 dynamic_library = bin_output,
             )
-    elif kind not in ("zig_binary", "zig_test"):
-        fail("Unknown rule kind '{}'.".format(kind))
 
+    # Publish the target's outputs, runfiles, and providers.
     if root_module.cc_info:
         transitive_data.append(depset(cc_helper.get_dynamic_libraries_for_runtime(root_module.cc_info.linking_context, True)))
 
     providers.extend([
         DefaultInfo(
             executable = bin_output if bin_output_is_executable else None,
-            files = depset([bin_output] if should_emit_bin else []),
+            files = depset(outputs),
             runfiles = zig_create_runfiles(
                 ctx_runfiles = ctx.runfiles,
                 direct_data = direct_data,
