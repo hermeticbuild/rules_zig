@@ -10,8 +10,7 @@ bzl_library(
     deps = [
         ":cc_helper",
         "@rules_cc//cc:find_cc_toolchain_bzl",
-        "@rules_cc//cc/common:cc_common",
-        "@rules_cc//cc/common:cc_info",
+        "@rules_cc//cc/common",
     ],
 )
 
