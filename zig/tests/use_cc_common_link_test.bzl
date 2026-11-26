@@ -15,6 +15,10 @@ load(
 _SETTINGS_USE_CC_COMMON_LINK = canonical_label("@//zig/settings:use_cc_common_link")
 _SETTINGS_HOST_USE_CC_COMMON_LINK = canonical_label("@//zig/settings:host_use_cc_common_link")
 _LINUX_AMD64 = {"//command_line_option:platforms": canonical_label("@//zig/tests/platforms:x86_64-linux")}
+_LINUX_AMD64_COMPATIBILITY = [
+    "@platforms//os:linux",
+    "@platforms//cpu:x86_64",
+]
 
 def _define_settings_use_cc_common_link_test(use_cc_common_link):
     def _test_impl(ctx):
@@ -144,6 +148,6 @@ def use_cc_common_link_test_suite(name):
         partial.make(_build_test_use_cc_common_link_zig_test, target_under_test = "//zig/tests/simple-test:test", size = "small"),
         # The final link accepts cpp_link-scoped execution properties.
         partial.make(_build_exe_use_cc_common_link_cc_test, target_under_test = "//zig/tests/simple-binary:binary_link_exec_properties", size = "small"),
-        partial.make(_alwayslink_members_test, target_under_test = "//zig/tests/alwayslink:binary", size = "small"),
-        partial.make(_alwayslink_archive_only_test, target_under_test = "//zig/tests/alwayslink:archive_only_binary", size = "small"),
+        partial.make(_alwayslink_members_test, target_under_test = "//zig/tests/alwayslink:binary", size = "small", target_compatible_with = _LINUX_AMD64_COMPATIBILITY),
+        partial.make(_alwayslink_archive_only_test, target_under_test = "//zig/tests/alwayslink:archive_only_binary", size = "small", target_compatible_with = _LINUX_AMD64_COMPATIBILITY),
     )

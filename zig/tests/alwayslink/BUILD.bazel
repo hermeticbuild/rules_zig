@@ -3,9 +3,15 @@ load("//zig:defs.bzl", "zig_binary")
 
 package(default_visibility = ["//zig/tests:__pkg__"])
 
+_LINUX_AMD64 = [
+    "@platforms//os:linux",
+    "@platforms//cpu:x86_64",
+]
+
 cc_library(
     name = "registration",
     srcs = ["registration.c"],
+    target_compatible_with = _LINUX_AMD64,
     alwayslink = True,
 )
 
@@ -18,13 +24,14 @@ cc_import(
     name = "archive_only",
     static_library = ":libstate.a",
     tags = ["manual"],
+    target_compatible_with = _LINUX_AMD64,
     alwayslink = True,
 )
 
 zig_binary(
     name = "binary",
     main = "main.zig",
-    target_compatible_with = ["@platforms//os:linux"],
+    target_compatible_with = _LINUX_AMD64,
     deps = [
         ":registration",
         ":state",
@@ -36,6 +43,6 @@ zig_binary(
     name = "archive_only_binary",
     main = "main.zig",
     tags = ["manual"],
-    target_compatible_with = ["@platforms//os:linux"],
+    target_compatible_with = _LINUX_AMD64,
     deps = [":archive_only"],
 )

@@ -101,6 +101,11 @@ def zig_cdeps_linker_inputs(*, linking_context, solib_parents, os, abi, inputs, 
                 args.add_all(link.user_link_flags)
         inputs.extend(link.additional_inputs)
         for lib in link.libraries:
+            # TODO[AH] Handle the remaining LibraryToLink metadata as needed:
+            #   lto_bitcode_files
+            #   pic_lto_bitcode_files
+            #   resolved_symlink_dynamic_library
+            #   resolved_symlink_interface_library
             archive = lib.static_library or lib.pic_static_library
             if archive:
                 if lib.alwayslink:
@@ -112,6 +117,7 @@ def zig_cdeps_linker_inputs(*, linking_context, solib_parents, os, abi, inputs, 
                     all_libraries.extend([(object, False) for object in objects])
                     inputs.extend(objects)
                 else:
+                    # Keep ordinary archives available for lazy member extraction.
                     all_libraries.append((archive, False))
                     inputs.append(archive)
             else:
