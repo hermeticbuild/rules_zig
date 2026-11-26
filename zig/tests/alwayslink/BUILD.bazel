@@ -1,0 +1,41 @@
+load("@rules_cc//cc:defs.bzl", "cc_import", "cc_library")
+load("//zig:defs.bzl", "zig_binary")
+
+package(default_visibility = ["//zig/tests:__pkg__"])
+
+cc_library(
+    name = "registration",
+    srcs = ["registration.c"],
+    alwayslink = True,
+)
+
+cc_library(
+    name = "state",
+    srcs = ["state.c"],
+)
+
+cc_import(
+    name = "archive_only",
+    static_library = ":libstate.a",
+    tags = ["manual"],
+    alwayslink = True,
+)
+
+zig_binary(
+    name = "binary",
+    main = "main.zig",
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = [
+        ":registration",
+        ":state",
+        "//zig/lib:libc",
+    ],
+)
+
+zig_binary(
+    name = "archive_only_binary",
+    main = "main.zig",
+    tags = ["manual"],
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = [":archive_only"],
+)
