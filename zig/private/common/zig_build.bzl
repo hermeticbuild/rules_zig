@@ -641,6 +641,16 @@ def zig_build_impl(ctx, *, kind):
                 data = direct_data,
             )
 
+            if settings.cc_toolchain_cpp_runtime and cdeps_inputs:
+                if any([link.owner == Label("//zig/lib:libc++") for link in root_module.cc_info.linking_context.linker_inputs.to_list()]):
+                    fail("cc_toolchain_cpp_runtime is incompatible with the Zig SDK's //zig/lib:libc++ dependency.")
+                runtime_toolchain, runtime_features = find_cc_toolchain(ctx, mandatory = True)
+                runtime_archives = runtime_toolchain.static_runtime_lib(feature_configuration = runtime_features).to_list()
+                if not runtime_archives:
+                    fail("cc_toolchain_cpp_runtime requires a C/C++ toolchain that supplies static C++ runtime archives through static_link_cpp_runtimes.")
+                args.add_all(runtime_archives)
+                cdeps_inputs.extend(runtime_archives)
+
             if incremental_worker and cdeps_inputs:
                 # Intentional user-facing warning for the accepted compiler limitation.
                 # buildifier: disable=print

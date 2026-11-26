@@ -3,17 +3,6 @@ load(":zig_toolchain.bzl", "zig_validation_exec_platform")
 
 zig_validation_exec_platform(name = "zig_validation_exec_platform")
 
-bzl_library(
-    name = "cc_toolchain_runtime",
-    srcs = ["cc_toolchain_runtime.bzl"],
-    visibility = ["//zig:__subpackages__"],
-    deps = [
-        ":cc_helper",
-        "@rules_cc//cc:find_cc_toolchain_bzl",
-        "@rules_cc//cc/common",
-    ],
-)
-
 exports_files(
     [
         "versions.json",
@@ -190,7 +179,6 @@ filegroup(
         ":BUILD.bazel",
         ":cc_helper.bzl",
         ":cc_linkopts.bzl",
-        ":cc_toolchain_runtime.bzl",
         ":platforms.bzl",
         ":resolved_target_toolchain.bzl",
         ":resolved_toolchain.bzl",

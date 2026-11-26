@@ -9,6 +9,7 @@ load(
 
 settings(
     name = "settings",
+    cc_toolchain_cpp_runtime = ":cc_toolchain_cpp_runtime",
     host_mode = ":host_mode",
     host_threaded = ":host_threaded",
     host_use_cc_common_link = ":host_use_cc_common_link",
@@ -19,6 +20,12 @@ settings(
     use_cc_common_link = ":use_cc_common_link",
     visibility = ["//visibility:public"],
     zigopt = ":zigopt",
+)
+
+bool_flag(
+    name = "cc_toolchain_cpp_runtime",
+    build_setting_default = False,
+    visibility = ["//visibility:public"],
 )
 
 bool_flag(
