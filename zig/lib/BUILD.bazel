@@ -10,6 +10,12 @@ The targets provided in this package can be used to accomplish this. Simply add
 them to the `cdeps` attribute of your Zig target to enable libc or libc++
 linking. E.g.
 
+For a Zig-owned link of objects compiled with a separate C++ toolchain, depend
+on `:static_cpp_runtime` to pass that toolchain's C++ runtime archives to Zig.
+Use it in place of `:libc++`, which enables Zig's bundled C++ runtime.
+Select this dependency for Zig-owned links only. For `cc_common.link`, the C++
+toolchain already supplies its own runtime.
+
 ```
 zig_binary(
     name = "binary",
@@ -24,6 +30,7 @@ target dependency.
 """
 
 load("//zig/private:cc_linkopts.bzl", "cc_linkopts")
+load("//zig/private:cc_toolchain_runtime.bzl", "cc_toolchain_runtime")
 load("//zig/private:zig_toolchain_header.bzl", "zig_toolchain_header")
 
 zig_toolchain_header(
@@ -40,6 +47,11 @@ cc_linkopts(
 cc_linkopts(
     name = "libc++",
     linkopts = ["-lc++"],
+    visibility = ["//visibility:public"],
+)
+
+cc_toolchain_runtime(
+    name = "static_cpp_runtime",
     visibility = ["//visibility:public"],
 )
 
