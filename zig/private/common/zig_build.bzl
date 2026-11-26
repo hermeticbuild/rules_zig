@@ -627,11 +627,19 @@ def zig_build_impl(ctx, *, kind):
         )
         transitive_inputs.append(c_module.transitive_inputs)
 
+    linkopts = location_expansion(
+        ctx = ctx,
+        targets = location_targets,
+        outputs = outputs,
+        attribute_name = "linkopts",
+        strings = ctx.attr.linkopts,
+    )
+
     if root_module.cc_info:
         cdeps_inputs = []
         if use_cc_common_link == False:
             # Add all cdeps linker inputs to the sandbox and zig args.
-            zig_cdeps_linker_inputs(
+            needs_cc_runtime = zig_cdeps_linker_inputs(
                 linking_context = root_module.cc_info.linking_context,
                 solib_parents = solib_parents,
                 os = zigtargetinfo.triple.os,
@@ -641,15 +649,15 @@ def zig_build_impl(ctx, *, kind):
                 data = direct_data,
             )
 
-            if settings.cc_toolchain_cpp_runtime and cdeps_inputs:
-                if any([link.owner == Label("//zig/lib:libc++") for link in root_module.cc_info.linking_context.linker_inputs.to_list()]):
-                    fail("cc_toolchain_cpp_runtime is incompatible with the Zig SDK's //zig/lib:libc++ dependency.")
-                runtime_toolchain, runtime_features = find_cc_toolchain(ctx, mandatory = True)
-                runtime_archives = runtime_toolchain.static_runtime_lib(feature_configuration = runtime_features).to_list()
-                if not runtime_archives:
-                    fail("cc_toolchain_cpp_runtime requires a C/C++ toolchain that supplies static C++ runtime archives through static_link_cpp_runtimes.")
-                args.add_all(runtime_archives)
-                cdeps_inputs.extend(runtime_archives)
+            if needs_cc_runtime:
+                runtime_toolchain, runtime_features = find_cc_toolchain(ctx, mandatory = False)
+                if runtime_toolchain and cc_common.is_enabled(feature_configuration = runtime_features, feature_name = "static_link_cpp_runtimes"):
+                    zig_options = [settings.args, linkopts, root_module.module_context.zigopts]
+                    zig_options.extend([module.zigopts for module in root_module.transitive_module_contexts.to_list()])
+                    if not any(["-lc++" in options for options in zig_options]):
+                        runtime_archives = runtime_toolchain.static_runtime_lib(feature_configuration = runtime_features)
+                        args.add_all(runtime_archives)
+                        transitive_inputs.append(runtime_archives)
 
             if incremental_worker and cdeps_inputs:
                 # Intentional user-facing warning for the accepted compiler limitation.
@@ -693,14 +701,6 @@ def zig_build_impl(ctx, *, kind):
             "ZIG_LOCAL_CACHE_DIR": zigtoolchaininfo.zig_cache,
         },
     ) | zig_exec_group_action_kwargs()
-
-    linkopts = location_expansion(
-        ctx = ctx,
-        targets = location_targets,
-        outputs = outputs,
-        attribute_name = "linkopts",
-        strings = ctx.attr.linkopts,
-    )
 
     if not use_cc_common_link and kind != "zig_static_library":
         args.add_all(linkopts)

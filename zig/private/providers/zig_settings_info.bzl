@@ -5,7 +5,6 @@ Collection of all active Zig build settings.
 """
 
 FIELDS = {
-    "cc_toolchain_cpp_runtime": "Whether Zig-owned target links use the configured C/C++ toolchain's static C++ runtime.",
     "incremental": "Whether target compilations use experimental incremental compilation.",
     "mode": "The Zig build mode.",
     "use_cc_common_link": "Whether to use cc_common.link to link zig binaries, tests and shared libraries.",

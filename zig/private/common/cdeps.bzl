@@ -69,10 +69,16 @@ def zig_cdeps_linker_inputs(*, linking_context, solib_parents, os, abi, inputs, 
         inputs: List; mutable, Append linker inputs to this collection.
         args: Args; mutable, Append the C linker flags to this object.
         data: List; mutable, Append data files to this collection.
+
+    Returns:
+        Whether static native dependencies could need the C toolchain's C++ runtime.
     """
     all_libraries = []
     dynamic_libraries = []
+    has_static_dependencies = False
+    uses_zig_libcxx = False
     for link in linking_context.linker_inputs.to_list():
+        uses_zig_libcxx = uses_zig_libcxx or "-lc++" in link.user_link_flags
         if os == "linux" and abi and abi.split(".")[0] == "gnu":
             # The C driver accepts -pthread. Zig's native link CLI uses
             # -lpthread to request its bundled glibc instead.
@@ -83,6 +89,7 @@ def zig_cdeps_linker_inputs(*, linking_context, solib_parents, os, abi, inputs, 
         for lib in link.libraries:
             archive = lib.static_library or lib.pic_static_library
             if archive:
+                has_static_dependencies = True
                 if lib.alwayslink:
                     # Including every member preserves whole-archive semantics.
                     # The archive basename does not reliably identify the PIC variant.
@@ -116,6 +123,8 @@ def zig_cdeps_linker_inputs(*, linking_context, solib_parents, os, abi, inputs, 
         before_each = "-rpath",
         uniquify = True,
     )
+
+    return has_static_dependencies and not uses_zig_libcxx
 
 def _lib_flags(arg):
     (file, dynamic) = arg
