@@ -643,6 +643,7 @@ def zig_build_impl(ctx, *, kind):
                 linking_context = root_module.cc_info.linking_context,
                 solib_parents = solib_parents,
                 os = zigtargetinfo.triple.os,
+                prefer_pic = output_kind == "shared_library",
                 inputs = cdeps_inputs,
                 args = args,
                 data = direct_data,

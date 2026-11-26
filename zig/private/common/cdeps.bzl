@@ -76,13 +76,14 @@ def zig_cdeps_copts(compilation_context):
     copts.extend(["-F%s" % include for include in compilation_context.framework_includes.to_list()])
     return copts
 
-def zig_cdeps_linker_inputs(*, linking_context, solib_parents, os, inputs, args, data):
+def zig_cdeps_linker_inputs(*, linking_context, solib_parents, os, prefer_pic, inputs, args, data):
     """Compiler arguments and inputs from a CcInfo.linking_context.
 
     Args:
         linking_context: cc_common.LinkingContext instance.
         solib_parents: A list of strings representing the solib parent directories.
         os: String; The target operating system.
+        prefer_pic: Whether to prefer the PIC variant of a static library.
         inputs: List; mutable, Append linker inputs to this collection.
         args: Args; mutable, Append the C linker flags to this object.
         data: List; mutable, Append data files to this collection.
@@ -100,12 +101,15 @@ def zig_cdeps_linker_inputs(*, linking_context, solib_parents, os, inputs, args,
             #   pic_lto_bitcode_files
             #   resolved_symlink_dynamic_library
             #   resolved_symlink_interface_library
-            archive = lib.static_library or lib.pic_static_library
+            # Like rules_cc, prefer PIC for shared-library links and fall back
+            # to the available archive variant.
+            # https://github.com/bazelbuild/rules_cc/blob/0.2.25/cc/private/link/finalize_link_action.bzl#L141-L153
+            use_pic = lib.pic_static_library != None and (prefer_pic or lib.static_library == None)
+            archive = lib.pic_static_library if use_pic else lib.static_library
             if archive:
                 if lib.alwayslink:
-                    # Including every member preserves whole-archive semantics.
-                    # The archive basename does not reliably identify the PIC variant.
-                    objects = lib.objects if lib.static_library else lib.pic_objects
+                    # Expand the matching member list to preserve whole-archive semantics.
+                    objects = lib.pic_objects if use_pic else lib.objects
                     if not objects:
                         fail("Cannot link alwayslink archive {} from {} with Zig: no member objects are available. Use use_cc_common_link for archive-only imports.".format(archive.path, link.owner))
                     all_libraries.extend([(object, False) for object in objects])

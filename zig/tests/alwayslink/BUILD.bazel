@@ -1,5 +1,5 @@
 load("@rules_cc//cc:defs.bzl", "cc_import", "cc_library")
-load("//zig:defs.bzl", "zig_binary")
+load("//zig:defs.bzl", "zig_binary", "zig_shared_library")
 
 package(default_visibility = ["//zig/tests:__pkg__"])
 
@@ -45,4 +45,16 @@ zig_binary(
     tags = ["manual"],
     target_compatible_with = _LINUX_AMD64,
     deps = [":archive_only"],
+)
+
+zig_shared_library(
+    name = "shared",
+    main = "main.zig",
+    tags = ["manual"],
+    target_compatible_with = _LINUX_AMD64,
+    deps = [
+        ":registration",
+        ":state",
+        "//zig/lib:libc",
+    ],
 )
