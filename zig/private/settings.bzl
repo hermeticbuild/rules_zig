@@ -39,6 +39,10 @@ THREADED_VALUES = ["multi", "single"]
 STRIP_VALUES = ["always", "never", "sometimes"]
 
 ATTRS = {
+    "cc_toolchain_cpp_runtime": attr.label(
+        doc = "Use the configured C/C++ toolchain's static C++ runtime for Zig-owned target links with native inputs.",
+        mandatory = True,
+    ),
     "incremental": attr.label(
         doc = "Whether to use experimental incremental compilation for target compilations.",
         mandatory = True,
@@ -151,6 +155,7 @@ def _settings_impl(ctx):
     args.extend(ctx.attr.host_zigopt[BuildSettingInfo].value if is_exec_configuration else ctx.attr.zigopt[BuildSettingInfo].value)
 
     settings_info = ZigSettingsInfo(
+        cc_toolchain_cpp_runtime = not is_exec_configuration and ctx.attr.cc_toolchain_cpp_runtime[BuildSettingInfo].value,
         incremental = not is_exec_configuration and ctx.attr.incremental[BuildSettingInfo].value,
         use_worker = not is_exec_configuration and ctx.attr.use_worker[BuildSettingInfo].value,
         mode = mode,
