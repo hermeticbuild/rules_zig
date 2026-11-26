@@ -76,13 +76,14 @@ def zig_cdeps_copts(compilation_context):
     copts.extend(["-F%s" % include for include in compilation_context.framework_includes.to_list()])
     return copts
 
-def zig_cdeps_linker_inputs(*, linking_context, solib_parents, os, inputs, args, data):
+def zig_cdeps_linker_inputs(*, linking_context, solib_parents, os, abi, inputs, args, data):
     """Compiler arguments and inputs from a CcInfo.linking_context.
 
     Args:
         linking_context: cc_common.LinkingContext instance.
         solib_parents: A list of strings representing the solib parent directories.
         os: String; The target operating system.
+        abi: String; The target ABI.
         inputs: List; mutable, Append linker inputs to this collection.
         args: Args; mutable, Append the C linker flags to this object.
         data: List; mutable, Append data files to this collection.
@@ -92,7 +93,12 @@ def zig_cdeps_linker_inputs(*, linking_context, solib_parents, os, inputs, args,
     for link in linking_context.linker_inputs.to_list():
         # These helpers' flags were added to the Zig compile arguments.
         if link.owner not in _LIBC_HELPERS:
-            args.add_all(link.user_link_flags)
+            if os == "linux" and abi and abi.split(".")[0] == "gnu":
+                # The C driver accepts -pthread. Zig's native link CLI uses
+                # -lpthread to request its bundled glibc instead.
+                args.add_all(["-lpthread" if flag == "-pthread" else flag for flag in link.user_link_flags])
+            else:
+                args.add_all(link.user_link_flags)
         inputs.extend(link.additional_inputs)
         for lib in link.libraries:
             # TODO[AH] Handle the remaining LibraryToLink metadata as needed:

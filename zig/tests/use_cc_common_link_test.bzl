@@ -126,6 +126,43 @@ _alwayslink_archive_only_test = analysistest.make(
     expect_failure = True,
 )
 
+def _define_native_link_flags_test(platform, *, use_cc_common_link, rewrite_pthread):
+    def _test_impl(ctx):
+        env = analysistest.begin(ctx)
+        action = assert_find_action(env, "CppLink" if use_cc_common_link else "ZigBuildExe")
+        if action:
+            assert_flag_set(env, "-lm", action.argv)
+            if rewrite_pthread:
+                assert_flag_set(env, "-lpthread", action.argv)
+                assert_flag_unset(env, "-pthread", action.argv)
+            else:
+                assert_flag_set(env, "-pthread", action.argv)
+        return analysistest.end(env)
+
+    return analysistest.make(
+        _test_impl,
+        config_settings = {
+            "//command_line_option:platforms": canonical_label(platform),
+            _SETTINGS_USE_CC_COMMON_LINK: use_cc_common_link,
+        },
+    )
+
+_native_link_flags_gnu_zig_test = _define_native_link_flags_test(
+    "@//zig/tests/platforms:x86_64-linux",
+    use_cc_common_link = False,
+    rewrite_pthread = True,
+)
+_native_link_flags_musl_zig_test = _define_native_link_flags_test(
+    "@//zig/tests/platforms:x86_64-linux-musl",
+    use_cc_common_link = False,
+    rewrite_pthread = False,
+)
+_native_link_flags_cc_test = _define_native_link_flags_test(
+    "@//zig/tests/platforms:x86_64-linux",
+    use_cc_common_link = True,
+    rewrite_pthread = False,
+)
+
 def use_cc_common_link_test_suite(name):
     unittest.suite(
         name,
@@ -150,4 +187,7 @@ def use_cc_common_link_test_suite(name):
         partial.make(_build_exe_use_cc_common_link_cc_test, target_under_test = "//zig/tests/simple-binary:binary_link_exec_properties", size = "small"),
         partial.make(_alwayslink_members_test, target_under_test = "//zig/tests/alwayslink:binary", size = "small", target_compatible_with = _LINUX_AMD64_COMPATIBILITY),
         partial.make(_alwayslink_archive_only_test, target_under_test = "//zig/tests/alwayslink:archive_only_binary", size = "small", target_compatible_with = _LINUX_AMD64_COMPATIBILITY),
+        partial.make(_native_link_flags_gnu_zig_test, target_under_test = "//zig/tests/simple-binary:binary_native_link_flags", size = "small", target_compatible_with = _LINUX_AMD64_COMPATIBILITY),
+        partial.make(_native_link_flags_musl_zig_test, target_under_test = "//zig/tests/simple-binary:binary_native_link_flags", size = "small", target_compatible_with = _LINUX_AMD64_COMPATIBILITY),
+        partial.make(_native_link_flags_cc_test, target_under_test = "//zig/tests/simple-binary:binary_native_link_flags", size = "small", target_compatible_with = _LINUX_AMD64_COMPATIBILITY),
     )

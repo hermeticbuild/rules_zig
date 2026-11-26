@@ -1,3 +1,4 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
 load("@rules_zig//zig:defs.bzl", "zig_binary")
 
 zig_binary(
@@ -12,4 +13,21 @@ zig_binary(
     main = "main.zig",
     tags = ["manual"],
     visibility = ["//zig/tests:__pkg__"],
+)
+
+cc_library(
+    name = "native_link_flags",
+    linkopts = [
+        "-pthread",
+        "-lm",
+    ],
+    tags = ["manual"],
+)
+
+zig_binary(
+    name = "binary_native_link_flags",
+    main = "main.zig",
+    tags = ["manual"],
+    visibility = ["//zig/tests:__pkg__"],
+    deps = [":native_link_flags"],
 )
