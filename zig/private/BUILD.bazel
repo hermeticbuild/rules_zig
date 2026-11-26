@@ -192,6 +192,7 @@ filegroup(
         ":BUILD.bazel",
         ":cc_helper.bzl",
         ":cc_linkopts.bzl",
+        ":cc_toolchain_runtime.bzl",
         ":compiler_rt_root.zig",
         ":platforms.bzl",
         ":resolved_target_toolchain.bzl",

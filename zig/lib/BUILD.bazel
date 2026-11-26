@@ -53,6 +53,7 @@ cc_linkopts(
 
 cc_toolchain_runtime(
     name = "static_cpp_runtime",
+    tags = ["manual"],
     visibility = ["//visibility:public"],
 )
 
