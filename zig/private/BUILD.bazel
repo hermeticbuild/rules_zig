@@ -3,6 +3,18 @@ load(":zig_toolchain.bzl", "zig_validation_exec_platform")
 
 zig_validation_exec_platform(name = "zig_validation_exec_platform")
 
+bzl_library(
+    name = "cc_toolchain_runtime",
+    srcs = ["cc_toolchain_runtime.bzl"],
+    visibility = ["//zig:__subpackages__"],
+    deps = [
+        ":cc_helper",
+        "@rules_cc//cc:find_cc_toolchain_bzl",
+        "@rules_cc//cc/common:cc_common",
+        "@rules_cc//cc/common:cc_info",
+    ],
+)
+
 exports_files(
     [
         "compiler_rt_root.zig",
