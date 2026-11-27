@@ -31,6 +31,10 @@ Zig by itself.
 Instead, modules are compiled at the use-site.
 Zig performs whole program compilation.
 
+For standalone translation, `copts` can select an Apple SDK with `-isysroot`
+without a C toolchain. Supply the SDK headers and `SDKSettings.json`, when
+available, as `data` inputs when the SDK is part of the Bazel workspace.
+
 **EXAMPLE**
 
 ```bzl

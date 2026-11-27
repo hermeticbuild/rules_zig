@@ -24,6 +24,20 @@ _DEFAULT_SYSROOT_INCLUDE_DIRS = [
     paths.join("usr", "include"),
 ]
 
+_APPLE_SDK_PLATFORMS = {
+    "driverkit": "driverkit",
+    "ios": "iphoneos",
+    "ios-simulator": "iphonesimulator",
+    "maccatalyst": "iosmac",
+    "macos": "macosx",
+    "tvos": "appletvos",
+    "tvos-simulator": "appletvsimulator",
+    "visionos": "xros",
+    "visionos-simulator": "xrsimulator",
+    "watchos": "watchos",
+    "watchos-simulator": "watchsimulator",
+}
+
 _APPLE_DEFAULT_TOOLCHAIN_INCLUDE_DIRS = _DEFAULT_SYSROOT_INCLUDE_DIRS + [
     paths.join("usr", "lib", "clang", str(version), "include")
     for version in range(15, 22)
@@ -60,25 +74,33 @@ def _sanitize_commandline(args):
         ret.append(arg)
     return ret
 
-def _extract_sysroot(command_line):
-    sysroot = None
-    waiting_for_sysroot = False
-
+def _extract_sysroot(command_line, *, darwin):
+    roots = {}
+    pending = None
     for arg in command_line:
-        if waiting_for_sysroot:
-            return arg
-        elif arg == "-isysroot":
-            waiting_for_sysroot = True
+        if pending != None:
+            flag, root = pending, arg
+            pending = None
+        elif arg in ("-isysroot", "--sysroot"):
+            pending = arg
+            continue
         elif arg.startswith("-isysroot"):
-            # rare compact form: -isysroot/path
-            return arg[len("-isysroot"):]
+            flag, root = "-isysroot", arg[len("-isysroot"):]
         elif arg.startswith("--sysroot="):
-            return arg[len("--sysroot="):]
+            flag, root = "--sysroot", arg[len("--sysroot="):]
+        else:
+            continue
 
-    if waiting_for_sysroot:
-        fail("-isysroot without following path in command_line")
+        roots[flag] = root
 
-    return sysroot
+    if pending != None:
+        fail("{} without following path in command_line".format(pending))
+
+    # Darwin uses -isysroot for SDK headers. Other sysroots normally come from
+    # --sysroot, with -isysroot also accepted for the legacy include fallback.
+    if darwin:
+        return roots.get("-isysroot", roots.get("--sysroot"))
+    return roots.get("--sysroot", roots.get("-isysroot"))
 
 def _include_path_for_file(file):
     if (file.is_source == False):
@@ -92,6 +114,19 @@ def _include_path_for_file(file):
 
 def _is_local_config_apple_cc(cc_toolchain):
     return cc_toolchain and "local_config_apple_cc" in cc_toolchain.compiler_executable
+
+def _is_apple_sdk_include(path, sysroot):
+    xcode_sdk = apple_support.path_placeholders.sdkroot()
+    if path == sysroot or path == xcode_sdk or paths.basename(path).endswith(".sdk"):
+        return True
+    if not path.endswith(("/usr/local/include", "/usr/include", "/Library/Frameworks", "/System/Library/SubFrameworks")):
+        return False
+
+    return (
+        (sysroot and paths.starts_with(path, sysroot)) or
+        paths.starts_with(path, xcode_sdk) or
+        any([part.endswith(".sdk") for part in path.split("/")])
+    )
 
 def _builtin_translate_c(*, ctx, zigtoolchaininfo, global_args, compilation_context, copts, copts_inputs, output_prefix):
     inputs = list(copts_inputs)
@@ -202,12 +237,16 @@ def _external_translate_c(*, ctx, zigtoolchaininfo, translatectoolchaininfo, com
 
     zig_out = ctx.actions.declare_file("{}{}_c.zig".format(output_prefix, ctx.label.name))
 
+    target = ctx.toolchains["//zig/target:toolchain_type"].zigtargetinfo
+    os = (target.triple.os or "").split(".", 1)[0]
+    abi = (target.triple.abi or "").split(".", 1)[0]
+    sdk_platform = _APPLE_SDK_PLATFORMS.get(os + "-" + abi, _APPLE_SDK_PLATFORMS.get(os))
     args = ctx.actions.args()
     args.add("-fmodule-libs")
     if semver.gte(zigtoolchaininfo.zig_version, _TRANSLATE_C_2_MIN_ZIG_VERSION):
         args.add(zig_out, format = "-o=%s")
         args.add(zig_toolchain_lib_dir_path(zigtoolchaininfo), format = "--zig-lib=%s")
-        args.add(ctx.toolchains["//zig/target:toolchain_type"].zigtargetinfo.target, format = "--target=%s")
+        args.add(target.target, format = "--target=%s")
         args.add("--")
         if zigtoolchaininfo.zig_lib.file != None:
             inputs.append(zigtoolchaininfo.zig_lib.file)
@@ -221,11 +260,12 @@ def _external_translate_c(*, ctx, zigtoolchaininfo, translatectoolchaininfo, com
         "-D__building_module(x)=0",
     ])
 
+    command_line = ctx.fragments.cpp.copts + ctx.fragments.cpp.conlyopts
     if cc_toolchain:
         c_compile_variables = cc_common.create_compile_variables(
             feature_configuration = cc_feature_configuration,
             cc_toolchain = cc_toolchain,
-            user_compile_flags = ctx.fragments.cpp.copts + ctx.fragments.cpp.conlyopts,
+            user_compile_flags = command_line,
         )
         command_line = cc_common.get_memory_inefficient_command_line(
             feature_configuration = cc_feature_configuration,
@@ -234,28 +274,35 @@ def _external_translate_c(*, ctx, zigtoolchaininfo, translatectoolchaininfo, com
         )
 
         transitive_inputs.append(cc_toolchain.all_files)
-        args.add_all(_sanitize_commandline(command_line))
-        args.add_all(cc_toolchain.built_in_include_directories, before_each = "-isystem")
+    args.add_all(_sanitize_commandline(command_line))
+    compile_flags = command_line + copts
+    no_standard_includes = "-nostdinc" in compile_flags or "--no-standard-includes" in compile_flags
+    no_sdk_includes = no_standard_includes or "-nostdlibinc" in compile_flags
+    sysroot = _extract_sysroot(compile_flags, darwin = sdk_platform != None)
+    if sysroot == "/dev/null":
+        sysroot = None
 
-        # If the toolchain specifies a sysroot, add the sysroot's /usr/include as an
-        # include path since that's where the toolchain's builtin headers are expected to be.
-        sysroot = _extract_sysroot(command_line)
-        if sysroot != None and sysroot != "/dev/null":
-            args.add("-isystem", paths.join(sysroot, "usr", "include"))
+    if cc_toolchain and not no_standard_includes:
+        builtin_dirs = cc_toolchain.built_in_include_directories
+        if sdk_platform and (sysroot or no_sdk_includes):
+            # The toolchain's allowlist can contain SDK framework directories
+            # without their framework type, or paths from a different SDK.
+            builtin_dirs = [path for path in builtin_dirs if not _is_apple_sdk_include(path, sysroot)]
+        args.add_all(builtin_dirs, before_each = "-isystem")
 
-        # If using the local apple cc toolchain, also include the default toolchain's
-        # builtin headers since the local apple cc toolchain doesn't include them by default.
-        if is_local_apple_cc:
-            args.add_all(
-                _APPLE_DEFAULT_TOOLCHAIN_INCLUDE_DIRS,
-                before_each = "-isystem",
-                format_each = paths.join(
-                    apple_support.path_placeholders.xcode(),
-                    "Toolchains",
-                    "XcodeDefault.xctoolchain",
-                    "",
-                ) + "%s",
-            )
+    # If using the local apple cc toolchain, also include the default toolchain's
+    # builtin headers since the local apple cc toolchain doesn't include them by default.
+    if is_local_apple_cc and not no_standard_includes:
+        args.add_all(
+            _APPLE_DEFAULT_TOOLCHAIN_INCLUDE_DIRS,
+            before_each = "-isystem",
+            format_each = paths.join(
+                apple_support.path_placeholders.xcode(),
+                "Toolchains",
+                "XcodeDefault.xctoolchain",
+                "",
+            ) + "%s",
+        )
 
     args.add_all(compilation_context.defines, format_each = "-D%s")
     args.add("-I.")
@@ -274,6 +321,21 @@ def _external_translate_c(*, ctx, zigtoolchaininfo, translatectoolchaininfo, com
 
     args.add("--emulate=clang")
 
+    executable = translatectoolchaininfo.executable
+    tools = [translatectoolchaininfo.files_to_run]
+    arguments = [args]
+    if sysroot and sdk_platform and not no_sdk_includes:
+        # Read SDKSettings.json in the action, where both declared SDK inputs
+        # and Xcode's resolved SDK path are available.
+        launcher_args = ctx.actions.args()
+        launcher_args.add(sdk_platform)
+        launcher_args.add(sysroot)
+        launcher_args.add(executable)
+        arguments = [launcher_args, args]
+        executable = translatectoolchaininfo.sdk_launcher
+    elif sysroot and not no_sdk_includes:
+        args.add("-isystem", paths.join(sysroot, "usr", "include"))
+
     actions_run = ctx.actions.run
     actions_run_extra_kwargs = {}
     if is_local_apple_cc:
@@ -291,13 +353,13 @@ def _external_translate_c(*, ctx, zigtoolchaininfo, translatectoolchaininfo, com
             direct = inputs,
             transitive = transitive_inputs,
         ),
-        executable = translatectoolchaininfo.executable,
+        executable = executable,
         outputs = [zig_out],
-        arguments = [args],
+        arguments = arguments,
         mnemonic = "ZigTranslateC",
         progress_message = "zig translate-c %{label}",
         execution_requirements = {tag: "" for tag in ctx.attr.tags},
-        tools = [translatectoolchaininfo.files_to_run],
+        tools = tools,
         **actions_run_extra_kwargs
     )
 
