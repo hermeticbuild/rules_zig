@@ -1,9 +1,17 @@
-# Zig incremental compilation worker
+# Zig compilation worker
+
+The adapter keeps a private local and global Zig cache. By default, it runs a
+fresh compiler in Bazel's execroot for each request, and Zig writes
+the declared outputs directly. The startup arguments identify the compiler,
+SDK, and subcommand, so actions with different outputs can share the worker.
+
+## Incremental mode
 
 [`worker.zig`](worker.zig) keeps a Zig compiler running across Bazel requests.
 It starts Zig with `-fincremental` and `--listen=-`. Zig keeps fine-grained
 compilation state in memory and uses it to decide what to recompile on each
-`update`. Replacing the child loses that state.
+`update`. Replacing the child loses that state. The `--incremental` startup
+flag selects this mode.
 
 ## Routing and reuse
 

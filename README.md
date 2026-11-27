@@ -117,6 +117,22 @@ them through Bazel by using the `--repo_env` flag.
 > build:windows --sandbox_add_mount_pair=C:\Temp
 > ```
 
+#### Private caches with a persistent worker
+
+Use a persistent Bazel worker for ordinary target compilations with a
+hermetic Zig 0.17.x SDK on a POSIX execution platform:
+
+```text
+build --@rules_zig//zig/settings:use_worker
+build --strategy=ZigWorkerCompile=worker
+```
+
+The worker starts a fresh Zig process per action and keeps the local and
+global Zig caches in a private directory. Compilations using the same worker
+reuse those caches without a shared cache mount. Direct actions, including
+the worker's own build, use the cache configuration above. If you also
+enable `incremental`, it takes precedence for target compilations.
+
 #### Execution Groups
 
 Zig compiler actions use the `zig` execution group. When `use_cc_common_link`

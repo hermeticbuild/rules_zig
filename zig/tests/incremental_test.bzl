@@ -5,6 +5,7 @@ load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
 load(":util.bzl", "assert_find_action", "canonical_label")
 
 _INCREMENTAL = canonical_label("@//zig/settings:incremental")
+_USE_WORKER = canonical_label("@//zig/settings:use_worker")
 _VERSION = canonical_label("@zig_toolchains//:version")
 _PLATFORMS = "//command_line_option:platforms"
 _EXEC_PLATFORMS = "//command_line_option:extra_execution_platforms"
@@ -16,6 +17,7 @@ _LINUX = canonical_label("@//zig/tests/platforms:x86_64-linux")
 # when checking the target-OS restriction.
 _SETTINGS = {
     _INCREMENTAL: True,
+    _USE_WORKER: False,
     _VERSION: "0.17.1",
     _PLATFORMS: _LINUX,
     _EXEC_PLATFORMS: [canonical_label("@buildbuddy_toolchain//:platform_linux_x86_64")],
@@ -40,6 +42,28 @@ _disabled_test = analysistest.make(
     config_settings = _SETTINGS | {_INCREMENTAL: False},
 )
 
+def _worker_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    compile = assert_find_action(env, "ZigWorkerCompile")
+
+    executable = target[DefaultInfo].files_to_run.executable
+    asserts.equals(env, [executable], compile.outputs.to_list())
+    asserts.false(env, "--incremental" in compile.argv)
+    asserts.equals(env, "-femit-bin=" + executable.path, compile.argv[-1])
+    asserts.equals(env, [], [
+        arg
+        for arg in compile.argv
+        if arg.startswith("--compilation-output=")
+    ])
+
+    return analysistest.end(env)
+
+_worker_test = analysistest.make(
+    _worker_test_impl,
+    config_settings = _SETTINGS | {_INCREMENTAL: False, _USE_WORKER: True},
+)
+
 def _binary_test_impl(ctx):
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
@@ -54,8 +78,9 @@ def _binary_test_impl(ctx):
     boundary = compile.argv.index("--")
     asserts.equals(env, "build-exe", compile.argv[1])
     asserts.equals(env, "--zig-lib-dir", compile.argv[3])
-    asserts.equals(env, ["--zig-lib-dir", "--cache-dir", "--global-cache-dir"], compile.argv[6:12:2])
-    asserts.true(env, "-target" in compile.argv[12:boundary])
+    asserts.equals(env, "--incremental", compile.argv[6])
+    asserts.equals(env, ["--zig-lib-dir", "--cache-dir", "--global-cache-dir"], compile.argv[7:13:2])
+    asserts.true(env, "-target" in compile.argv[13:boundary])
     asserts.equals(env, "-femit-bin=" + executable.path, compile.argv[boundary - 1])
     asserts.equals(env, "name=" + root_module_name, compile.argv[boundary + 1])
     asserts.true(env, compile.argv[boundary + 2].startswith("input="))
@@ -64,7 +89,10 @@ def _binary_test_impl(ctx):
 
     return analysistest.end(env)
 
-_binary_test = analysistest.make(_binary_test_impl, config_settings = _SETTINGS)
+_binary_test = analysistest.make(
+    _binary_test_impl,
+    config_settings = _SETTINGS | {_USE_WORKER: True},
+)
 
 def _test_binary_test_impl(ctx):
     env = analysistest.begin(ctx)
@@ -315,6 +343,7 @@ def incremental_test_suite(name):
         name,
         # Test action selection and primary output ownership.
         partial.make(_disabled_test, target_under_test = "//zig/tests/incremental:binary", size = "small"),
+        partial.make(_worker_test, target_under_test = "//zig/tests/incremental:binary", size = "small"),
         partial.make(_binary_test, target_under_test = "//zig/tests/incremental:binary", size = "small"),
         partial.make(_test_binary_test, target_under_test = "//zig/tests/incremental:test_binary", size = "small"),
         partial.make(_static_library_test, target_under_test = "//zig/tests/incremental:static_library", size = "small"),
