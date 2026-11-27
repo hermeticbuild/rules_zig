@@ -94,9 +94,8 @@ def zig_cdeps_linker_inputs(*, linking_context, solib_parents, os, abi, prefer_p
     for link in linking_context.linker_inputs.to_list():
         # These helpers' flags were added to the Zig compile arguments.
         if link.owner not in _LIBC_HELPERS:
-            if os == "linux" and abi and abi.split(".")[0] == "gnu":
-                # The C driver accepts -pthread. Zig's native link CLI uses
-                # -lpthread to request its bundled glibc instead.
+            if os == "linux" and abi and (abi.startswith("gnu") or abi.startswith("musl")):
+                # Zig's link CLI recognizes -lpthread as a libc request for GNU and musl ABIs.
                 args.add_all(["-lpthread" if flag == "-pthread" else flag for flag in link.user_link_flags])
             else:
                 args.add_all(link.user_link_flags)

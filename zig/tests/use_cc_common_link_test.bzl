@@ -164,7 +164,7 @@ _native_link_flags_gnu_zig_test = _define_native_link_flags_test(
 _native_link_flags_musl_zig_test = _define_native_link_flags_test(
     "@//zig/tests/platforms:x86_64-linux-musl",
     use_cc_common_link = False,
-    rewrite_pthread = False,
+    rewrite_pthread = True,
 )
 _native_link_flags_cc_test = _define_native_link_flags_test(
     "@//zig/tests/platforms:x86_64-linux",
