@@ -101,18 +101,19 @@ _incompatible_backend_test = analysistest.make(
     expect_failure = True,
 )
 
-def _conflicting_raw_option_test_impl(ctx):
+def _raw_linker_option_test_impl(ctx):
     env = analysistest.begin(ctx)
-    asserts.expect_failure(env, "Raw Zig options conflict with backend or linker: -fnew-linker and -fno-new-linker.")
+    argv = assert_find_action(env, "ZigIncrementalCompile").argv
+    linker_flags = [arg for arg in argv if arg in ("-fnew-linker", "-fno-new-linker")]
+    asserts.equals(env, ["-fnew-linker", "-fno-new-linker"], linker_flags)
     return analysistest.end(env)
 
-_conflicting_raw_option_test = analysistest.make(
-    _conflicting_raw_option_test_impl,
+_raw_linker_option_test = analysistest.make(
+    _raw_linker_option_test_impl,
     config_settings = _SETTINGS | {
         _LINKER: "new",
         canonical_label("@//zig/settings:zigopt"): ["-fno-new-linker"],
     },
-    expect_failure = True,
 )
 
 def _test_binary_test_impl(ctx):
@@ -367,7 +368,7 @@ def incremental_test_suite(name):
         partial.make(_typed_linker_new_test, target_under_test = "//zig/tests/incremental:binary", size = "small"),
         partial.make(_typed_linker_lld_test, target_under_test = "//zig/tests/incremental:binary", size = "small"),
         partial.make(_incompatible_backend_test, target_under_test = "//zig/tests/incremental:binary", size = "small"),
-        partial.make(_conflicting_raw_option_test, target_under_test = "//zig/tests/incremental:binary", size = "small"),
+        partial.make(_raw_linker_option_test, target_under_test = "//zig/tests/incremental:binary", size = "small"),
         # Test action selection and primary output ownership.
         partial.make(_disabled_test, target_under_test = "//zig/tests/incremental:binary", size = "small"),
         partial.make(_binary_test, target_under_test = "//zig/tests/incremental:binary", size = "small"),

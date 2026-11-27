@@ -44,7 +44,6 @@ load(
 load(
     "//zig/private/providers:zig_settings_info.bzl",
     "ZigSettingsInfo",
-    "check_compiler_flags",
     "zig_settings",
 )
 load("//zig/private/providers:zig_target_info.bzl", "zig_target_platform")
@@ -533,11 +532,6 @@ def zig_build_impl(ctx, *, kind):
             import_names = import_names,
         )
 
-    if settings.compiler_flags:
-        check_compiler_flags(settings.compiler_flags, root_module.module_context.zigopts)
-        for module in root_module.transitive_module_contexts.to_list():
-            check_compiler_flags(settings.compiler_flags, module.zigopts)
-
     # Assemble and register the primary Zig compilation.
     if use_cc_common_link:
         if kind == "zig_static_library":
@@ -712,7 +706,6 @@ def zig_build_impl(ctx, *, kind):
     # Pass linkopts to the final linker. Static archives have no final link.
     # The C/C++ path passes the same linkopts to cc_common.link below.
     if not use_cc_common_link and kind != "zig_static_library":
-        check_compiler_flags(settings.compiler_flags, linkopts)
         args.add_all(linkopts)
 
     if output_kind == "shared_library":

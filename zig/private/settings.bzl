@@ -1,7 +1,7 @@
 """Implementation of the settings rule."""
 
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
-load("//zig/private/providers:zig_settings_info.bzl", "ZigSettingsInfo", "check_compiler_flags")
+load("//zig/private/providers:zig_settings_info.bzl", "ZigSettingsInfo")
 
 DOC = """\
 Collection of all Zig build settings.
@@ -149,13 +149,6 @@ def _resolve_strip(ctx, strip):
 
     fail("Unrecognized Bazel strip setting {}.".format(strip))
 
-def _compiler_flags(backend, linker):
-    if linker == "lld":
-        if backend == "self_hosted":
-            fail("linker=lld requires the LLVM compiler backend.")
-        backend = "llvm"
-    return _BACKEND_ARGS[backend] + _LINKER_ARGS[linker]
-
 def _settings_impl(ctx):
     args = []
 
@@ -176,14 +169,16 @@ def _settings_impl(ctx):
 
     backend = "auto" if is_exec_configuration else ctx.attr.backend[BuildSettingInfo].value
     linker = "auto" if is_exec_configuration else ctx.attr.linker[BuildSettingInfo].value
-    compiler_flags = _compiler_flags(backend, linker)
-    zigopts = ctx.attr.host_zigopt[BuildSettingInfo].value if is_exec_configuration else ctx.attr.zigopt[BuildSettingInfo].value
-    check_compiler_flags(compiler_flags, zigopts)
-    args.extend(compiler_flags)
-    args.extend(zigopts)
+    if linker == "lld":
+        if backend == "self_hosted":
+            fail("linker=lld requires the LLVM compiler backend.")
+        backend = "llvm"
+    args.extend(_BACKEND_ARGS[backend])
+    args.extend(_LINKER_ARGS[linker])
+
+    args.extend(ctx.attr.host_zigopt[BuildSettingInfo].value if is_exec_configuration else ctx.attr.zigopt[BuildSettingInfo].value)
 
     settings_info = ZigSettingsInfo(
-        compiler_flags = compiler_flags,
         incremental = not is_exec_configuration and ctx.attr.incremental[BuildSettingInfo].value,
         mode = mode,
         threaded = threaded,
