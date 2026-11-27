@@ -7,12 +7,18 @@ load(
     ":util.bzl",
     "assert_find_action",
     "assert_find_actions_in_exact_order",
+    "assert_flag_set",
     "assert_flag_unset",
     "canonical_label",
 )
 
 _SETTINGS_USE_CC_COMMON_LINK = canonical_label("@//zig/settings:use_cc_common_link")
 _SETTINGS_HOST_USE_CC_COMMON_LINK = canonical_label("@//zig/settings:host_use_cc_common_link")
+_LINUX_AMD64 = {"//command_line_option:platforms": canonical_label("@//zig/tests/platforms:x86_64-linux")}
+_LINUX_AMD64_COMPATIBILITY = [
+    "@platforms//os:linux",
+    "@platforms//cpu:x86_64",
+]
 
 def _define_settings_use_cc_common_link_test(use_cc_common_link):
     def _test_impl(ctx):
@@ -92,6 +98,80 @@ _build_shared_lib_use_cc_common_link_zig_test = _define_build_use_cc_common_link
 _build_test_use_cc_common_link_cc_test = _define_build_use_cc_common_link_test(["ZigBuildTest", "ZigCompilerRuntime", "CppLink"], use_cc_common_link = True)
 _build_test_use_cc_common_link_zig_test = _define_build_use_cc_common_link_test(["ZigBuildTest"], use_cc_common_link = False)
 
+def _define_alwayslink_members_test(mnemonic, pic_suffix):
+    def _test_impl(ctx):
+        env = analysistest.begin(ctx)
+        action = assert_find_action(env, mnemonic)
+        if action:
+            members = [arg for arg in action.argv if arg.endswith(("registration.o", "registration.pic.o"))]
+            asserts.equals(env, 1, len(members))
+            if members:
+                asserts.true(env, members[0].endswith("registration{}.o".format(pic_suffix)))
+                assert_flag_set(env, members[0], [file.path for file in action.inputs.to_list()])
+            asserts.true(env, any([arg.endswith("libstate{}.a".format(pic_suffix)) for arg in action.argv]))
+            asserts.false(env, any([arg.endswith(("libregistration.lo", "libregistration.pic.lo")) for arg in action.argv]))
+        return analysistest.end(env)
+
+    # In opt mode the Linux C++ toolchain exposes both archive variants.
+    return analysistest.make(
+        _test_impl,
+        config_settings = _LINUX_AMD64 | {
+            "//command_line_option:compilation_mode": "opt",
+            _SETTINGS_USE_CC_COMMON_LINK: False,
+        },
+    )
+
+_alwayslink_members_test = _define_alwayslink_members_test("ZigBuildExe", "")
+_shared_alwayslink_members_test = _define_alwayslink_members_test("ZigBuildSharedLib", ".pic")
+
+def _alwayslink_archive_only_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "no member objects are available. Use use_cc_common_link for archive-only imports.")
+    return analysistest.end(env)
+
+_alwayslink_archive_only_test = analysistest.make(
+    _alwayslink_archive_only_test_impl,
+    config_settings = _LINUX_AMD64 | {_SETTINGS_USE_CC_COMMON_LINK: False},
+    expect_failure = True,
+)
+
+def _define_native_link_flags_test(platform, *, use_cc_common_link, rewrite_pthread):
+    def _test_impl(ctx):
+        env = analysistest.begin(ctx)
+        action = assert_find_action(env, "CppLink" if use_cc_common_link else "ZigBuildExe")
+        if action:
+            assert_flag_set(env, "-lm", action.argv)
+            if rewrite_pthread:
+                assert_flag_set(env, "-lpthread", action.argv)
+                assert_flag_unset(env, "-pthread", action.argv)
+            else:
+                assert_flag_set(env, "-pthread", action.argv)
+        return analysistest.end(env)
+
+    return analysistest.make(
+        _test_impl,
+        config_settings = {
+            "//command_line_option:platforms": canonical_label(platform),
+            _SETTINGS_USE_CC_COMMON_LINK: use_cc_common_link,
+        },
+    )
+
+_native_link_flags_gnu_zig_test = _define_native_link_flags_test(
+    "@//zig/tests/platforms:x86_64-linux",
+    use_cc_common_link = False,
+    rewrite_pthread = True,
+)
+_native_link_flags_musl_zig_test = _define_native_link_flags_test(
+    "@//zig/tests/platforms:x86_64-linux-musl",
+    use_cc_common_link = False,
+    rewrite_pthread = True,
+)
+_native_link_flags_cc_test = _define_native_link_flags_test(
+    "@//zig/tests/platforms:x86_64-linux",
+    use_cc_common_link = True,
+    rewrite_pthread = False,
+)
+
 def use_cc_common_link_test_suite(name):
     unittest.suite(
         name,
@@ -114,4 +194,10 @@ def use_cc_common_link_test_suite(name):
         partial.make(_build_test_use_cc_common_link_zig_test, target_under_test = "//zig/tests/simple-test:test", size = "small"),
         # The final link accepts cpp_link-scoped execution properties.
         partial.make(_build_exe_use_cc_common_link_cc_test, target_under_test = "//zig/tests/simple-binary:binary_link_exec_properties", size = "small"),
+        partial.make(_alwayslink_members_test, target_under_test = "//zig/tests/alwayslink:binary", size = "small", target_compatible_with = _LINUX_AMD64_COMPATIBILITY),
+        partial.make(_shared_alwayslink_members_test, target_under_test = "//zig/tests/alwayslink:shared", size = "small", target_compatible_with = _LINUX_AMD64_COMPATIBILITY),
+        partial.make(_alwayslink_archive_only_test, target_under_test = "//zig/tests/alwayslink:archive_only_binary", size = "small", target_compatible_with = _LINUX_AMD64_COMPATIBILITY),
+        partial.make(_native_link_flags_gnu_zig_test, target_under_test = "//zig/tests/simple-binary:binary_native_link_flags", size = "small", target_compatible_with = _LINUX_AMD64_COMPATIBILITY),
+        partial.make(_native_link_flags_musl_zig_test, target_under_test = "//zig/tests/simple-binary:binary_native_link_flags", size = "small", target_compatible_with = _LINUX_AMD64_COMPATIBILITY),
+        partial.make(_native_link_flags_cc_test, target_under_test = "//zig/tests/simple-binary:binary_native_link_flags", size = "small", target_compatible_with = _LINUX_AMD64_COMPATIBILITY),
     )

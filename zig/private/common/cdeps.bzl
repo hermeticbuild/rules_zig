@@ -76,13 +76,15 @@ def zig_cdeps_copts(compilation_context):
     copts.extend(["-F%s" % include for include in compilation_context.framework_includes.to_list()])
     return copts
 
-def zig_cdeps_linker_inputs(*, linking_context, solib_parents, os, inputs, args, data):
+def zig_cdeps_linker_inputs(*, linking_context, solib_parents, os, abi, prefer_pic, inputs, args, data):
     """Compiler arguments and inputs from a CcInfo.linking_context.
 
     Args:
         linking_context: cc_common.LinkingContext instance.
         solib_parents: A list of strings representing the solib parent directories.
         os: String; The target operating system.
+        abi: String; The target ABI.
+        prefer_pic: Whether to prefer the PIC variant of a static library.
         inputs: List; mutable, Append linker inputs to this collection.
         args: Args; mutable, Append the C linker flags to this object.
         data: List; mutable, Append data files to this collection.
@@ -92,38 +94,43 @@ def zig_cdeps_linker_inputs(*, linking_context, solib_parents, os, inputs, args,
     for link in linking_context.linker_inputs.to_list():
         # These helpers' flags were added to the Zig compile arguments.
         if link.owner not in _LIBC_HELPERS:
-            args.add_all(link.user_link_flags)
+            if os == "linux" and abi and (abi.startswith("gnu") or abi.startswith("musl")):
+                # Zig's link CLI recognizes -lpthread as a libc request for GNU and musl ABIs.
+                args.add_all(["-lpthread" if flag == "-pthread" else flag for flag in link.user_link_flags])
+            else:
+                args.add_all(link.user_link_flags)
         inputs.extend(link.additional_inputs)
         for lib in link.libraries:
-            file = None
-            dynamic = False
-            if lib.static_library != None:
-                file = lib.static_library
-            elif lib.pic_static_library != None:
-                file = lib.pic_static_library
-            elif lib.interface_library != None:
-                file = lib.interface_library
-                dynamic = True
-            elif lib.dynamic_library != None:
-                file = lib.dynamic_library
-                dynamic = True
-
-            all_libraries.append((file, dynamic))
-
-            if dynamic and lib.dynamic_library:
-                dynamic_libraries.append(lib.dynamic_library)
-
-            # TODO[AH] Handle the remaining fields of LibraryToLink as needed:
-            #   alwayslink
+            # TODO[AH] Handle the remaining LibraryToLink metadata as needed:
             #   lto_bitcode_files
-            #   objects
             #   pic_lto_bitcode_files
-            #   pic_objects
             #   resolved_symlink_dynamic_library
             #   resolved_symlink_interface_library
-
-            if file:
+            # Like rules_cc, prefer PIC for shared-library links and fall back
+            # to the available archive variant.
+            # https://github.com/bazelbuild/rules_cc/blob/0.2.25/cc/private/link/finalize_link_action.bzl#L141-L153
+            use_pic = lib.pic_static_library != None and (prefer_pic or lib.static_library == None)
+            archive = lib.pic_static_library if use_pic else lib.static_library
+            if archive:
+                if lib.alwayslink:
+                    # Expand the matching member list to preserve whole-archive semantics.
+                    objects = lib.pic_objects if use_pic else lib.objects
+                    if not objects:
+                        fail("Cannot link alwayslink archive {} from {} with Zig: no member objects are available. Use use_cc_common_link for archive-only imports.".format(archive.path, link.owner))
+                    all_libraries.extend([(object, False) for object in objects])
+                    inputs.extend(objects)
+                else:
+                    # Keep ordinary archives available for lazy member extraction.
+                    all_libraries.append((archive, False))
+                    inputs.append(archive)
+            else:
+                file = lib.interface_library or lib.dynamic_library
+                if not file:
+                    continue
+                all_libraries.append((file, True))
                 inputs.append(file)
+                if lib.dynamic_library:
+                    dynamic_libraries.append(lib.dynamic_library)
 
     args.add_all(
         all_libraries,
