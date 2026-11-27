@@ -117,6 +117,28 @@ them through Bazel by using the `--repo_env` flag.
 > build:windows --sandbox_add_mount_pair=C:\Temp
 > ```
 
+#### Zig backend and linker selection
+
+Use `--@rules_zig//zig/settings:backend=auto|self_hosted|llvm` to select
+Zig's code generation backend. `auto` follows the compiler default unless
+`linker=lld` selects LLVM.
+
+Use `--@rules_zig//zig/settings:linker=auto|legacy|new|lld` to select
+how Zig writes its output in the target configuration. `auto` lets the
+selected Zig toolchain decide. On ELF targets, `legacy` selects Zig's
+original ELF linker and `new` selects ELF2. `lld` uses Zig's LLD integration
+and selects the LLVM code generation backend.
+
+This setting is independent of `incremental` and `use_cc_common_link`. For
+example, with `use_cc_common_link` enabled, the C++ toolchain links the final
+executable and `linker` controls the intermediate archive Zig emits.
+Warm incremental updates with the legacy ELF writer can produce invalid
+archives on Zig 0.17.0 and 0.17.1.
+
+Use `zig_configure` or `zig_configure_binary` to select `backend` and
+`linker` for a particular target. Other compiler options, such as
+`-fno-libllvm`, can still be passed through `zigopts`.
+
 #### Execution Groups
 
 Zig compiler actions use the `zig` execution group. When `use_cc_common_link`

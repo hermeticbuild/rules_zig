@@ -1,7 +1,7 @@
 """Implementation of the settings rule."""
 
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
-load("//zig/private/providers:zig_settings_info.bzl", "ZigSettingsInfo")
+load("//zig/private/providers:zig_settings_info.bzl", "ZigSettingsInfo", "check_compiler_flags")
 
 DOC = """\
 Collection of all Zig build settings.
@@ -36,9 +36,28 @@ THREADED_ARGS = {
 
 THREADED_VALUES = ["multi", "single"]
 
+_BACKEND_ARGS = {
+    "auto": [],
+    "llvm": ["-fllvm"],
+    "self_hosted": ["-fno-llvm"],
+}
+BACKEND_VALUES = _BACKEND_ARGS.keys()
+
+_LINKER_ARGS = {
+    "auto": [],
+    "legacy": ["-fno-lld", "-fno-new-linker"],
+    "new": ["-fno-lld", "-fnew-linker"],
+    "lld": ["-flld", "-fno-new-linker"],
+}
+LINKER_VALUES = _LINKER_ARGS.keys()
+
 STRIP_VALUES = ["always", "never", "sometimes"]
 
 ATTRS = {
+    "backend": attr.label(
+        doc = "The Zig code generation backend for the target configuration.",
+        mandatory = True,
+    ),
     "incremental": attr.label(
         doc = "Whether to use experimental incremental compilation for target compilations.",
         mandatory = True,
@@ -65,6 +84,10 @@ ATTRS = {
     ),
     "host_threaded": attr.label(
         doc = "The Zig multi- or single-threaded setting for the host configuration.",
+        mandatory = True,
+    ),
+    "linker": attr.label(
+        doc = "The linker Zig uses to write its output in the target configuration.",
         mandatory = True,
     ),
     "zigopt": attr.label(
@@ -126,6 +149,13 @@ def _resolve_strip(ctx, strip):
 
     fail("Unrecognized Bazel strip setting {}.".format(strip))
 
+def _compiler_flags(backend, linker):
+    if linker == "lld":
+        if backend == "self_hosted":
+            fail("linker=lld requires the LLVM compiler backend.")
+        backend = "llvm"
+    return _BACKEND_ARGS[backend] + _LINKER_ARGS[linker]
+
 def _settings_impl(ctx):
     args = []
 
@@ -144,9 +174,16 @@ def _settings_impl(ctx):
     if strip:
         args.append("-fstrip")
 
-    args.extend(ctx.attr.host_zigopt[BuildSettingInfo].value if is_exec_configuration else ctx.attr.zigopt[BuildSettingInfo].value)
+    backend = "auto" if is_exec_configuration else ctx.attr.backend[BuildSettingInfo].value
+    linker = "auto" if is_exec_configuration else ctx.attr.linker[BuildSettingInfo].value
+    compiler_flags = _compiler_flags(backend, linker)
+    zigopts = ctx.attr.host_zigopt[BuildSettingInfo].value if is_exec_configuration else ctx.attr.zigopt[BuildSettingInfo].value
+    check_compiler_flags(compiler_flags, zigopts)
+    args.extend(compiler_flags)
+    args.extend(zigopts)
 
     settings_info = ZigSettingsInfo(
+        compiler_flags = compiler_flags,
         incremental = not is_exec_configuration and ctx.attr.incremental[BuildSettingInfo].value,
         mode = mode,
         threaded = threaded,

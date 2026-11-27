@@ -2,7 +2,7 @@
 
 load("@bazel_skylib//lib:paths.bzl", "paths")
 load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
-load("//zig/private:settings.bzl", "MODE_VALUES", "THREADED_VALUES")
+load("//zig/private:settings.bzl", "BACKEND_VALUES", "LINKER_VALUES", "MODE_VALUES", "THREADED_VALUES")
 
 DOC = """\
 Transitions a target and its dependencies to a different configuration.
@@ -109,6 +109,10 @@ def _zig_transition_impl(settings, attr):
         result["//command_line_option:platforms"] = str(attr.target)
     if attr.zig_version:
         result["@zig_toolchains//:version"] = str(attr.zig_version)
+    if attr.backend:
+        result["//zig/settings:backend"] = attr.backend
+    if attr.linker:
+        result["//zig/settings:linker"] = attr.linker
     if attr.use_cc_common_link != -1:
         result["//zig/settings:use_cc_common_link"] = attr.use_cc_common_link == 1
     if attr.host_use_cc_common_link != -1:
@@ -137,6 +141,8 @@ _zig_transition = transition(
         "//command_line_option:extra_toolchains",
         "//command_line_option:platforms",
         "@zig_toolchains//:version",
+        "//zig/settings:backend",
+        "//zig/settings:linker",
         "//zig/settings:use_cc_common_link",
         "//zig/settings:host_use_cc_common_link",
         "//zig/settings:mode",
@@ -152,6 +158,8 @@ _zig_transition = transition(
         "//command_line_option:extra_toolchains",
         "//command_line_option:platforms",
         "@zig_toolchains//:version",
+        "//zig/settings:backend",
+        "//zig/settings:linker",
         "//zig/settings:use_cc_common_link",
         "//zig/settings:host_use_cc_common_link",
         "//zig/settings:mode",
@@ -184,6 +192,14 @@ def _make_attrs(*, executable):
         "zig_version": attr.string(
             doc = "The Zig SDK version, must be registered using the `zig` module extension.",
             mandatory = False,
+        ),
+        "backend": attr.string(
+            doc = "Zig code generation backend for the target configuration. `auto` follows the compiler default unless `linker = \"lld\"` requires LLVM.",
+            values = BACKEND_VALUES,
+        ),
+        "linker": attr.string(
+            doc = "Linker Zig uses to write its output, including an intermediate archive for cc_common.link. `auto` follows the compiler default.",
+            values = LINKER_VALUES,
         ),
         "use_cc_common_link": attr.int(
             doc = (

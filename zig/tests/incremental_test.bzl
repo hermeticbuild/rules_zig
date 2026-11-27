@@ -2,7 +2,7 @@
 
 load("@bazel_skylib//lib:partial.bzl", "partial")
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
-load(":util.bzl", "assert_find_action", "canonical_label")
+load(":util.bzl", "assert_find_action", "assert_flag_set", "assert_flag_unset", "canonical_label")
 
 _INCREMENTAL = canonical_label("@//zig/settings:incremental")
 _VERSION = canonical_label("@zig_toolchains//:version")
@@ -10,6 +10,8 @@ _PLATFORMS = "//command_line_option:platforms"
 _EXEC_PLATFORMS = "//command_line_option:extra_execution_platforms"
 _TOOLCHAINS = "//command_line_option:extra_toolchains"
 _LINUX = canonical_label("@//zig/tests/platforms:x86_64-linux")
+_LINKER = canonical_label("@//zig/settings:linker")
+_BACKEND = canonical_label("@//zig/settings:backend")
 
 # Keep positive cases independent of the SDK selected by the surrounding CI job.
 # In particular, a Windows target must still use a supported execution toolchain
@@ -65,6 +67,53 @@ def _binary_test_impl(ctx):
     return analysistest.end(env)
 
 _binary_test = analysistest.make(_binary_test_impl, config_settings = _SETTINGS)
+
+def _define_typed_linker_test(*, incremental, linker, backend, expected):
+    def _test_impl(ctx):
+        env = analysistest.begin(ctx)
+        mnemonic = "ZigIncrementalCompile" if incremental else "ZigBuildExe"
+        argv = assert_find_action(env, mnemonic).argv
+        for flag in ["-fllvm", "-fno-llvm", "-flld", "-fno-lld", "-fnew-linker", "-fno-new-linker"]:
+            if flag in expected:
+                assert_flag_set(env, flag, argv)
+            else:
+                assert_flag_unset(env, flag, argv)
+        return analysistest.end(env)
+
+    return analysistest.make(
+        _test_impl,
+        config_settings = _SETTINGS | {_INCREMENTAL: incremental, _LINKER: linker, _BACKEND: backend},
+    )
+
+_typed_linker_auto_test = _define_typed_linker_test(incremental = False, linker = "auto", backend = "auto", expected = [])
+_typed_linker_legacy_test = _define_typed_linker_test(incremental = False, linker = "legacy", backend = "self_hosted", expected = ["-fno-llvm", "-fno-lld", "-fno-new-linker"])
+_typed_linker_new_test = _define_typed_linker_test(incremental = True, linker = "new", backend = "self_hosted", expected = ["-fno-llvm", "-fno-lld", "-fnew-linker"])
+_typed_linker_lld_test = _define_typed_linker_test(incremental = True, linker = "lld", backend = "auto", expected = ["-fllvm", "-flld", "-fno-new-linker"])
+
+def _incompatible_backend_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "linker=lld requires the LLVM compiler backend.")
+    return analysistest.end(env)
+
+_incompatible_backend_test = analysistest.make(
+    _incompatible_backend_test_impl,
+    config_settings = _SETTINGS | {_LINKER: "lld", _BACKEND: "self_hosted"},
+    expect_failure = True,
+)
+
+def _conflicting_raw_option_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "Raw Zig options conflict with backend or linker: -fnew-linker and -fno-new-linker.")
+    return analysistest.end(env)
+
+_conflicting_raw_option_test = analysistest.make(
+    _conflicting_raw_option_test_impl,
+    config_settings = _SETTINGS | {
+        _LINKER: "new",
+        canonical_label("@//zig/settings:zigopt"): ["-fno-new-linker"],
+    },
+    expect_failure = True,
+)
 
 def _test_binary_test_impl(ctx):
     env = analysistest.begin(ctx)
@@ -313,6 +362,12 @@ _unsupported_c_sources_test = analysistest.make(
 def incremental_test_suite(name):
     unittest.suite(
         name,
+        partial.make(_typed_linker_auto_test, target_under_test = "//zig/tests/incremental:binary", size = "small"),
+        partial.make(_typed_linker_legacy_test, target_under_test = "//zig/tests/incremental:binary", size = "small"),
+        partial.make(_typed_linker_new_test, target_under_test = "//zig/tests/incremental:binary", size = "small"),
+        partial.make(_typed_linker_lld_test, target_under_test = "//zig/tests/incremental:binary", size = "small"),
+        partial.make(_incompatible_backend_test, target_under_test = "//zig/tests/incremental:binary", size = "small"),
+        partial.make(_conflicting_raw_option_test, target_under_test = "//zig/tests/incremental:binary", size = "small"),
         # Test action selection and primary output ownership.
         partial.make(_disabled_test, target_under_test = "//zig/tests/incremental:binary", size = "small"),
         partial.make(_binary_test, target_under_test = "//zig/tests/incremental:binary", size = "small"),

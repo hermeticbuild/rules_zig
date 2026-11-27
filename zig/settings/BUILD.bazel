@@ -1,6 +1,8 @@
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag", "repeatable_string_flag", "string_flag")
 load(
     "//zig/private:settings.bzl",
+    "BACKEND_VALUES",
+    "LINKER_VALUES",
     "MODE_VALUES",
     "THREADED_VALUES",
     "bazel_strip",
@@ -9,16 +11,32 @@ load(
 
 settings(
     name = "settings",
+    backend = ":backend",
     host_mode = ":host_mode",
     host_threaded = ":host_threaded",
     host_use_cc_common_link = ":host_use_cc_common_link",
     host_zigopt = ":host_zigopt",
     incremental = ":incremental",
+    linker = ":linker",
     mode = ":mode",
     threaded = ":threaded",
     use_cc_common_link = ":use_cc_common_link",
     visibility = ["//visibility:public"],
     zigopt = ":zigopt",
+)
+
+string_flag(
+    name = "backend",
+    build_setting_default = "auto",
+    values = BACKEND_VALUES,
+    visibility = ["//visibility:public"],
+)
+
+string_flag(
+    name = "linker",
+    build_setting_default = "auto",
+    values = LINKER_VALUES,
+    visibility = ["//visibility:public"],
 )
 
 bool_flag(
