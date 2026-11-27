@@ -1,4 +1,5 @@
 load("@bazel_skylib//:bzl_library.bzl", "bzl_library")
+load("//zig:defs.bzl", "zig_binary", "zig_configure_binary", "zig_test")
 
 toolchain_type(
     name = "toolchain_type",
@@ -12,11 +13,32 @@ bzl_library(
     deps = ["//zig/private/providers:zig_module_info"],
 )
 
+zig_binary(
+    name = "sdk_launcher_bin",
+    main = "sdk_launcher.zig",
+    tags = ["manual"],
+)
+
+zig_configure_binary(
+    name = "sdk_launcher",
+    actual = "sdk_launcher_bin",
+    host_use_cc_common_link = 0,
+    tags = ["manual"],
+    use_cc_common_link = 0,
+)
+
+zig_test(
+    name = "sdk_launcher_test",
+    size = "small",
+    main = "sdk_launcher.zig",
+)
+
 # Execute `bazel run //util:update_filegroups` to update this target.
 filegroup(
     name = "all_files",
     srcs = [
         ":BUILD.bazel",
+        ":sdk_launcher.zig",
         ":toolchain.bzl",
     ],
     visibility = ["//zig:__pkg__"],

@@ -1,5 +1,6 @@
 load("@rules_cc//cc:defs.bzl", "cc_library")
 load("//zig:defs.bzl", "zig_c_library")
+load("//zig:toolchain.bzl", "zig_target_toolchain")
 load("//zig/translate-c:toolchain.bzl", "translate_c_toolchain")
 load(":fake_translate_c.bzl", "fake_translate_c")
 
@@ -58,6 +59,31 @@ zig_c_library(
         "/explicit-frameworks",
     ],
     visibility = ["//zig/tests:__pkg__"],
+)
+
+constraint_value(
+    name = "zig-only-os",
+    constraint_setting = "@platforms//os",
+)
+
+platform(
+    name = "zig-only-macos",
+    constraint_values = [
+        ":zig-only-os",
+        "@platforms//cpu:aarch64",
+    ],
+)
+
+zig_target_toolchain(
+    name = "zig_only_target",
+    target = "aarch64-macos-none",
+)
+
+toolchain(
+    name = "zig_only_target_toolchain",
+    target_compatible_with = [":zig-only-os"],
+    toolchain = ":zig_only_target",
+    toolchain_type = "//zig/target:toolchain_type",
 )
 
 fake_translate_c(
