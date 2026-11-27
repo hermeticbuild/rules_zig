@@ -33,6 +33,33 @@ zig_c_library(
     visibility = ["//zig/tests:__pkg__"],
 )
 
+zig_c_library(
+    name = "c_module_sdk",
+    cdeps = [],
+    copts = [
+        "-isysroot/older-sdk",
+        "-isysroot",
+        "/selected-sdk",
+        "--sysroot=/link-sdk",
+        "-iframework",
+        "/explicit-frameworks",
+    ],
+    visibility = ["//zig/tests:__pkg__"],
+)
+
+zig_c_library(
+    name = "c_module_no_standard_includes",
+    cdeps = [],
+    copts = [
+        "-isysroot",
+        "/selected-sdk",
+        "--no-standard-includes",
+        "-iframework",
+        "/explicit-frameworks",
+    ],
+    visibility = ["//zig/tests:__pkg__"],
+)
+
 fake_translate_c(
     name = "fake_translate_c",
 )

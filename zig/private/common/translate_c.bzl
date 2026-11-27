@@ -24,6 +24,12 @@ _DEFAULT_SYSROOT_INCLUDE_DIRS = [
     paths.join("usr", "include"),
 ]
 
+_MACOS_SYSROOT_FRAMEWORK_DIRS = [
+    "System/Library/Frameworks",
+    "System/Library/SubFrameworks",
+    "Library/Frameworks",
+]
+
 _APPLE_DEFAULT_TOOLCHAIN_INCLUDE_DIRS = _DEFAULT_SYSROOT_INCLUDE_DIRS + [
     paths.join("usr", "lib", "clang", str(version), "include")
     for version in range(15, 22)
@@ -60,25 +66,32 @@ def _sanitize_commandline(args):
         ret.append(arg)
     return ret
 
-def _extract_sysroot(command_line):
-    sysroot = None
-    waiting_for_sysroot = False
-
+def _extract_sysroot(command_line, *, macos = False):
+    roots = {}
+    pending = None
     for arg in command_line:
-        if waiting_for_sysroot:
-            return arg
-        elif arg == "-isysroot":
-            waiting_for_sysroot = True
+        if pending != None:
+            flag, root = pending, arg
+            pending = None
+        elif arg == "-isysroot" or (macos and arg == "--sysroot"):
+            pending = arg
+            continue
         elif arg.startswith("-isysroot"):
-            # rare compact form: -isysroot/path
-            return arg[len("-isysroot"):]
+            flag, root = "-isysroot", arg[len("-isysroot"):]
         elif arg.startswith("--sysroot="):
-            return arg[len("--sysroot="):]
+            flag, root = "--sysroot", arg[len("--sysroot="):]
+        else:
+            continue
 
-    if waiting_for_sysroot:
-        fail("-isysroot without following path in command_line")
+        if not macos:
+            return root
+        roots[flag] = root
 
-    return sysroot
+    if pending != None:
+        fail("{} without following path in command_line".format(pending))
+
+    # Clang's Darwin header search uses the last -isysroot, falling back to --sysroot.
+    return roots.get("-isysroot", roots.get("--sysroot"))
 
 def _include_path_for_file(file):
     if (file.is_source == False):
@@ -202,12 +215,14 @@ def _external_translate_c(*, ctx, zigtoolchaininfo, translatectoolchaininfo, com
 
     zig_out = ctx.actions.declare_file("{}{}_c.zig".format(output_prefix, ctx.label.name))
 
+    target = ctx.toolchains["//zig/target:toolchain_type"].zigtargetinfo
+    is_macos = (target.triple.os or "").split(".", 1)[0] == "macos"
     args = ctx.actions.args()
     args.add("-fmodule-libs")
     if semver.gte(zigtoolchaininfo.zig_version, _TRANSLATE_C_2_MIN_ZIG_VERSION):
         args.add(zig_out, format = "-o=%s")
         args.add(zig_toolchain_lib_dir_path(zigtoolchaininfo), format = "--zig-lib=%s")
-        args.add(ctx.toolchains["//zig/target:toolchain_type"].zigtargetinfo.target, format = "--target=%s")
+        args.add(target.target, format = "--target=%s")
         args.add("--")
         if zigtoolchaininfo.zig_lib.file != None:
             inputs.append(zigtoolchaininfo.zig_lib.file)
@@ -221,6 +236,7 @@ def _external_translate_c(*, ctx, zigtoolchaininfo, translatectoolchaininfo, com
         "-D__building_module(x)=0",
     ])
 
+    command_line = []
     if cc_toolchain:
         c_compile_variables = cc_common.create_compile_variables(
             feature_configuration = cc_feature_configuration,
@@ -237,25 +253,32 @@ def _external_translate_c(*, ctx, zigtoolchaininfo, translatectoolchaininfo, com
         args.add_all(_sanitize_commandline(command_line))
         args.add_all(cc_toolchain.built_in_include_directories, before_each = "-isystem")
 
-        # If the toolchain specifies a sysroot, add the sysroot's /usr/include as an
-        # include path since that's where the toolchain's builtin headers are expected to be.
+    if is_macos:
+        compile_flags = command_line + copts
+        if any([flag in compile_flags for flag in ("-nostdinc", "--no-standard-includes", "-nostdlibinc")]):
+            sysroot = None
+        else:
+            sysroot = _extract_sysroot(compile_flags, macos = True) or None
+    else:
         sysroot = _extract_sysroot(command_line)
-        if sysroot != None and sysroot != "/dev/null":
-            args.add("-isystem", paths.join(sysroot, "usr", "include"))
 
-        # If using the local apple cc toolchain, also include the default toolchain's
-        # builtin headers since the local apple cc toolchain doesn't include them by default.
-        if is_local_apple_cc:
-            args.add_all(
-                _APPLE_DEFAULT_TOOLCHAIN_INCLUDE_DIRS,
-                before_each = "-isystem",
-                format_each = paths.join(
-                    apple_support.path_placeholders.xcode(),
-                    "Toolchains",
-                    "XcodeDefault.xctoolchain",
-                    "",
-                ) + "%s",
-            )
+    has_sysroot = sysroot != None and sysroot != "/dev/null"
+    if has_sysroot:
+        args.add("-isystem", paths.join(sysroot, "usr", "include"))
+
+    # If using the local apple cc toolchain, also include the default toolchain's
+    # builtin headers since the local apple cc toolchain doesn't include them by default.
+    if is_local_apple_cc:
+        args.add_all(
+            _APPLE_DEFAULT_TOOLCHAIN_INCLUDE_DIRS,
+            before_each = "-isystem",
+            format_each = paths.join(
+                apple_support.path_placeholders.xcode(),
+                "Toolchains",
+                "XcodeDefault.xctoolchain",
+                "",
+            ) + "%s",
+        )
 
     args.add_all(compilation_context.defines, format_each = "-D%s")
     args.add("-I.")
@@ -271,6 +294,11 @@ def _external_translate_c(*, ctx, zigtoolchaininfo, translatectoolchaininfo, com
     args.add_all(compilation_context.framework_includes, format_each = "-F%s")
 
     args.add_all(copts)
+
+    # Standalone translate-c disables Aro's standard includes. Supply the SDK
+    # framework defaults after explicit framework paths, as Clang does.
+    if is_macos and has_sysroot:
+        args.add_all([paths.join(sysroot, path) for path in _MACOS_SYSROOT_FRAMEWORK_DIRS], before_each = "-iframework")
 
     args.add("--emulate=clang")
 

@@ -31,6 +31,14 @@ platform(
 )
 
 platform(
+    name = "aarch64-macos",
+    constraint_values = [
+        "@platforms//os:macos",
+        "@platforms//cpu:aarch64",
+    ],
+)
+
+platform(
     name = "aarch64-linux-none",
     constraint_values = [
         "@platforms//os:linux",

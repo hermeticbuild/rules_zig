@@ -119,6 +119,32 @@ _external_translate_c_copts_test = analysistest.make(
     },
 )
 
+def _sdk_frameworks_test(platform, expected_frameworks):
+    def _test_impl(ctx):
+        env = analysistest.begin(ctx)
+        argv = assert_find_action(env, "ZigTranslateC").argv
+        frameworks = [argv[i + 1] for i, arg in enumerate(argv) if arg == "-iframework"]
+        asserts.equals(env, ["/explicit-frameworks"] + expected_frameworks, frameworks)
+        asserts.equals(env, bool(expected_frameworks), "/selected-sdk/usr/include" in argv)
+        return analysistest.end(env)
+
+    return analysistest.make(
+        _test_impl,
+        config_settings = {
+            _EXTRA_TOOLCHAINS: "//zig/tests/translate-c-action:fake_translate_c_toolchain",
+            _SETTINGS_TRANSLATE_C: True,
+            "//command_line_option:platforms": canonical_label("@//zig/tests/platforms:" + platform),
+        },
+    )
+
+_macos_sdk_frameworks_test = _sdk_frameworks_test("aarch64-macos", [
+    "/selected-sdk/System/Library/Frameworks",
+    "/selected-sdk/System/Library/SubFrameworks",
+    "/selected-sdk/Library/Frameworks",
+])
+_macos_no_standard_includes_test = _sdk_frameworks_test("aarch64-macos", [])
+_linux_sdk_frameworks_test = _sdk_frameworks_test("aarch64-linux", [])
+
 def translate_c_action_test_suite(name):
     unittest.suite(
         name,
@@ -145,6 +171,21 @@ def translate_c_action_test_suite(name):
         partial.make(
             _external_translate_c_copts_test,
             target_under_test = "//zig/tests/translate-c-action:c_module_copts",
+            size = "small",
+        ),
+        partial.make(
+            _macos_sdk_frameworks_test,
+            target_under_test = "//zig/tests/translate-c-action:c_module_sdk",
+            size = "small",
+        ),
+        partial.make(
+            _macos_no_standard_includes_test,
+            target_under_test = "//zig/tests/translate-c-action:c_module_no_standard_includes",
+            size = "small",
+        ),
+        partial.make(
+            _linux_sdk_frameworks_test,
+            target_under_test = "//zig/tests/translate-c-action:c_module_sdk",
             size = "small",
         ),
     )
