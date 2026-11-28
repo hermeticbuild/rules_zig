@@ -91,6 +91,7 @@ def zig_cdeps_linker_inputs(*, linking_context, solib_parents, os, abi, prefer_p
     """
     all_libraries = []
     dynamic_libraries = []
+    interface_runtime_dirs = []
     for link in linking_context.linker_inputs.to_list():
         # These helpers' flags were added to the Zig compile arguments.
         if link.owner not in _LIBC_HELPERS:
@@ -127,16 +128,26 @@ def zig_cdeps_linker_inputs(*, linking_context, solib_parents, os, abi, prefer_p
                 file = lib.interface_library or lib.dynamic_library
                 if not file:
                     continue
-                all_libraries.append((file, True))
+
+                # Zig's -lNAME lookup only constructs unversioned names.
+                exact_path = os == "linux" and ".so." in file.basename
+                all_libraries.append((file, not exact_path))
                 inputs.append(file)
                 if lib.dynamic_library:
                     dynamic_libraries.append(lib.dynamic_library)
+                    if os == "linux" and lib.interface_library:
+                        # An interface .so may be a linker script that names
+                        # the real DSO. Make it available at link time as well.
+                        inputs.append(lib.dynamic_library)
+                        if lib.dynamic_library.dirname != file.dirname:
+                            interface_runtime_dirs.append(lib.dynamic_library.dirname)
 
     args.add_all(
         all_libraries,
         map_each = _lib_flags,
         uniquify = True,
     )
+    args.add_all(interface_runtime_dirs, format_each = "-L%s", uniquify = True)
     data.extend(dynamic_libraries)
     args.add_all(
         dynamic_libraries,

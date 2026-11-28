@@ -1,6 +1,7 @@
 load("@bazel_skylib//rules:build_test.bzl", "build_test")
 load("@bazel_skylib//rules:diff_test.bzl", "diff_test")
-load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
+load("@bazel_skylib//rules:write_file.bzl", "write_file")
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_import", "cc_library")
 load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_static_library", "zig_test")
 
 cc_binary(
@@ -69,4 +70,64 @@ diff_test(
     size = "small",
     file1 = ":output.expected",
     file2 = ":output.actual",
+)
+
+LINUX = ["@platforms//os:linux"]
+
+LLD = [
+    "-fllvm",
+    "-flld",
+]
+
+cc_binary(
+    name = "libversioned_add.so.1",
+    srcs = ["add.c"],
+    linkopts = ["-Wl,-soname,libversioned_add.so.1"],
+    linkshared = True,
+    target_compatible_with = LINUX,
+)
+
+cc_import(
+    name = "versioned_add",
+    shared_library = "libversioned_add.so.1",
+    target_compatible_with = LINUX,
+)
+
+write_file(
+    name = "interface_script",
+    out = "libadd_interface.so",
+    content = ["INPUT ( libversioned_add.so.1 )"],
+    target_compatible_with = LINUX,
+)
+
+cc_import(
+    name = "interface_add",
+    interface_library = "libadd_interface.so",
+    linkopts = ["-fallow-so-scripts"],
+    shared_library = "libversioned_add.so.1",
+    target_compatible_with = LINUX,
+)
+
+zig_test(
+    name = "versioned_import_test",
+    size = "small",
+    main = "main.zig",
+    target_compatible_with = LINUX,
+    zigopts = LLD,
+    deps = [
+        ":versioned_add",
+        "@rules_zig//zig/lib:libc",
+    ],
+)
+
+zig_test(
+    name = "interface_import_test",
+    size = "small",
+    main = "main.zig",
+    target_compatible_with = LINUX,
+    zigopts = LLD,
+    deps = [
+        ":interface_add",
+        "@rules_zig//zig/lib:libc",
+    ],
 )
