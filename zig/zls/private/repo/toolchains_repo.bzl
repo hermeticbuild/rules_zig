@@ -66,7 +66,7 @@ toolchain(
     exec_compatible_with = {compatible_with},
     target_settings = ["@zig_toolchains//:{zig_version}"],
     toolchain = "{label}",
-    toolchain_type = "@rules_zig//zig/zls:toolchain_type",
+    toolchain_type = "@rules_zig//zig/toolchains:zls_toolchain_type",
 )
 """.format(
             prefix = _counter_prefix(counter, width = counter_digits),

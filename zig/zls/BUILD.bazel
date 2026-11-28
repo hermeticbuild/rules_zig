@@ -20,8 +20,9 @@ exports_files(
     visibility = ["//visibility:public"],
 )
 
-toolchain_type(
+alias(
     name = "toolchain_type",
+    actual = "//zig/toolchains:zls_toolchain_type",
     visibility = ["//visibility:public"],
 )
 

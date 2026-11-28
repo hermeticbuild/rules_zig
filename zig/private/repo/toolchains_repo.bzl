@@ -211,7 +211,7 @@ toolchain(
     target_compatible_with = {target_compatible_with},
     target_settings = {target_settings},
     toolchain = "{label}",
-    toolchain_type = "@rules_zig//zig:toolchain_type",
+    toolchain_type = "@rules_zig//zig/toolchains:zig_toolchain_type",
 )
 """.format(
             prefix = _counter_prefix(counter, width = counter_digits),
