@@ -1,7 +1,8 @@
 load("@bazel_skylib//rules:build_test.bzl", "build_test")
 load("@bazel_skylib//rules:diff_test.bzl", "diff_test")
-load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
-load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_static_library", "zig_test")
+load("@bazel_skylib//rules:write_file.bzl", "write_file")
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_import", "cc_library")
+load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_shared_library", "zig_static_library", "zig_test")
 
 cc_binary(
     name = "add",
@@ -69,4 +70,113 @@ diff_test(
     size = "small",
     file1 = ":output.expected",
     file2 = ":output.actual",
+)
+
+LINUX = ["@platforms//os:linux"]
+
+# LLD's as-needed linking leaves libadd.so as a dependency of the middle DSO.
+LLD = [
+    "-fllvm",
+    "-flld",
+]
+
+cc_binary(
+    name = "libversioned_add.so.1",
+    srcs = ["add.c"],
+    linkopts = ["-Wl,-soname,libversioned_add.so.1"],
+    linkshared = True,
+    target_compatible_with = LINUX,
+)
+
+cc_import(
+    name = "versioned_add",
+    shared_library = "libversioned_add.so.1",
+    target_compatible_with = LINUX,
+)
+
+write_file(
+    name = "interface_script",
+    out = "libadd_interface.so",
+    content = ["INPUT ( libversioned_add.so.1 )"],
+    target_compatible_with = LINUX,
+)
+
+cc_import(
+    name = "interface_add",
+    interface_library = "libadd_interface.so",
+    linkopts = ["-fallow-so-scripts"],
+    shared_library = "libversioned_add.so.1",
+    target_compatible_with = LINUX,
+)
+
+zig_test(
+    name = "versioned_import_test",
+    size = "small",
+    main = "main.zig",
+    target_compatible_with = LINUX,
+    zigopts = LLD,
+    deps = [
+        ":versioned_add",
+        "@rules_zig//zig/lib:libc",
+    ],
+)
+
+zig_test(
+    name = "interface_import_test",
+    size = "small",
+    main = "main.zig",
+    target_compatible_with = LINUX,
+    zigopts = LLD,
+    deps = [
+        ":interface_add",
+        "@rules_zig//zig/lib:libc",
+    ],
+)
+
+zig_shared_library(
+    name = "middle",
+    data = ["output.expected"],
+    main = "middle.zig",
+    target_compatible_with = LINUX,
+    zigopts = LLD,
+    deps = [
+        ":add_shared",
+        "@rules_zig//zig/lib:libc",
+    ],
+)
+
+zig_binary(
+    name = "chain",
+    main = "chain.zig",
+    target_compatible_with = LINUX,
+    zigopts = LLD,
+    deps = [
+        ":middle",
+        "@rules_zig//zig/lib:libc",
+    ],
+)
+
+genrule(
+    name = "staged_chain",
+    testonly = True,
+    outs = ["staged_chain.actual"],
+    cmd = """
+        app=$(execpath :chain)
+        stage=$$(mktemp -d)
+        cp -L "$$app" "$$stage/"
+        cp -RL "$$app.runfiles" "$$stage/"
+        # The middle library exposes this data file through its runfiles.
+        test -f "$$stage/chain.runfiles/_main/link-dependencies/shared-library/output.expected"
+        (cd "$$stage" && env -u LD_LIBRARY_PATH -u LD_PRELOAD ./chain) > "$@"
+    """,
+    target_compatible_with = LINUX,
+    tools = [":chain"],
+)
+
+diff_test(
+    name = "staged_chain_test",
+    size = "small",
+    file1 = "output.expected",
+    file2 = ":staged_chain.actual",
+    target_compatible_with = LINUX,
 )

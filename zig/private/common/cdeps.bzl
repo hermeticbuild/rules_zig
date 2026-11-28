@@ -76,12 +76,12 @@ def zig_cdeps_copts(compilation_context):
     copts.extend(["-F%s" % include for include in compilation_context.framework_includes.to_list()])
     return copts
 
-def zig_cdeps_linker_inputs(*, linking_context, solib_parents, os, abi, prefer_pic, inputs, args, data):
+def zig_cdeps_linker_inputs(*, linking_context, to_rpath, os, abi, prefer_pic, inputs, args, data):
     """Compiler arguments and inputs from a CcInfo.linking_context.
 
     Args:
         linking_context: cc_common.LinkingContext instance.
-        solib_parents: A list of strings representing the solib parent directories.
+        to_rpath: Maps each runtime library file to its search paths.
         os: String; The target operating system.
         abi: String; The target ABI.
         prefer_pic: Whether to prefer the PIC variant of a static library.
@@ -91,6 +91,7 @@ def zig_cdeps_linker_inputs(*, linking_context, solib_parents, os, abi, prefer_p
     """
     all_libraries = []
     dynamic_libraries = []
+    interface_runtime_dirs = []
     for link in linking_context.linker_inputs.to_list():
         # These helpers' flags were added to the Zig compile arguments.
         if link.owner not in _LIBC_HELPERS:
@@ -127,20 +128,30 @@ def zig_cdeps_linker_inputs(*, linking_context, solib_parents, os, abi, prefer_p
                 file = lib.interface_library or lib.dynamic_library
                 if not file:
                     continue
-                all_libraries.append((file, True))
+
+                # Zig's -lNAME lookup only constructs unversioned names.
+                exact_path = os == "linux" and ".so." in file.basename
+                all_libraries.append((file, not exact_path))
                 inputs.append(file)
                 if lib.dynamic_library:
                     dynamic_libraries.append(lib.dynamic_library)
+                    if os == "linux" and lib.interface_library:
+                        # An interface .so may be a linker script that names
+                        # the real DSO. Make it available at link time as well.
+                        inputs.append(lib.dynamic_library)
+                        if lib.dynamic_library.dirname != file.dirname:
+                            interface_runtime_dirs.append(lib.dynamic_library.dirname)
 
     args.add_all(
         all_libraries,
         map_each = _lib_flags,
         uniquify = True,
     )
+    args.add_all(interface_runtime_dirs, format_each = "-L%s", uniquify = True)
     data.extend(dynamic_libraries)
     args.add_all(
         dynamic_libraries,
-        map_each = _make_to_rpath(solib_parents, os),
+        map_each = to_rpath,
         allow_closure = True,
         before_each = "-rpath",
         uniquify = True,
@@ -158,7 +169,58 @@ def _lib_flags(arg):
     else:
         return file.path
 
-def _make_to_rpath(solib_parents, os):
+def _origin_relative(origin_dir, library_dir):
+    origin = origin_dir.split("/") if origin_dir else []
+    library = library_dir.split("/") if library_dir else []
+    common = 0
+    for origin_part, library_part in zip(origin, library):
+        if origin_part != library_part:
+            break
+        common += 1
+    return "/".join(["$ORIGIN"] + [".."] * (len(origin) - common) + library[common:])
+
+def _runfiles_dir(file, workspace_name):
+    short_path = file.short_path
+    runfiles_path = short_path[3:] if short_path.startswith("../") else paths.join(workspace_name, short_path)
+    return paths.dirname(runfiles_path)
+
+def zig_cdeps_rpaths(*, os, output, solib_output, is_executable, workspace_name, package):
+    """Creates a mapper from dynamic library files to runtime search paths.
+
+    Args:
+        os: Target operating system.
+        output: Executable or shared library output.
+        solib_output: Optional solib alias of the output.
+        is_executable: Whether the output has its own adjacent runfiles tree.
+        workspace_name: Name of the main repository in runfiles.
+        package: Package name for the legacy non-Linux search paths.
+
+    Returns:
+        A function that returns runtime search path strings for a library file.
+    """
+    if os == "linux":
+        origins = [output]
+        if solib_output and solib_output != output:
+            origins.append(solib_output)
+
+        def to_linux_rpath(lib):
+            runfiles_dir = _runfiles_dir(lib, workspace_name)
+            result = []
+            for origin in origins:
+                # The loader can see an output or its solib alias in either
+                # the build tree or a runfiles tree materialized as files.
+                result.append(_origin_relative(origin.dirname, lib.dirname))
+                result.append(_origin_relative(_runfiles_dir(origin, workspace_name), runfiles_dir))
+            if is_executable:
+                result.append(paths.join("$ORIGIN", output.basename + ".runfiles", runfiles_dir))
+            return result
+
+        return to_linux_rpath
+
+    solib_parents = [
+        "/".join([".." for _ in package.split("/")]),
+        paths.join(output.basename + ".runfiles", workspace_name),
+    ] if is_executable else [""]
     origin = "$ORIGIN"
 
     # Based on `zig targets | jq .os`
