@@ -88,10 +88,17 @@ def zig_cdeps_linker_inputs(*, linking_context, solib_parents, os, abi, prefer_p
         inputs: List; mutable, Append linker inputs to this collection.
         args: Args; mutable, Append the C linker flags to this object.
         data: List; mutable, Append data files to this collection.
+
+    Returns:
+        Whether static native dependencies could need the C toolchain's C++ runtime.
     """
     all_libraries = []
     dynamic_libraries = []
+    has_static_dependencies = False
+    uses_zig_libcxx = False
     for link in linking_context.linker_inputs.to_list():
+        uses_zig_libcxx = uses_zig_libcxx or "-lc++" in link.user_link_flags
+
         # These helpers' flags were added to the Zig compile arguments.
         if link.owner not in _LIBC_HELPERS:
             if os == "linux" and abi and (abi.startswith("gnu") or abi.startswith("musl")):
@@ -112,6 +119,7 @@ def zig_cdeps_linker_inputs(*, linking_context, solib_parents, os, abi, prefer_p
             use_pic = lib.pic_static_library != None and (prefer_pic or lib.static_library == None)
             archive = lib.pic_static_library if use_pic else lib.static_library
             if archive:
+                has_static_dependencies = True
                 if lib.alwayslink:
                     # Expand the matching member list to preserve whole-archive semantics.
                     objects = lib.pic_objects if use_pic else lib.objects
@@ -145,6 +153,8 @@ def zig_cdeps_linker_inputs(*, linking_context, solib_parents, os, abi, prefer_p
         before_each = "-rpath",
         uniquify = True,
     )
+
+    return has_static_dependencies and not uses_zig_libcxx
 
 def _lib_flags(arg):
     (file, dynamic) = arg

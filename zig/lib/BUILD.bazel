@@ -19,6 +19,11 @@ zig_binary(
 )
 ```
 
+When Zig owns the final link and consumes static native libraries, rules_zig
+adds the configured C/C++ toolchain's static C++ runtime if the toolchain
+provides it through `static_link_cpp_runtimes`. An explicit request for Zig's
+bundled C++ runtime, such as a dependency on `:libc++`, takes precedence.
+
 The Zig compiler includes a header file `zig.h` that is exposed by the
 `:zig_header` target in this package and can be used as a regular `cc_*`
 target dependency.
