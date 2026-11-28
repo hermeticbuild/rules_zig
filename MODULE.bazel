@@ -31,7 +31,7 @@ zig.mirrors(urls = [
 ])
 use_repo(zig, "zig_toolchains")
 
-register_toolchains("@rules_zig//zig/target:all")
+register_toolchains("@rules_zig//zig/toolchains:all")
 
 register_toolchains("@zig_toolchains//:all")
 

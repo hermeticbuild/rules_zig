@@ -16,8 +16,9 @@ exports_files(
 # target in the `toolchains` parameter in order to access the appropriate Zig
 # compiler for the current execution platform. Note, the target platform is
 # handled separately via //zig/target:toolchain_type.
-toolchain_type(
+alias(
     name = "toolchain_type",
+    actual = "//zig/toolchains:zig_toolchain_type",
     visibility = ["//visibility:public"],
 )
 
@@ -99,6 +100,7 @@ filegroup(
         "//zig/runfiles:all_files",
         "//zig/settings:all_files",
         "//zig/target:all_files",
+        "//zig/toolchains:all_files",
         "//zig/translate-c:all_files",
         "//zig/zls:all_files",
     ],
