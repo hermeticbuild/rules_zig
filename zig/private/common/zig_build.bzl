@@ -1,6 +1,5 @@
 """Common implementation of the zig_binary|library|test rules."""
 
-load("@bazel_skylib//lib:paths.bzl", "paths")
 load("@build_bazel_rules_android//:cc_common_link.bzl", "cc_common_link")
 load("@rules_cc//cc:find_cc_toolchain.bzl", "use_cc_toolchain")
 load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
@@ -12,7 +11,7 @@ load(
     "bazel_builtin_module",
     BAZEL_BUILTIN_ATTRS = "ATTRS",
 )
-load("//zig/private/common:cdeps.bzl", "zig_cdeps_libc_flags", "zig_cdeps_linker_inputs")
+load("//zig/private/common:cdeps.bzl", "zig_cdeps_libc_flags", "zig_cdeps_linker_inputs", "zig_cdeps_rpaths")
 load("//zig/private/common:csrcs.bzl", "zig_csrcs")
 load("//zig/private/common:data.bzl", "zig_collect_data", "zig_create_runfiles")
 load("//zig/private/common:escape_label.bzl", "escape_label")
@@ -414,20 +413,11 @@ def zig_build_impl(ctx, *, kind):
     bin_output_is_executable = False
     bin_output_name = None
     bin_output = None
-    solib_parents = []
 
     if kind == "zig_binary" or kind == "zig_test":
         bin_output_name = ctx.label.name + _executable_extension(zigtargetinfo.triple.os)
         bin_output = ctx.actions.declare_file(bin_output_name)
         bin_output_is_executable = True
-
-        # Calculate the RPATH components to discover the solib tree.
-        # See https://github.com/bazelbuild/bazel/blob/7.0.0/src/main/java/com/google/devtools/build/lib/rules/cpp/LibrariesToLinkCollector.java#L177
-        # TODO: Implement case 8b.
-        solib_parents = [
-            "/".join([".." for _ in ctx.label.package.split("/")]),
-            paths.join(bin_output.basename + ".runfiles", ctx.workspace_name),
-        ]
     elif kind == "zig_static_library":
         if ctx.attr.emit_bin:
             bin_output_name = _lib_prefix(zigtargetinfo.triple.os) + ctx.label.name + _static_lib_extension(zigtargetinfo.triple.os)
@@ -439,7 +429,16 @@ def zig_build_impl(ctx, *, kind):
         else:
             bin_output_name = _lib_prefix(zigtargetinfo.triple.os) + ctx.label.name + _shared_lib_extension(zigtargetinfo.triple.os)
             bin_output = ctx.actions.declare_file(bin_output_name)
-        solib_parents = [""]
+        if not use_cc_common_link:
+            # The final link needs to know where this DSO can be loaded from.
+            cc_toolchain, feature_configuration = find_cc_toolchain(ctx, mandatory = False)
+            if cc_toolchain:
+                exported_library_to_link = cc_common.create_library_to_link(
+                    actions = ctx.actions,
+                    feature_configuration = feature_configuration,
+                    cc_toolchain = cc_toolchain,
+                    dynamic_library = bin_output,
+                )
     else:
         fail("Unknown rule kind '{}'.".format(kind))
 
@@ -647,7 +646,14 @@ def zig_build_impl(ctx, *, kind):
             # Add all cdeps linker inputs to the sandbox and zig args.
             zig_cdeps_linker_inputs(
                 linking_context = root_module.cc_info.linking_context,
-                solib_parents = solib_parents,
+                to_rpath = zig_cdeps_rpaths(
+                    os = zigtargetinfo.triple.os,
+                    output = bin_output,
+                    solib_output = exported_library_to_link.dynamic_library if exported_library_to_link else None,
+                    is_executable = bin_output_is_executable,
+                    workspace_name = ctx.workspace_name,
+                    package = ctx.label.package,
+                ),
                 os = zigtargetinfo.triple.os,
                 abi = zigtargetinfo.triple.abi,
                 prefer_pic = output_kind == "shared_library",
@@ -833,16 +839,6 @@ def zig_build_impl(ctx, *, kind):
                     cc_toolchain = cc_toolchain,
                     static_library = bin_output,
                 )
-
-    elif kind == "zig_shared_library":
-        cc_toolchain, feature_configuration = find_cc_toolchain(ctx, mandatory = False)
-        if cc_toolchain:
-            exported_library_to_link = cc_common.create_library_to_link(
-                actions = ctx.actions,
-                feature_configuration = feature_configuration,
-                cc_toolchain = cc_toolchain,
-                dynamic_library = bin_output,
-            )
 
     # Publish the target's outputs, runfiles, and providers.
     if root_module.cc_info:
